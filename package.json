@@ -41,7 +41,6 @@
   "dependencies": {
     "@cacheable/node-cache": "^3.0.1",
     "@noble/hashes": "^1.7.2",
-    "@whiskeysockets/baileys": "^7.0.0-rc13",
     "async-mutex": "^0.5.0",
     "axios": "^1.7.2",
     "curve25519-js": "^0.0.4",
