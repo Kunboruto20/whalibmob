@@ -1,0 +1,615 @@
+[<img align="center" src="https://cacheable.org/symbol.svg" alt="Cacheable" />](https://github.com/jaredwray/cacheable)
+
+# Node-Cache
+
+> Simple and Maintained fast Node.js caching
+
+[![codecov](https://codecov.io/gh/jaredwray/cacheable/branch/main/graph/badge.svg?token=lWZ9OBQ7GM)](https://codecov.io/gh/jaredwray/cacheable)
+[![tests](https://github.com/jaredwray/cacheable/actions/workflows/tests.yml/badge.svg)](https://github.com/jaredwray/cacheable/actions/workflows/tests.yml)
+[![npm](https://img.shields.io/npm/dm/@cacheable/node-cache.svg)](https://www.npmjs.com/package/@cacheable/node-cache)
+[![npm](https://img.shields.io/npm/v/@cacheable/node-cache)](https://www.npmjs.com/package/@cacheable/node-cache)
+[![license](https://img.shields.io/github/license/jaredwray/cacheable)](https://github.com/jaredwray/cacheable/blob/main/LICENSE)
+
+`@cacheable/node-cache` is compatible with the [node-cache](https://www.npmjs.com/package/node-cache) package with regular maintenance and additional functionality (async/await and storage adapters) via `{NodeCacheStore}`. The only thing not implemented is the `enableLegacyCallbacks` option and functions. If you need them we are happy to take a PR to add them.
+
+* Fully Compatible with `node-cache` using `{NodeCache}`
+* Faster than the original `node-cache` package 🚀
+* Storage Adapters via [Keyv](https://keyv.org)
+* Async/Await functionality with `{NodeCacheStore}`
+* Lightweight - uses `@cacheable/utils` for utilities
+* Maintained and Updated Regularly! 🎉
+
+# Table of Contents
+* [Getting Started](#getting-started)
+* [Basic Usage](#basic-usage)
+* [NodeCache Performance](#nodecache-performance)
+* [NodeCache API](#nodecache-api)
+* [NodeCacheStore](#nodecachestore)
+* [NodeCacheStore API](#nodecachestore-api)
+* [Migrating to v2](#migrating-to-v2)
+* [Migrating to v3](#migrating-to-v3)
+* [How to Contribute](#how-to-contribute)
+* [License and Copyright](#license-and-copyright)
+
+# Getting Started
+
+```bash
+npm install @cacheable/node-cache --save
+```
+
+# Basic Usage
+
+```javascript
+import NodeCache from '@cacheable/node-cache';
+
+const cache = new NodeCache();
+cache.set('foo', 'bar');
+cache.get('foo'); // 'bar'
+
+cache.set('foo', 'bar', 10); // 10 seconds
+
+cache.del('foo'); // 1
+
+cache.set('bar', 'baz', '35m'); // 35 minutes using shorthand
+```
+
+The `NodeCache` is not the default export, so you need to import it like this:
+
+```javascript
+import {NodeCache} from '@cacheable/node-cache';
+
+const cache = new NodeCache();
+cache.set('foo', 'bar');
+cache.get('foo'); // 'bar'
+```
+
+`NodeCache` also offers the ability to set the type of values that can be cached in Typescript environments.
+
+```typescript
+import {NodeCache} from '@cacheable/node-cache';
+
+const cache = new NodeCache<string>();
+cache.set('foo', 'bar');
+cache.get('foo'); // 'bar'
+```
+
+# NodeCache Performance
+
+The performance is comparable if not faster to the original `node-cache` package, but with additional features and improvements.
+
+|               name                |  summary  |  ops/sec  |  time/op  |  margin  |  samples  |
+|-----------------------------------|:---------:|----------:|----------:|:--------:|----------:|
+|  Cacheable NodeCache - set / get  |    🥇     |     117K  |      9µs  |  ±1.01%  |     111K  |
+|  Node Cache - set / get           |   -4.6%   |     112K  |      9µs  |  ±1.31%  |     106K  |
+
+# NodeCache API
+
+## `constructor(options?: NodeCacheOptions)`
+
+Create a new cache instance. You can pass in options to set the configuration:
+
+```javascript
+export type NodeCacheOptions = {
+	stdTTL?: number | string;
+	checkperiod?: number;
+	useClones?: boolean;
+	deleteOnExpire?: boolean;
+	maxKeys?: number;
+};
+```
+
+Here is a description of the options:
+
+| Option | Default Setting | Description |
+|--------|----------------|-------------|
+| `stdTTL` | `0` | The standard time to live (TTL) in seconds for every generated cache element. If set to `0`, it means unlimited. If a string is provided, it will be parsed as shorthand and default to milliseconds if it is a number as a string. |
+| `checkperiod` | `600` | The interval in seconds to check for expired keys. If set to `0`, it means no periodic check will be performed. |
+| `useClones` | `true` | If set to `true`, the cache will clone the returned items via `get()` functions. This means that every time you set a value into the cache, `node-cache` makes a deep clone of it. When you get that value back, you receive another deep clone. This mimics the behavior of an external cache like Redis or Memcached, meaning mutations to the returned object do not affect the cached copy (and vice versa). If set to `false`, the original object will be returned, and mutations will affect the cached copy. |
+| `deleteOnExpire` | `true` | If set to `true`, the key will be deleted when it expires. If set to `false`, the key will remain in the cache, but the value returned by `get()` will be `undefined`. You can manage the key with the `on('expired')` event. |
+| `maxKeys` | `-1` | If set to a positive number, it will limit the number of keys in the cache. If the number of keys exceeds this limit, it will throw an error when trying to set more keys than the maximum. If set to `-1`, it means unlimited keys are allowed. |
+
+When initializing the cache you can pass in the options to set the configuration like the example below where we set the `stdTTL` to 10 seconds and `checkperiod` to 5 seconds.:
+
+```javascript
+const cache = new NodeCache({stdTTL: 10, checkperiod: 5});
+```
+
+When setting `deleteOnExpire` to `true` it will delete the key when it expires. If you set it to `false` it will keep the key but the value on `get()` will be `undefined`. You can manage the key with `on('expired')` event.
+
+```javascript
+const cache = new NodeCache({deleteOnExpire: false});
+cache.on('expired', (key, value) => {
+	console.log(`Key ${key} has expired with value ${value}`);
+});
+```
+
+## `set(key: string | number, value: any, ttl?: number | string): boolean`
+
+Set a key value pair with an optional ttl (in seconds). Will return true on success. If the ttl is not set it will default to 0 (no ttl).
+
+```javascript
+cache.set('foo', 'bar', 10); // true
+```
+
+## `mset(data: Array<PartialNodeCacheItem>): boolean`
+
+Set multiple key value pairs at once. This will take an array of objects with the key, value, and optional ttl.
+
+```javascript
+cache.mset([{key: 'foo', value: 'bar', ttl: 10}, {key: 'bar', value: 'baz'}]); // true
+```
+
+the `PartialNodeCacheItem` is defined as:
+
+```javascript
+export type PartialNodeCacheItem = {
+	key: string | number;
+	value: any;
+	ttl?: number;
+};
+```
+
+## `get<T>(key: string | number): T | undefined`
+
+Get a value from the cache by key. If the key does not exist it will return `undefined`.
+
+```javascript
+cache.get('foo'); // 'bar'
+```
+
+## `mget<T>(keys: Array<string | number>): Record<string, T | undefined>`
+
+Get multiple values from the cache by keys. This will return an object with the keys and values.
+
+```javascript
+const obj = { my: 'value', my2: 'value2' };
+const obj2 = { special: 'value3', life: 'value4' };
+cache.set('my', obj);
+cache.set('my2', obj2);
+cache.mget(['my', 'my2']); // { my: { my: 'value', my2: 'value2' }, my2: { special: 'value3', life: 'value4' } }
+```
+
+## `take<T>(key: string | number): T | undefined`
+
+Get a value from the cache by key and delete it. If the key does not exist it will return `undefined`.
+
+```javascript
+cache.set('foo', 'bar');
+cache.take('foo'); // 'bar'
+cache.get('foo'); // undefined
+```
+
+## `del(key: string | number | Array<string | number>): number`
+
+Delete a key from the cache. Will return the number of deleted entries and never fail. You can also pass in an array of keys to delete multiple keys. All examples assume that you have initialized the cache like `const cache = new NodeCache();`.
+
+```javascript
+cache.del('foo'); // 1
+```
+
+passing in an array of keys:
+
+```javascript
+cache.del(['foo', 'bar']); // 2
+```
+
+## `mdel(keys: Array<string | number>): number`
+
+Delete multiple keys from the cache. Will return the number of deleted entries and never fail.
+
+```javascript
+cache.mdel(['foo', 'bar']); // 2
+```
+
+## `ttl(key: string | number, ttl?: number | string): boolean`
+
+Redefine the ttl of a key. Returns true if the key has been found and changed. Otherwise returns false. If the ttl-argument isn't passed the default-TTL will be used.
+
+```javascript
+cache.ttl('foo', 10); // true
+```
+
+## `getTtl(key: string | number): number | undefined`
+
+Get the ttl expiration from `Date.now()` of a key. If the key does not exist it will return `undefined`.
+
+```javascript
+cache.getTtl('foo'); // 1725993344859
+```
+
+## `has(key: string | number): boolean`
+
+Check if a key exists in the cache.
+
+```javascript
+cache.set('foo', 'bar');
+cache.has('foo'); // true
+```
+
+## `keys(): string[]`
+
+Get all keys from the cache.
+
+```javascript
+cache.keys(); // ['foo', 'bar']
+```
+
+## `getStats(): NodeCacheStats`
+
+Get the stats of the cache.
+
+```javascript
+cache.getStats(); // {hits: 1, misses: 1, keys: 1, ksize: 2, vsize: 3}
+```
+
+## `flushAll(): void`
+
+Flush the cache. Will remove all keys and reset the stats.
+
+```javascript
+cache.flushAll();
+cache.keys(); // []
+cache.getStats(); // {hits: 0, misses: 0, keys: 0, ksize: 0, vsize: 0}
+```
+
+## `flushStats(): void`
+
+Flush the stats. Will reset the stats but keep the keys.
+
+```javascript
+cache.set('foo', 'bar');
+cache.flushStats();
+cache.getStats(); // {hits: 0, misses: 0, keys: 0, ksize: 0, vsize: 0}
+cache.keys(); // ['foo']
+```
+
+## `on(event: string, callback: Function): void`
+
+Listen to events. Here are the events that you can listen to:
+* `set` - when a key is set and it will pass in the `key` and `value`.
+* `expired` - when a key is expired and it will pass in the `key` and `value`.
+* `flush` - when the cache is flushed
+* `flush_stats` - when the stats are flushed
+* `del` - when a key is deleted and it will pass in the `key` and `value`.
+
+```javascript
+cache.on('set', (key, value) => {
+	console.log(`Key ${key} has been set with value ${value}`);
+});
+```
+
+## `close(): void`
+
+Close the cache. This will stop the interval timeout which is set on the `checkperiod` option.
+
+```javascript
+cache.close();
+```
+
+## `store: Map<string, NodeCacheItem<T>>`
+
+The internal store is a public readonly `Map` that holds all cached items. Each item includes the key, value, and TTL expiration timestamp.
+
+## `getIntervalId(): number | NodeJS.Timeout`
+
+Get the interval ID for the expiration checker.
+
+## `startInterval(): void`
+
+Start the interval for checking expired keys based on the `checkperiod` option.
+
+## `stopInterval(): void`
+
+Stop the interval for checking expired keys.
+
+# NodeCacheStore
+
+`NodeCacheStore` has a similar API to `NodeCache` but it is using `async / await` as it uses [Keyv](https://keyv.org) under the hood. This means that you can use any storage adapter that is available in `Keyv` and it will work seamlessly with the `NodeCacheStore`. To learn more about the `Keyv` storage adapters you can check out the [Keyv documentation](https://keyv.org).
+
+```javascript
+import {NodeCacheStore} from '@cacheable/node-cache';
+
+const cache = new NodeCacheStore();
+await cache.set('foo', 'bar');
+await cache.get('foo'); // 'bar'
+```
+
+Here is an example of how to use the `NodeCacheStore` with a Redis storage adapter:
+
+```javascript
+import {NodeCacheStore} from '@cacheable/node-cache';
+import Keyv from 'keyv';
+import KeyvRedis from '@keyv/redis';
+
+const keyv = new Keyv({store: new KeyvRedis('redis://user:pass@localhost:6379')});
+const cache = new NodeCacheStore({store: keyv});
+
+// with storage you have the same functionality as the NodeCache but will be using async/await
+await cache.set('foo', 'bar');
+await cache.get('foo'); // 'bar'
+```
+
+When initializing the cache you can pass in the options below:
+
+```javascript
+export type NodeCacheStoreOptions = {
+	ttl?: number | string; // The standard ttl as number in milliseconds. 0 = unlimited. Supports shorthand like '1h'.
+	store?: Keyv; // The storage adapter (defaults to in-memory Keyv)
+	useClones?: boolean; // Clone values on get/set via structuredClone. Default: false
+	checkperiod?: number; // Interval in seconds to check for expired items. 0 = disabled. Default: 0
+	deleteOnExpire?: boolean; // Delete expired items when detected. Default: true
+};
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `ttl` | `undefined` | The standard TTL in milliseconds for every cache element. `undefined` or `0` = unlimited. Supports shorthand strings like `'1h'`, `'30m'`, `'5s'`. |
+| `store` | `new Keyv()` | The Keyv storage adapter. Pass any Keyv-compatible store (Redis, MongoDB, etc.). |
+| `useClones` | `false` | If `true`, values are deep-cloned via `structuredClone` on both `set()` and `get()`. This prevents mutations to the returned object from affecting the cached copy and vice versa. |
+| `checkperiod` | `0` | The interval in seconds to check for expired items. `0` = disabled (expiration is checked lazily on access). |
+| `deleteOnExpire` | `true` | If `true`, expired keys are automatically deleted. If `false`, expired keys remain in the store but `get()` returns `undefined` and `has()` returns `false`. You can handle them via the `expired` event. |
+
+Note: the `ttl` is now in milliseconds and not seconds like `stdTTL` in `NodeCache`. You can also use shorthand notation for TTL values. Here is an example:
+
+```javascript
+const cache = new NodeCacheStore({ttl: 60000 }); // 1 minute as it defaults to milliseconds
+await cache.set('foo', 'bar', '1h'); // 1 hour
+await cache.set('longfoo', 'bar', '1d'); // 1 day
+```
+
+## NodeCacheStore API
+
+### `set(key, value, ttl?): Promise<boolean>`
+
+Set a key value pair with an optional ttl (in milliseconds or shorthand string). Returns `true` on success.
+
+```javascript
+await cache.set('foo', 'bar');
+await cache.set('foo', 'bar', 5000); // 5 seconds in milliseconds
+await cache.set('foo', 'bar', '1h'); // 1 hour using shorthand
+```
+
+### `mset(data): Promise<void>`
+
+Set multiple key value pairs at once.
+
+```javascript
+await cache.mset([{key: 'foo', value: 'bar'}, {key: 'baz', value: 'qux', ttl: 5000}]);
+```
+
+### `get<T>(key): Promise<T | undefined>`
+
+Get a value from the cache by key. Returns `undefined` if the key does not exist or has expired.
+
+```javascript
+await cache.get('foo'); // 'bar'
+```
+
+### `mget<T>(keys): Promise<Record<string, T | undefined>>`
+
+Get multiple values from the cache by keys.
+
+```javascript
+await cache.mget(['foo', 'bar']); // { foo: 'value1', bar: 'value2' }
+```
+
+### `take<T>(key): Promise<T | undefined>`
+
+Get a value from the cache by key and delete it. Useful for single-use values like OTPs.
+
+```javascript
+await cache.take('foo'); // 'bar'
+await cache.get('foo'); // undefined
+```
+
+### `del(key): Promise<boolean>`
+
+Delete a key from the cache. Returns `true` if the key was deleted.
+
+```javascript
+await cache.del('foo'); // true
+```
+
+### `mdel(keys): Promise<boolean>`
+
+Delete multiple keys from the cache.
+
+```javascript
+await cache.mdel(['foo', 'bar']); // true
+```
+
+### `has(key): Promise<boolean>`
+
+Check if a key exists in the cache and is not expired.
+
+```javascript
+await cache.set('foo', 'bar');
+await cache.has('foo'); // true
+await cache.has('missing'); // false
+```
+
+### `keys(): Promise<string[]>`
+
+Get all keys from the cache.
+
+```javascript
+await cache.keys(); // ['foo', 'bar']
+```
+
+### `getTtl(key): Promise<number | undefined>`
+
+Get the TTL expiration timestamp of a key. Returns `0` if the key has no TTL (unlimited), `undefined` if the key does not exist, or a timestamp in milliseconds of when the key will expire.
+
+```javascript
+await cache.set('foo', 'bar', 5000);
+await cache.getTtl('foo'); // 1725993344859 (timestamp)
+await cache.set('bar', 'baz');
+await cache.getTtl('bar'); // 0 (unlimited)
+await cache.getTtl('missing'); // undefined
+```
+
+### `setTtl(key, ttl?): Promise<boolean>`
+
+Set the TTL of an existing key. Returns `true` if the key was found and updated.
+
+```javascript
+await cache.setTtl('foo', 10000); // true
+```
+
+### `clear(): Promise<void>`
+
+Clear the cache. Removes all keys and resets store-related stats (keys, ksize, vsize) but preserves hit/miss counts.
+
+```javascript
+await cache.clear();
+```
+
+### `flushAll(): Promise<void>`
+
+Flush the entire cache. Removes all keys and resets all stats. Emits a `flush` event.
+
+```javascript
+await cache.flushAll();
+await cache.keys(); // []
+cache.getStats(); // {hits: 0, misses: 0, keys: 0, ksize: 0, vsize: 0}
+```
+
+### `getStats(): NodeCacheStats`
+
+Get the stats of the cache.
+
+```javascript
+cache.getStats(); // {hits: 1, misses: 0, keys: 2, ksize: 12, vsize: 24}
+```
+
+### `flushStats(): void`
+
+Flush the stats. Resets all stats but keeps the cached data.
+
+### `close(): void`
+
+Stop the check interval timer. Use this to clean up when you're done with the cache.
+
+```javascript
+cache.close();
+```
+
+### `disconnect(): Promise<void>`
+
+Disconnect the storage adapter and stop the check interval.
+
+```javascript
+await cache.disconnect();
+```
+
+### Events
+
+Listen to events using `on()`:
+
+```javascript
+cache.on('set', (key, value) => {
+	console.log(`Key ${key} has been set with value ${value}`);
+});
+
+cache.on('del', (key, value) => {
+	console.log(`Key ${key} has been deleted`);
+});
+
+cache.on('expired', (key, value) => {
+	console.log(`Key ${key} has expired`);
+});
+
+cache.on('flush', () => {
+	console.log('Cache has been flushed');
+});
+
+cache.on('flush_stats', () => {
+	console.log('Stats have been flushed');
+});
+```
+
+| Event | Arguments | Description |
+|-------|-----------|-------------|
+| `set` | `key, value` | Emitted when a key is set |
+| `del` | `key, value` | Emitted when a key is deleted (including via `take()` and `mdel()`) |
+| `expired` | `key, value` | Emitted when an expired key is detected |
+| `flush` | — | Emitted when `flushAll()` is called |
+| `flush_stats` | — | Emitted when `flushStats()` is called |
+
+### Properties
+
+* `ttl`: `number | string | undefined` - The standard ttl for every generated cache element. `undefined` = unlimited
+* `store`: `Keyv` - The storage adapter (read-only)
+* `useClones`: `boolean` - Whether values are cloned on get/set
+* `deleteOnExpire`: `boolean` - Whether expired items are automatically deleted
+
+
+# Migrating to v2
+
+The main `NodeCache` class API has not changed and remains fully compatible. The primary internal change is that it now uses Keyv as the underlying store.
+
+## NodeCacheStore Changes
+
+### Removed `cache` Property
+- **V1**: `nodeCache.cache` returned a `Cacheable` instance
+- **V2**: Use `nodeCache.store` which returns a `Keyv` instance
+
+### Removed Storage Tiering (primary/secondary)
+- **V1**: Supported `primary` and `secondary` store options for multi-tier caching
+- **V2**: Uses single `store` option only
+
+**Migration:**
+```javascript
+// V1
+const cache = new NodeCacheStore({ primary: keyv1, secondary: keyv2 });
+
+// V2 - use single store
+const cache = new NodeCacheStore({ store: keyv });
+```
+
+If you need storage tiering functionality, use the `cacheable` package instead which supports primary and secondary stores.
+
+### Internal Dependency Change
+- V2 uses `@cacheable/utils` instead of the `cacheable` package for a lighter footprint
+
+# Migrating to v3
+
+## Removed `maxKeys` from NodeCacheStore
+
+The `maxKeys` option has been removed from `NodeCacheStore`. It does not make sense for a store backed by external services (Redis, MongoDB, etc.) where the backend manages its own capacity.
+
+The `maxKeys` option remains available on the in-memory `NodeCache` class.
+
+**Migration:**
+```javascript
+// V2 - maxKeys was accepted but not meaningful for external stores
+const cache = new NodeCacheStore({ maxKeys: 100 });
+
+// V3 - remove maxKeys from NodeCacheStore options
+const cache = new NodeCacheStore();
+```
+
+If you need key limits with an external store, configure the limit at the storage layer instead.
+
+## Removed `stats` from NodeCacheStore
+
+The `stats` option and internal stats tracking have been removed from `NodeCacheStore`. The stats were collected internally but never exposed via a public API, making them effectively unused.
+
+## Upgraded `hookified` to v2
+
+The underlying `hookified` dependency has been upgraded from v1 to v2. Both `NodeCache` and `NodeCacheStore` extend `Hookified`. Key changes in hookified v2:
+
+- `logger` property renamed to `eventLogger`
+- `Hook` type renamed to `HookFn`
+- `onHook` signature changed to handle `IHook` interface
+- Removed `throwHookErrors` configuration option
+- `throwOnEmptyListeners` default changed to `true`
+
+If you use hooks or advanced event features from the `Hookified` base class directly, review the [hookified v2 changelog](https://github.com/jaredwray/hookified) for details.
+
+# How to Contribute
+
+You can contribute by forking the repo and submitting a pull request. Please make sure to add tests and update the documentation. To learn more about how to contribute go to our main README [https://github.com/jaredwray/cacheable](https://github.com/jaredwray/cacheable). This will talk about how to `Open a Pull Request`, `Ask a Question`, or `Post an Issue`.
+
+# License and Copyright
+[MIT © Jared Wray](./LICENSE)
