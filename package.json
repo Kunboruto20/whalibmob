@@ -45,5 +45,8 @@
     "dotenv": "^16.4.5",
     "protobufjs": "^6.11.4",
     "uuid": "^11.1.0"
+  },
+  "optionalDependencies": {
+    "socks": "^2.8.3"
   }
 }

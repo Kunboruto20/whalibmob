@@ -2289,6 +2289,41 @@ These variables override individual fields on top of the selected profile:
 | `WA_VERSION` | Pin the WhatsApp version (e.g. `2.24.13.80`). Skips the live store fetch. |
 | `WA_STATIC_TOKEN` | Override the static token used in registration token computation. |
 
+### SIM & Locale Overrides
+
+During registration the library derives `sim_mcc`, `sim_mnc`, `lg` and `lc` from the
+country code of the number being registered, so the request looks like a SIM from
+that country. Override them when the guessed operator is wrong for your number
+(MVNOs, ported numbers, VoIP ranges):
+
+| Variable | Description |
+|---|---|
+| `WA_SIM_MCC` | Mobile Country Code (e.g. `262` for Germany) |
+| `WA_SIM_MNC` | Mobile Network Code (e.g. `01` for Telekom) |
+| `WA_LG` | Language tag, ISO 639-1 (e.g. `de`) |
+| `WA_LC` | Country tag, ISO 3166-1 alpha-2 (e.g. `DE`) |
+
+### Proxy (SOCKS5 / Tor)
+
+WhatsApp routinely refuses registration from datacenter and VPS IPs — that is the
+most common cause of `reason: "no_routes"` and of security blocks. Route
+registration traffic through a residential or mobile proxy:
+
+```sh
+npm install socks
+export TOR_PROXY=socks5://127.0.0.1:9050
+# with credentials:
+export TOR_PROXY=socks5://user:pass@proxy.example.com:1080
+```
+
+| Variable | Description |
+|---|---|
+| `TOR_PROXY` | SOCKS4/SOCKS5 proxy URL for registration traffic. Supports `user:pass@`. |
+| `SOCKS_PROXY` | Alias for `TOR_PROXY`. |
+
+`socks` is an optional dependency: it is only required when one of these variables
+is set, so installs without a proxy are unaffected.
+
 ## License
 
 MIT
