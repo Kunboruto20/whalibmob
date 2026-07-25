@@ -16,6 +16,9 @@
     ".env.example"
   ],
   "type": "commonjs",
+  "scripts": {
+    "test": "node test/usync.test.js"
+  },
   "license": "MIT",
   "engines": {
     "node": ">=14.0.0"
