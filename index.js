@@ -11,6 +11,7 @@ const { SenderKeyStore, SenderKeyCrypto } = require('./lib/signal/SenderKey');
 const { DeviceManager } = require('./lib/DeviceManager');
 const { encryptMedia, decryptMedia, uploadMedia, downloadMedia } = require('./lib/MediaService');
 const { MessageSender, makeJid, generateMessageId } = require('./lib/messages/MessageSender');
+const { FridaAttestor, getAttestorFromEnv } = require('./lib/AttestationClient');
 
 module.exports = {
   WhalibmobClient,
@@ -48,5 +49,10 @@ module.exports = {
   // Message helpers
   MessageSender,
   makeJid,
-  generateMessageId
+  generateMessageId,
+  // Device attestation (Frida middleware in ./frida) — see frida/README.md.
+  // Enable with WA_FRIDA_ATTESTATION=1 to attach Play Integrity / App Attest
+  // tokens to registration requests, matching a genuine device.
+  FridaAttestor,
+  getAttestorFromEnv
 };

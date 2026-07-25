@@ -234,6 +234,34 @@ if (result.status === 'ok') {
 }
 ```
 
+#### Device attestation (Frida)
+
+WhatsApp gates registration behind **device attestation** — a Google **Play
+Integrity** verdict on Android and Apple **App Attest** on iOS. Those tokens can
+only be minted on a genuine device, which is why datacenter registrations are
+often refused.
+
+whalibmob ships the same Frida middleware [Auties00/Cobalt](https://github.com/Auties00/Cobalt)
+uses, under [`frida/`](frida/README.md). The scripts run on a rooted/jailbroken
+device and expose a local HTTP server (port `1119` = WhatsApp, `1120` = Business);
+whalibmob then attaches `gpia` (Play Integrity), the `H=` Keystore signature and
+the `Authorization` certificate chain to every `/exist`, `/code` and `/register`
+request — exactly like a real device.
+
+It is **off by default**. Enable it once the device server is reachable:
+
+```sh
+# .env
+WA_FRIDA_ATTESTATION=1
+WA_FRIDA_HOST=127.0.0.1        # e.g. after: adb forward tcp:1119 tcp:1119
+WA_FRIDA_PORT=1119            # 1119 WhatsApp, 1120 Business
+# WA_FRIDA_OPTIONAL=1          # don't fail a request if the server is down
+```
+
+See [`frida/README.md`](frida/README.md) for the full device setup. When the flag
+is unset, `requestSmsCode` / `verifyCode` behave exactly as before and never
+contact the device.
+
 ### Connect
 
 ```js

@@ -17,7 +17,7 @@
   ],
   "type": "commonjs",
   "scripts": {
-    "test": "node test/usync.test.js && node test/groups.test.js && node test/media.test.js && node test/registration.test.js && node test/newsletter.test.js"
+    "test": "node test/usync.test.js && node test/groups.test.js && node test/media.test.js && node test/registration.test.js && node test/newsletter.test.js && node test/attestation.test.js"
   },
   "license": "MIT",
   "engines": {

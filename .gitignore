@@ -2,3 +2,6 @@ node_modules/
 package-lock.json
 .env
 *.log
+
+# Reference clone of Auties00/Cobalt (analysis only, not committed)
+cobalt-reference/
