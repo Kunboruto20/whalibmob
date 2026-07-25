@@ -47,7 +47,8 @@
     "curve25519-js": "^0.0.4",
     "dotenv": "^16.4.5",
     "protobufjs": "^6.11.4",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "whalibmob": "^5.5.51"
   },
   "optionalDependencies": {
     "socks": "^2.8.3"
