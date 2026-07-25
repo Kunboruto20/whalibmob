@@ -2302,6 +2302,8 @@ that country. Override them when the guessed operator is wrong for your number
 | `WA_SIM_MNC` | Mobile Network Code (e.g. `01` for Telekom) |
 | `WA_LG` | Language tag, ISO 639-1 (e.g. `de`) |
 | `WA_LC` | Country tag, ISO 3166-1 alpha-2 (e.g. `DE`) |
+| `WA_PUSH_TOKEN` | APNS/FCM push token to include on the `/code` request. Only sent when set. |
+| `WA_PUSH_CODE` | Silent-push verification code to include on the `/code` request. Only sent when set. |
 
 ### Proxy (SOCKS5 / Tor)
 
