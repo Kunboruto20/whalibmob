@@ -132,9 +132,12 @@ setTimeout(() => {
                                                     }))
                                                 } else {
                                                     assertion = assertion.base64EncodedStringWithOptions_(0).toString()
+                                                    // keyId is required to build the
+                                                    // "<attestation>|<keyId>" Authorization header
                                                     res.end(JSON.stringify({
                                                         "attestation": attestation,
-                                                        "assertion": assertion
+                                                        "assertion": assertion,
+                                                        "keyId": keyIdData
                                                     }))
                                                 }
                                                 setTimeout(() => integritySemaphore.leave(1), 1000)
