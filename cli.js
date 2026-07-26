@@ -362,7 +362,9 @@ const HELP = `
 
   Contacts
     /whatsapp  <phone...>                    check which numbers have WhatsApp
-    /picture   <jid>                         get profile picture URL of a contact
+    /picture   <jid> [file]                  profile picture URL; downloads it when a file is given
+    /read      <jid> <msgId...>              mark messages as read (blue ticks)
+    /autoread  on|off                        auto-send read receipts for incoming messages
     /contact about <jid>                     get bio/status text of a contact
 
   Chats
@@ -393,7 +395,7 @@ const HELP = `
     /group desc    <jid> <text>              change description
     /group invite      <jid>                  get invite link
     /group revoke      <jid>                  revoke invite link
-    /group join        <code>                 join by invite code
+    /group join        <code|link>            join by invite code or full link
     /group invite-info <code|url>             preview group metadata from invite link
     /group photo       <jid> <file>           change group picture (JPEG)
     /group meta        <jid>                  query group metadata + participants
@@ -1004,10 +1006,36 @@ async function handleLine(line) {
 
       case '/picture': {
         requireConn();
+        const jid  = normalizeJid(p[1]);
+        const dest = p[2];
+        if (!jid) { fail('usage: /picture <jid> [file]'); break; }
+        const info = await _client.queryPictureInfo(jid);
+        if (!info || !info.url) { out('  (no picture or private)'); break; }
+        out('  ' + info.url);
+        if (info.id) out('  id  ' + info.id);
+        if (!dest) break;
+        const buf = await _client.downloadProfilePicture(jid);
+        if (!buf) { fail('download returned nothing'); break; }
+        require('fs').writeFileSync(dest, buf);
+        out('  saved  ' + dest + '  (' + buf.length + ' bytes)');
+        break;
+      }
+
+      case '/read': {
+        requireConn();
         const jid = normalizeJid(p[1]);
-        if (!jid) { fail('usage: /picture <jid>'); break; }
-        const url = await _client.queryPicture(jid);
-        out('  ' + (url || '(no picture or private)'));
+        const ids = p.slice(2);
+        if (!jid || !ids.length) { fail('usage: /read <jid> <msgId...>'); break; }
+        _client.markRead(jid, ids);
+        out('marked read  ' + ids.length + ' message(s) in ' + jid);
+        break;
+      }
+
+      case '/autoread': {
+        const val = (p[1] || '').toLowerCase();
+        if (val !== 'on' && val !== 'off') { fail('usage: /autoread on|off'); break; }
+        if (_client) _client.autoRead = (val === 'on');
+        out('auto read receipts  ' + val);
         break;
       }
 
@@ -1232,14 +1260,15 @@ async function handleLine(line) {
         else if (sub === 'revoke') {
           const gj = asGroupJid(p[2]);
           if (!gj) { fail('usage: /group revoke <jid>'); break; }
-          await _client.revokeGroupInvite(gj);
+          const fresh = await _client.revokeGroupInvite(gj);
           out('invite link revoked');
+          if (fresh) out('  new link  ' + fresh);
         }
         else if (sub === 'join') {
           const code = p[2];
-          if (!code) { fail('usage: /group join <code>'); break; }
-          const jid = await _client.acceptGroupInvite(code);
-          out('joined  ' + (jid || 'ok'));
+          if (!code) { fail('usage: /group join <code|link>'); break; }
+          const r = await _client.joinGroupWithLink(code);
+          out((r.pendingApproval ? 'join request sent  ' : 'joined  ') + r.jid);
         }
         else if (sub === 'invite-info') {
           const code = p[2];
