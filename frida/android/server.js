@@ -383,8 +383,8 @@ Java.perform(function () {
             passwordChars[i] = String.fromCharCode(password[i] & 0xFF);
         }
 
-        let factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1And8BIT")
-        let key = PBEKeySpec.$new(passwordChars, secretKeySalt, 128, 512)
+        let factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        let key = PBEKeySpec.$new(passwordChars, secretKeySalt, 600000, 512)
         let secretKey = Java.cast(factory.generateSecret(key), Key).getEncoded()
 
         let signatures = context.getPackageManager().getPackageInfo(packageName, PackageManager.GET_SIGNATURES.value).signatures.value
