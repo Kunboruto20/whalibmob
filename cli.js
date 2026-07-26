@@ -37,7 +37,12 @@ const {
 
 const { assertMeId, initAuthCreds } = require('./lib/auth-utils');
 
-const VERSION = '5.5.59';
+// Read the version straight from package.json so it can never drift out of sync
+// with the published package.  npm always ships package.json in the tarball,
+// regardless of the "files" list, so this resolves for installed users too.
+const VERSION = (() => {
+  try { return require('./package.json').version; } catch (_) { return 'unknown'; }
+})();
 
 // ─── output helpers ───────────────────────────────────────────────────────────
 
