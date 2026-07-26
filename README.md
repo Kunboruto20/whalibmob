@@ -126,6 +126,7 @@ npm install -g whalibmob
 - [Library API](#library-api)
   - [Connecting Account](#connecting-account)
     - [Register a New Number](#register-a-new-number)
+    - [Device Attestation with Frida (optional)](#device-attestation-with-frida-optional)
     - [Connect](#connect)
   - [Saving & Restoring Sessions](#saving--restoring-sessions)
   - [Signal Store Utilities](#signal-store-utilities)
@@ -271,6 +272,113 @@ if (result.status === 'ok') {
   console.log('registered')
 }
 ```
+
+### Device Attestation with Frida (optional)
+
+WhatsApp's registration servers score every `/code` and `/register` request on how
+much it looks like a genuine phone. A real device proves itself with a hardware
+attestation token — **Play Integrity** plus a **Keystore**-signed request on
+Android, **App Attest** on iOS. whalibmob sends these fields on every registration
+request, but it can only fill them with real values if it can talk to an actual
+device.
+
+This repository ships a **`frida/` folder** containing the on-device scripts that
+produce those tokens. It is entirely **optional**: with no device attached,
+whalibmob sends the same empty attestation fields a real phone sends when its
+integrity check fails, and registration still works. Attaching a device raises the
+trust score, which helps when you keep hitting `no_routes` or block screens.
+
+> Requires a **rooted Android phone** or a **jailbroken iPhone** with the official
+> WhatsApp app installed from the Play Store / App Store. Sideloaded APKs do not
+> work — the attestation is bound to the store-signed build.
+
+#### What's in the folder
+
+```
+frida/
+  android/     Play Integrity + Keystore attestation server  (/integrity, /cert, /info)
+  ios/         App Attest attestation server                 (/integrity)
+```
+
+Each platform folder has its own `README.md` with the full device prerequisites.
+
+#### 1. Build the script
+
+Install [Frida](https://frida.re) on your computer, then build the bundle for your
+platform:
+
+```bash
+cd frida/android      # or: cd frida/ios
+npm install
+npm run build         # produces server_with_dependencies.js
+```
+
+#### 2. Run it on the device
+
+Make sure the Frida server is running on the phone, then attach to WhatsApp:
+
+```bash
+# Android — open WhatsApp and reach the "register a number" screen FIRST,
+# otherwise the integrity components are not loaded yet
+frida -U "WhatsApp" -l server_with_dependencies.js
+
+# iOS
+frida -U -l server_with_dependencies.js -f "net.whatsapp.WhatsApp"
+```
+
+The script starts a small HTTP server **on the phone**, listening on port `1119`
+(or `1120` if you attached to WhatsApp Business). Wait for:
+
+```
+[*] Server ready on port 1119
+```
+
+#### 3. Make the port reachable
+
+whalibmob talks to that server over plain HTTP, so the port has to be reachable
+from the machine running your bot. Over USB, forward it with adb:
+
+```bash
+adb forward tcp:1119 tcp:1119     # Android
+iproxy 1119 1119                  # iOS (libimobiledevice)
+```
+
+Alternatively, if the phone is on the same Wi-Fi, use its LAN IP directly.
+
+#### 4. Point whalibmob at it
+
+Set the host — and the port, if it isn't the default `1119`:
+
+```bash
+WA_FRIDA_HOST=127.0.0.1
+WA_FRIDA_PORT=1119        # optional; use 1120 for WhatsApp Business
+```
+
+Or in `.env`:
+
+```
+WA_FRIDA_HOST=127.0.0.1
+WA_FRIDA_PORT=1119
+```
+
+That is the whole integration. On the next `requestSmsCode()` / `verifyCode()`
+call, whalibmob queries the device automatically and attaches the attestation to
+the request:
+
+| Platform | Fields it fills                                                    |
+|----------|--------------------------------------------------------------------|
+| Android  | `gpia` (Play Integrity) in the body, plus a Keystore signature and certificate chain on the request |
+| iOS      | An App Attest assertion and attestation on the request              |
+
+Keep the Frida session open while you register. When you unset `WA_FRIDA_HOST`,
+whalibmob silently goes back to the empty-attestation path — no code changes, and
+nothing else in your bot is affected.
+
+> **Troubleshooting.** If the fields come back empty, check in this order: the
+> Frida session is still attached, the port is forwarded, and — on Android — that
+> you opened WhatsApp's registration screen at least once before attaching, since
+> the integrity components are lazy-loaded. whalibmob never fails a registration
+> because attestation is unavailable; it just falls back to empty values.
 
 ### Connect
 
