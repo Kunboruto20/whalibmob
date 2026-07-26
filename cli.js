@@ -90,7 +90,19 @@ function enableWireTrace() {
   // reformat its lines on the way out. Anything that is not a pino record is
   // passed through byte-for-byte.
   const stamp = () => new Date().toISOString().slice(11, 23);
-  const trace = (s) => _origStderrWrite(s + '\n');
+  // Traffic arrives while readline owns the bottom line, so writing straight
+  // out overwrites the prompt and leaves the two interleaved. Clear the line
+  // first and redraw the prompt after, the same way the CLI's own event
+  // handlers do.
+  const trace = (s) => {
+    const live = _rl && process.stdout.isTTY;
+    if (live) {
+      readline.cursorTo(process.stdout, 0);
+      readline.clearLine(process.stdout, 0);
+    }
+    _origStderrWrite(s + '\n');
+    if (live) _rl.prompt(true);
+  };
 
   // Route the library's internal [DBG] stream through pino at full verbosity.
   // pino writes newline-delimited JSON straight to fd 1 via sonic-boom, which
