@@ -37,7 +37,7 @@ const {
 
 const { assertMeId, initAuthCreds } = require('./lib/auth-utils');
 
-const VERSION = '5.1.21';
+const VERSION = '5.5.59';
 
 // ─── output helpers ───────────────────────────────────────────────────────────
 
