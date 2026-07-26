@@ -32,11 +32,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/Kunboruto50/whalibmob.git"
+    "url": "https://github.com/Kunboruto20/whalibmob.git"
   },
-  "homepage": "https://github.com/Kunboruto50/whalibmob#readme",
+  "homepage": "https://github.com/Kunboruto20/whalibmob#readme",
   "bugs": {
-    "url": "https://github.com/Kunboruto50/whalibmob/issues"
+    "url": "https://github.com/Kunboruto20/whalibmob/issues"
   },
   "dependencies": {
     "@cacheable/node-cache": "^3.0.1",
