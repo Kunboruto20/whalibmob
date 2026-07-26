@@ -4,7 +4,7 @@
 ##
 
 > [!IMPORTANT]
-> new repository whalibmob It will be maintained at the https://github.com/Kunboruto50/whalibmob.git Since I lost the Kunboruto20 account, whalibmob will be maintained and rewritten by me soon because I know that many functions in whalibmob no longer work after the WhatsApp mobile protocol change, these days I will take care of whalibmob, all good friends Fun enjoyable for all c
+
 
 
 CONTACT ME ON TELEGRAM  IF YOU WANT TO WORK WITH ME AND IF YOU HAVE PROBLEM WITH WHALIBMOB : @borutokun240
