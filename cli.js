@@ -174,6 +174,47 @@ function enableWireTrace() {
     }
   }
 
+  // The Noise handshake never goes through sendNode — sendNode refuses to run
+  // until the channel is secured, and the ClientHello/ClientFinish frames are
+  // written straight to the TCP socket. Wrap that socket as soon as connect()
+  // creates it so the handshake is visible too, then step aside once the
+  // channel is up and the stanza-level hooks take over.
+  const HS_OUT = ['ClientHello', 'ClientFinish'];
+  const HS_IN  = ['ServerHello'];
+  const origConnect = NoiseSocket.prototype.connect;
+  NoiseSocket.prototype.connect = function (...args) {
+    const result = origConnect.apply(this, args);
+    const sock = this.socket;
+    if (sock && !sock.__waTraced) {
+      sock.__waTraced = true;
+      let outN = 0, inN = 0;
+      trace(`\n${C.out}${stamp()} ──▶ TCP CONNECT ${sock.remoteAddress || ''}${C.off}`);
+
+      const origWrite = sock.write.bind(sock);
+      sock.write = (chunk, ...rest) => {
+        if (!this.secured && Buffer.isBuffer(chunk)) {
+          const name = HS_OUT[outN++] || 'handshake frame';
+          trace(`\n${C.out}${stamp()} ──▶ NOISE ${name}  (${chunk.length} bytes)${C.off}`);
+          trace(`  ${C.dim}${chunk.toString('hex')}${C.off}`);
+        }
+        return origWrite(chunk, ...rest);
+      };
+
+      sock.on('data', (d) => {
+        if (this.secured) return;
+        // Label positionally, but say so when the reply is plainly not a Noise
+        // frame — a proxy or captive portal answering in ASCII is worth reading
+        // as text rather than staring at its hex.
+        const ascii = isPrintable(d);
+        const name  = ascii ? 'unexpected plaintext reply' : (HS_IN[inN++] || 'handshake frame');
+        trace(`\n${C.in}${stamp()} ◀── NOISE ${name}  (${d.length} bytes)${C.off}`);
+        trace(`  ${C.dim}${d.toString('hex').slice(0, 1024)}${C.off}`);
+        if (ascii) trace(`  ${C.dim}as text: ${JSON.stringify(d.toString('utf8').slice(0, 400))}${C.off}`);
+      });
+    }
+    return result;
+  };
+
   const origSendNode = NoiseSocket.prototype.sendNode;
   NoiseSocket.prototype.sendNode = function (node) {
     try { logStanza('OUT', node); } catch (_) {}
