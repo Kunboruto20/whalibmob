@@ -8,11 +8,12 @@
 try { require('dotenv').config(); } catch (_) {}
 
 // ─── Wire trace ───────────────────────────────────────────────────────────────
-// Full protocol tracing is ON by default: every stanza this client sends to the
-// server and every stanza the server sends back is printed as it happens, along
-// with the registration HTTP exchange and the library's own internal debug log.
-// Turn it off with `--no-debug`, `--quiet`, or WA_DEBUG=0.
-const WIRE_TRACE = !(
+// Full protocol tracing prints every stanza this client sends and receives.
+// It is opt-in: an interactive session asks once at startup. `--debug` turns it
+// on without asking (for scripts and pipes), `--no-debug` / `--quiet` / `-q` /
+// WA_DEBUG=0 turn it off without asking.
+const TRACE_FORCE_ON = process.argv.includes('--debug') || process.env.WA_DEBUG === '1';
+const TRACE_FORCE_OFF = (
   process.argv.includes('--no-debug') ||
   process.argv.includes('--quiet') ||
   process.argv.includes('-q') ||
@@ -23,13 +24,13 @@ const TRACE_BYTES = process.argv.includes('--trace-bytes');
 
 // Consume the trace flags so the command parser below never sees them and
 // reports e.g. `--no-debug` as an unknown command.
-const _TRACE_FLAGS = ['--no-debug', '--quiet', '-q', '--trace-bytes'];
+const _TRACE_FLAGS = ['--debug', '--no-debug', '--quiet', '-q', '--trace-bytes'];
 process.argv = process.argv.filter(a => !_TRACE_FLAGS.includes(a));
 
-// Suppress internal [DBG] lines — keep console clean for users.
-// Skipped while tracing, where seeing them is the entire point.
+// Console starts clean: internal [DBG] lines are swallowed unless tracing is
+// switched on, which restores this stream.
 const _origStderrWrite = process.stderr.write.bind(process.stderr);
-if (!WIRE_TRACE) {
+function installDbgSuppression() {
   process.stderr.write = function(chunk, enc, cb) {
     if (typeof chunk === 'string' && chunk.startsWith('[DBG]')) {
       if (typeof enc === 'function') enc(); else if (typeof cb === 'function') cb();
@@ -38,6 +39,7 @@ if (!WIRE_TRACE) {
     return _origStderrWrite(chunk, enc, cb);
   };
 }
+installDbgSuppression();
 
 const path     = require('path');
 const fs       = require('fs');
@@ -69,7 +71,12 @@ const { assertMeId, initAuthCreds } = require('./lib/auth-utils');
 // survives reconnects and covers frames sent during the handshake, before any
 // client-level event has fired. https.request is wrapped as well, because SMS
 // registration runs over HTTP and never touches the socket.
-if (WIRE_TRACE) {
+let _wireTraceOn = false;
+function enableWireTrace() {
+  if (_wireTraceOn) return;
+  _wireTraceOn = true;
+  // Tracing is the point now — let [DBG] through again.
+  process.stderr.write = _origStderrWrite;
   const { NoiseSocket } = require('./lib/noise');
   const { configureLogger } = require('./lib/logger');
   const https = require('https');
@@ -199,8 +206,6 @@ if (WIRE_TRACE) {
     return req;
   };
 
-  trace(`${C.dim}wire trace ON — every stanza in and out is printed.` +
-        ` Use --no-debug to silence, --trace-bytes for raw frames.${C.off}`);
 }
 
 // Read the version straight from package.json so it can never drift out of sync
@@ -1610,11 +1615,50 @@ options:
   --method          sms | voice | wa_old | email  (default: sms)
   --email <address> email address (required when --method email)
 
+debug:
+  an interactive session asks once whether to trace the protocol.
+  answer y to print every stanza sent and received, n to keep it quiet.
+
+  --debug           trace without asking  (same as WA_DEBUG=1)
+  --no-debug, -q    stay quiet without asking  (same as WA_DEBUG=0)
+  --trace-bytes     also dump the raw encoded bytes of every stanza
+
 after connecting, type /help for all available commands.
 `.trim();
 
+function announceTrace() {
+  out('debug full ON — every stanza sent and received will be printed' +
+      (TRACE_BYTES ? ', with raw frame bytes' : '') + '.\n');
+}
+
+// Ask once, at startup, whether to trace the protocol. Commands that never
+// touch the network skip the question entirely. A non-interactive stdin (a
+// pipe, a script) is treated as "no" rather than hanging on a prompt that
+// nobody is there to answer.
+function askDebugMode(cmd) {
+  if (TRACE_FORCE_ON)  { enableWireTrace(); announceTrace(); return Promise.resolve(); }
+  if (TRACE_FORCE_OFF) return Promise.resolve();
+  const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h'];
+  if (cmd && OFFLINE.includes(cmd)) return Promise.resolve();
+  if (!process.stdin.isTTY) return Promise.resolve();
+
+  return new Promise(resolve => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question('do you want debug full?  [y/N] ', (answer) => {
+      rl.close();
+      if (/^y(es)?$/i.test(String(answer).trim())) {
+        enableWireTrace();
+        announceTrace();
+      }
+      resolve();
+    });
+  });
+}
+
 async function main() {
   const { cmd, sub, flags, pos } = parseArgs(process.argv);
+
+  await askDebugMode(cmd);
 
   _sessDir = flags.session || defaultSessionDir();
 
