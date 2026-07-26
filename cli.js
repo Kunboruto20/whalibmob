@@ -7,15 +7,39 @@
 // process.env is fully populated when modules read it at load time.
 try { require('dotenv').config(); } catch (_) {}
 
-// Suppress internal [DBG] lines — keep console clean for users
+// ─── Wire trace ───────────────────────────────────────────────────────────────
+// Full protocol tracing prints every stanza this client sends and receives.
+// It is opt-in: an interactive session asks once at startup. `--debug` turns it
+// on without asking (for scripts and pipes), `--no-debug` / `--quiet` / `-q` /
+// WA_DEBUG=0 turn it off without asking.
+const TRACE_FORCE_ON = process.argv.includes('--debug') || process.env.WA_DEBUG === '1';
+const TRACE_FORCE_OFF = (
+  process.argv.includes('--no-debug') ||
+  process.argv.includes('--quiet') ||
+  process.argv.includes('-q') ||
+  process.env.WA_DEBUG === '0'
+);
+// `--trace-bytes` additionally dumps the raw encoded bytes of every stanza.
+const TRACE_BYTES = process.argv.includes('--trace-bytes');
+
+// Consume the trace flags so the command parser below never sees them and
+// reports e.g. `--no-debug` as an unknown command.
+const _TRACE_FLAGS = ['--debug', '--no-debug', '--quiet', '-q', '--trace-bytes'];
+process.argv = process.argv.filter(a => !_TRACE_FLAGS.includes(a));
+
+// Console starts clean: internal [DBG] lines are swallowed unless tracing is
+// switched on, which restores this stream.
 const _origStderrWrite = process.stderr.write.bind(process.stderr);
-process.stderr.write = function(chunk, enc, cb) {
-  if (typeof chunk === 'string' && chunk.startsWith('[DBG]')) {
-    if (typeof enc === 'function') enc(); else if (typeof cb === 'function') cb();
-    return true;
-  }
-  return _origStderrWrite(chunk, enc, cb);
-};
+function installDbgSuppression() {
+  process.stderr.write = function(chunk, enc, cb) {
+    if (typeof chunk === 'string' && chunk.startsWith('[DBG]')) {
+      if (typeof enc === 'function') enc(); else if (typeof cb === 'function') cb();
+      return true;
+    }
+    return _origStderrWrite(chunk, enc, cb);
+  };
+}
+installDbgSuppression();
 
 const path     = require('path');
 const fs       = require('fs');
@@ -36,6 +60,153 @@ const {
 } = require('./lib/Client');
 
 const { assertMeId, initAuthCreds } = require('./lib/auth-utils');
+
+// ─── Wire trace implementation ────────────────────────────────────────────────
+// Everything below is CLI-only instrumentation; the library is untouched.
+//
+// Two hooks cover the whole protocol surface:
+//   * NoiseSocket.prototype.sendNode  — every stanza leaving this client
+//   * NoiseSocket.prototype.emit      — the 'node' event, every stanza arriving
+// They are patched on the prototype rather than on an instance so the trace
+// survives reconnects and covers frames sent during the handshake, before any
+// client-level event has fired. https.request is wrapped as well, because SMS
+// registration runs over HTTP and never touches the socket.
+let _wireTraceOn = false;
+function enableWireTrace() {
+  if (_wireTraceOn) return;
+  _wireTraceOn = true;
+  // Tracing is the point now — let [DBG] through again.
+  process.stderr.write = _origStderrWrite;
+  const { NoiseSocket } = require('./lib/noise');
+  const { configureLogger } = require('./lib/logger');
+  const https = require('https');
+
+  const C = process.stdout.isTTY
+    ? { out:'\x1b[36m', in:'\x1b[32m', http:'\x1b[35m', dim:'\x1b[2m', tag:'\x1b[33m', off:'\x1b[0m' }
+    : { out:'', in:'', http:'', dim:'', tag:'', off:'' };
+
+  // pino writes newline-delimited JSON to stdout. That is the right shape for a
+  // log collector and the wrong one for someone watching a live session, so
+  // reformat its lines on the way out. Anything that is not a pino record is
+  // passed through byte-for-byte.
+  const stamp = () => new Date().toISOString().slice(11, 23);
+  const trace = (s) => _origStderrWrite(s + '\n');
+
+  // Route the library's internal [DBG] stream through pino at full verbosity.
+  // pino writes newline-delimited JSON straight to fd 1 via sonic-boom, which
+  // bypasses process.stdout — so rather than trying to reformat its output we
+  // intercept at pino's own logMethod hook, render the record ourselves and let
+  // pino emit nothing. The library still logs through pino; only the rendering
+  // is ours.
+  const LEVEL_NAME = { 10: 'TRACE', 20: 'DEBUG', 30: 'INFO ', 40: 'WARN ', 50: 'ERROR', 60: 'FATAL' };
+  configureLogger({
+    level: 'trace',
+    hooks: {
+      logMethod(args, _method, level) {
+        const msg = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+        trace(`${C.dim}${stamp()} ${LEVEL_NAME[level] || level}${C.off} ${msg}`);
+      }
+    }
+  });
+
+  const isPrintable = (buf) => buf.length > 0 && buf.every(b => b === 9 || b === 10 || b === 13 || (b >= 32 && b < 127));
+
+  // JIDs decode to objects, byte fields to Buffers — render both readably.
+  function attrValue(v) {
+    if (v === null || v === undefined) return '';
+    if (Buffer.isBuffer(v)) return isPrintable(v) ? v.toString('utf8') : '0x' + v.toString('hex');
+    if (typeof v === 'object') {
+      if (v.user !== undefined) {
+        const dev = v.device ? ':' + v.device : '';
+        return `${v.user || ''}${dev}@${v.server || ''}`;
+      }
+      return JSON.stringify(v);
+    }
+    return String(v);
+  }
+
+  function renderContent(content, pad) {
+    if (content === null || content === undefined) return null;
+    if (Array.isArray(content)) return content.map(n => nodeToXml(n, pad)).join('\n');
+    if (Buffer.isBuffer(content)) {
+      if (isPrintable(content)) return pad + content.toString('utf8');
+      const hex = content.toString('hex');
+      const shown = hex.length > 512 ? hex.slice(0, 512) + '…' : hex;
+      return `${pad}${C.dim}[${content.length} bytes] ${shown}${C.off}`;
+    }
+    return pad + String(content);
+  }
+
+  function nodeToXml(node, pad) {
+    pad = pad || '';
+    if (!node || !node.description) return pad + String(node);
+    const attrs = Object.entries(node.attrs || {})
+      .map(([k, v]) => ` ${C.tag}${k}${C.off}="${attrValue(v)}"`).join('');
+    const tag = node.description;
+    const body = renderContent(node.content, pad + '  ');
+    if (body === null) return `${pad}<${tag}${attrs}/>`;
+    return `${pad}<${tag}${attrs}>\n${body}\n${pad}</${tag}>`;
+  }
+
+  function logStanza(dir, node) {
+    const colour = dir === 'OUT' ? C.out : C.in;
+    const arrow  = dir === 'OUT' ? '──▶ SENT' : '◀── RECV';
+    trace(`\n${colour}${stamp()} ${arrow}${C.off}`);
+    trace(nodeToXml(node, '  '));
+    if (TRACE_BYTES) {
+      try {
+        const { encodeNode } = require('./lib/BinaryNode');
+        const raw = encodeNode(node);
+        trace(`  ${C.dim}raw ${raw.length}B: ${raw.toString('hex')}${C.off}`);
+      } catch (_) {}
+    }
+  }
+
+  const origSendNode = NoiseSocket.prototype.sendNode;
+  NoiseSocket.prototype.sendNode = function (node) {
+    try { logStanza('OUT', node); } catch (_) {}
+    return origSendNode.call(this, node);
+  };
+
+  const origEmit = NoiseSocket.prototype.emit;
+  NoiseSocket.prototype.emit = function (event, ...args) {
+    try {
+      if (event === 'node')       logStanza('IN', args[0]);
+      else if (event === 'open')  trace(`\n${C.in}${stamp()} ◀── HANDSHAKE COMPLETE — channel secured${C.off}`);
+      else if (event === 'error') trace(`\n${C.in}${stamp()} ◀── SOCKET ERROR: ${args[0] && args[0].message}${C.off}`);
+      else if (event === 'close') trace(`\n${C.in}${stamp()} ◀── SOCKET CLOSED${C.off}`);
+    } catch (_) {}
+    return origEmit.apply(this, [event, ...args]);
+  };
+
+  // Registration (SMS request / code verify) goes over HTTPS, not the socket.
+  const origRequest = https.request;
+  https.request = function (...args) {
+    const opts = typeof args[0] === 'string' ? { href: args[0] } : (args[0] || {});
+    const host = opts.hostname || opts.host || opts.href || '?';
+    const target = `${opts.method || 'GET'} ${host}${opts.path || ''}`;
+    trace(`\n${C.http}${stamp()} ──▶ HTTP ${target}${C.off}`);
+    if (opts.headers) {
+      for (const [k, v] of Object.entries(opts.headers)) {
+        trace(`  ${C.tag}${k}${C.off}: ${v}`);
+      }
+    }
+    const req = origRequest.apply(this, args);
+    const origWrite = req.write.bind(req);
+    req.write = function (chunk, ...rest) {
+      try { trace(`  ${C.dim}body: ${Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk}${C.off}`); } catch (_) {}
+      return origWrite(chunk, ...rest);
+    };
+    req.on('response', (res) => {
+      trace(`\n${C.http}${stamp()} ◀── HTTP ${res.statusCode} from ${host}${C.off}`);
+      let body = '';
+      res.on('data', d => { if (body.length < 8192) body += d.toString('utf8'); });
+      res.on('end', () => { if (body) trace(`  ${C.dim}${body}${C.off}`); });
+    });
+    return req;
+  };
+
+}
 
 // Read the version straight from package.json so it can never drift out of sync
 // with the published package.  npm always ships package.json in the tarball,
@@ -1444,11 +1615,50 @@ options:
   --method          sms | voice | wa_old | email  (default: sms)
   --email <address> email address (required when --method email)
 
+debug:
+  an interactive session asks once whether to trace the protocol.
+  answer y to print every stanza sent and received, n to keep it quiet.
+
+  --debug           trace without asking  (same as WA_DEBUG=1)
+  --no-debug, -q    stay quiet without asking  (same as WA_DEBUG=0)
+  --trace-bytes     also dump the raw encoded bytes of every stanza
+
 after connecting, type /help for all available commands.
 `.trim();
 
+function announceTrace() {
+  out('debug full ON — every stanza sent and received will be printed' +
+      (TRACE_BYTES ? ', with raw frame bytes' : '') + '.\n');
+}
+
+// Ask once, at startup, whether to trace the protocol. Commands that never
+// touch the network skip the question entirely. A non-interactive stdin (a
+// pipe, a script) is treated as "no" rather than hanging on a prompt that
+// nobody is there to answer.
+function askDebugMode(cmd) {
+  if (TRACE_FORCE_ON)  { enableWireTrace(); announceTrace(); return Promise.resolve(); }
+  if (TRACE_FORCE_OFF) return Promise.resolve();
+  const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h'];
+  if (cmd && OFFLINE.includes(cmd)) return Promise.resolve();
+  if (!process.stdin.isTTY) return Promise.resolve();
+
+  return new Promise(resolve => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question('do you want debug full?  [y/N] ', (answer) => {
+      rl.close();
+      if (/^y(es)?$/i.test(String(answer).trim())) {
+        enableWireTrace();
+        announceTrace();
+      }
+      resolve();
+    });
+  });
+}
+
 async function main() {
   const { cmd, sub, flags, pos } = parseArgs(process.argv);
+
+  await askDebugMode(cmd);
 
   _sessDir = flags.session || defaultSessionDir();
 
