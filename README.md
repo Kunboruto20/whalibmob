@@ -150,6 +150,7 @@ npm install -g whalibmob
     - [Handling Reconnects](#handling-reconnects)
     - [Knowing Which Mode You Are In](#knowing-which-mode-you-are-in)
     - [Two Sessions on One Number](#two-sessions-on-one-number)
+  - [Routing Registration Through a Proxy](#routing-registration-through-a-proxy)
   - [Saving & Restoring Sessions](#saving--restoring-sessions)
   - [Signal Store Utilities](#signal-store-utilities)
     - [makeCacheableSignalKeyStore](#makecacheablesignalkeystore)
@@ -805,6 +806,40 @@ await client.connectWeb(PHONE)  // web / companion, over WebSocket
 ```
 
 Use two `WhalibmobClient` instances if you want both at once.
+
+## Routing Registration Through a Proxy
+
+Registration is the part of the protocol most likely to be refused from a datacenter IP. If you are seeing security blocks or an undeterminable number status, route it through a SOCKS proxy — Tor, or a residential provider.
+
+Install the optional dependency and set one environment variable:
+
+```sh
+npm install socks
+```
+
+```sh
+# Tor
+export TOR_PROXY=socks5://127.0.0.1:9050
+
+# a residential proxy that needs credentials
+export SOCKS_PROXY=socks5://user:pass@proxy.example.com:1080
+```
+
+A bare `host:port` is assumed to be SOCKS5, so `TOR_PROXY=127.0.0.1:9050` works too. `socks5`, `socks5h`, `socks4` and `socks4a` are all accepted, and `TOR_PROXY` wins if both variables are set.
+
+If the password contains an `@` or a `:`, percent-encode it — `p@ss:word` becomes `p%40ss%3Aword`. whalibmob decodes it before handing it to the proxy.
+
+```js
+// or from code, before you call any registration function
+process.env.SOCKS_PROXY = 'socks5://user:pass@proxy.example.com:1080'
+
+await requestSmsCode(phone, store)
+```
+
+> [!NOTE]
+> This covers the registration traffic to `v.whatsapp.net`. The message socket and media transfers are not proxied — if you need those behind a proxy as well, open an issue describing the setup.
+
+If `socks` is not installed, or a proxy is unreachable, you get a message saying so rather than a silent failure. In the rare case the package lives somewhere `require()` cannot find it, `WA_SOCKS_LIB` takes an absolute path to it.
 
 ## Saving & Restoring Sessions
 
