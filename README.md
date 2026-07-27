@@ -157,6 +157,7 @@ npm install -g whalibmob
     - [Quoted Reply](#quoted-reply)
     - [Location Message](#location-message)
     - [Contact Message (vCard)](#contact-message-vcard)
+    - [Call Link](#call-link)
     - [Media Messages](#media-messages)
       - [Image Message](#image-message)
       - [Video Message](#video-message)
@@ -1137,6 +1138,7 @@ const { id, encKey } = await client.sendPoll(
   1            // voters may pick 1 option (0 = unlimited)
 )
 // encKey (32-byte Buffer) is needed to decrypt incoming poll votes
+// (also returned as `messageSecret`, which is the name the protocol uses)
 ```
 
 ### Quoted Reply
@@ -1181,6 +1183,12 @@ await client.sendLocation('919634847671@s.whatsapp.net', 48.8566, 2.3522, {
 await client.sendLocation('120363000000000000@g.us', 51.5074, -0.1278, {
   name: 'London'
 })
+
+// with a map image for the bubble — WhatsApp draws a blank card without one
+await client.sendLocation('919634847671@s.whatsapp.net', 48.8566, 2.3522, {
+  name: 'Eiffel Tower',
+  thumbnail: jpegBuffer
+})
 ```
 
 ### Contact Message (vCard)
@@ -1200,7 +1208,36 @@ const vcard = [
 await client.sendContact('919634847671@s.whatsapp.net', 'Alice Smith', vcard)
 ```
 
+### Call Link
+
+Ask WhatsApp for a link that lets someone join a call by tapping it, instead of
+being rung. Returns the token, the shareable link and the media type.
+
+```js
+const { link } = await client.createCallLink('video')
+// https://call.whatsapp.com/video/XXXXXXXX
+
+// audio is the default
+const audio = await client.createCallLink()
+
+// schedule it — startTime is seconds since the epoch
+await client.createCallLink('video', { startTime: 1800000000 })
+
+// create it and send it in one step
+await client.sendCallLink('919634847671@s.whatsapp.net', 'video', {
+  text: 'Join me here:'
+})
+```
+
 ## Media Messages
+
+Photos and videos are sent with an inline preview so they show up in the chat
+directly, rather than as a placeholder the recipient has to tap. The dimensions
+are read out of the file header with no dependency at all. The preview itself
+uses `jimp` (installed automatically as an optional dependency) or `sharp` if
+you have it; failing both, a photo that carries an EXIF thumbnail still gets
+one. Video previews need `ffmpeg` on PATH — on Termux, `pkg install ffmpeg`.
+Without any of these the media still sends, just without the preview.
 
 ### Image Message
 
