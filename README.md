@@ -605,6 +605,7 @@ connect()
 | `chat_read` | `{ jid, read }` | Chat marked read (`read: true`) or unread (`read: false`) |
 | `chat_muted` | `{ jid, muted, until }` | Chat muted or unmuted; `until` is epoch ms (−1 = indefinite) |
 | `chat_pinned` | `{ jid, pinned }` | Chat pinned or unpinned |
+| `blocklist` | `{ action, dhash, prevDhash, changes }` | Block list changed on another device; `changes` is `[{ jid, action }]` |
 | `chat_archived` | `{ jid, archived }` | Chat archived or unarchived |
 | `message_starred` | `{ msgId, chatJid, starred }` | Message starred or unstarred |
 | `stream_error` | `{ reason }` | Server sent a fatal stream error |
@@ -1457,8 +1458,12 @@ await client.changeGroupPicture('120363000000000000@g.us', fs.readFileSync('./gr
 ### Block / Unblock User
 
 ```js
-await client.blockContact('919634847671@s.whatsapp.net')
+// both return the updated block list, and throw if the server refuses
+const blocked = await client.blockContact('919634847671@s.whatsapp.net')
 await client.unblockContact('919634847671@s.whatsapp.net')
+
+// blocking done from the phone arrives as an event
+client.on('blocklist', ({ changes }) => console.log(changes))
 ```
 
 ### Get Block List

@@ -1161,8 +1161,8 @@ async function handleLine(line) {
         requireConn();
         const jid = normalizeJid(p[1]);
         if (!jid) { fail('usage: /block <jid>'); break; }
-        await _client.blockContact(jid);
-        out('blocked  ' + jid);
+        const after = await _client.blockContact(jid);
+        out('blocked  ' + jid + '  (' + after.length + ' blocked in total)');
         break;
       }
 
@@ -1170,8 +1170,8 @@ async function handleLine(line) {
         requireConn();
         const jid = normalizeJid(p[1]);
         if (!jid) { fail('usage: /unblock <jid>'); break; }
-        await _client.unblockContact(jid);
-        out('unblocked  ' + jid);
+        const left = await _client.unblockContact(jid);
+        out('unblocked  ' + jid + '  (' + left.length + ' blocked in total)');
         break;
       }
 
