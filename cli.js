@@ -316,6 +316,9 @@ function ts() {
 let _client  = null;
 let _phone   = null;
 let _sessDir = defaultSessionDir();
+// Set when a failed connect turned out to be a number-form mismatch, so
+// /fixnumber knows what it is fixing without probing the server again.
+let _pendingFix = null;
 let _rl      = null;
 
 // ─── shell help ───────────────────────────────────────────────────────────────
@@ -438,6 +441,7 @@ const HELP = `
   Connection
     /connect    <phone> [sms|pair]           connect to WhatsApp (asks which if unset)
     /pair       <phone> [code]               link to an existing account by 8-digit code
+    /fixnumber                               re-file a session under the number WhatsApp uses
     /disconnect                              disconnect
     /reconnect                              force reconnection
     /session                                show session info
@@ -777,7 +781,22 @@ async function doConnect(phone) {
       out('  checking whether the number is still registered...');
       try {
         const probe = await client.checkSessionAlive();
-        if (probe.alive) {
+
+        if (probe.mismatch) {
+          // The session is filed under a number the server does not use for
+          // this account, so the handshake has been sending a username no
+          // registration matches. Renaming fixes it; re-registering would not.
+          hr();
+          out('  the session is filed under a number WhatsApp does not use');
+          out('    session : +' + probe.current);
+          out('    server  : +' + probe.canonical);
+          hr();
+          out('  WhatsApp knows this account by the second form, so every login');
+          out('  has been sent under a number it has no registration for.');
+          out('');
+          out('  fix it in place:  /fixnumber');
+          out('  (renames the session files, keeps the registration)');
+        } else if (probe.alive) {
           out('  the number IS still registered, but this device was logged out.');
           out('  register it again:  /reg code ' + phone);
         } else if (probe.error) {
@@ -786,6 +805,8 @@ async function doConnect(phone) {
           out('  the registration is gone server-side (' + (probe.status || 'no status') + ').');
           out('  register it again:  /reg code ' + phone);
         }
+        // keep the client around so /fixnumber has a store to work from
+        _pendingFix = probe.mismatch ? { client, probe } : null;
       } catch (probeErr) {
         out('  status check failed: ' + probeErr.message);
       }
@@ -875,6 +896,21 @@ async function handleLine(line) {
         out('connecting...');
         if (method === 'pairing') await doConnectWeb(phn);
         else                      await doConnect(phn);
+        break;
+      }
+
+      case '/fixnumber': {
+        if (!_pendingFix) {
+          fail('nothing to fix — run /connect <phone> first and let it report a mismatch');
+          break;
+        }
+        const { client, probe } = _pendingFix;
+        out('renaming session +' + probe.current + ' → +' + probe.canonical + '...');
+        const r = await client.adoptCanonicalNumber(probe.canonical);
+        out('  moved ' + r.files.length + ' file(s)');
+        _pendingFix = null;
+        out('now connect with the number WhatsApp uses:');
+        out('  /connect ' + r.phoneNumber);
         break;
       }
 
@@ -1682,9 +1718,18 @@ async function handleLine(line) {
             const finalStore = r.store || store;
             finalStore.registered  = true;
             finalStore.codePending = false;
-            saveStore(finalStore, file);
-            out('registered  session saved to ' + file);
-            out('now run: /connect ' + ph);
+            // Save under the number WhatsApp filed the account as, not the one
+            // that was typed — they differ often enough to matter.
+            const savedPhone = String(finalStore.phoneNumber || ph);
+            const savedFile  = path.join(_sessDir, `${savedPhone}.json`);
+            saveStore(finalStore, savedFile);
+            if (r.canonicalPhoneNumber) {
+              out('note: WhatsApp knows this account as +' + r.canonicalPhoneNumber +
+                  ', not +' + r.typedPhoneNumber);
+              out('      the session is saved under that number');
+            }
+            out('registered  session saved to ' + savedFile);
+            out('now run: /connect ' + savedPhone);
           } else {
             fail('verification failed  ' + JSON.stringify(r));
           }
@@ -2057,7 +2102,7 @@ async function main() {
     }
 
     if (flags.register !== undefined) {
-      const ph   = phone || normalizePhone(pos[0] || '');
+      let   ph   = phone || normalizePhone(pos[0] || '');
       const code = flags.code;
       if (!ph)   { fail('phone number required'); process.exit(1); }
       if (!code) { fail('--code is required');    process.exit(1); }
@@ -2071,9 +2116,16 @@ async function main() {
           const finalStore = r.store || store;
           finalStore.registered  = true;
           finalStore.codePending = false;
-          saveStore(finalStore, file);
-          out('registered  session saved to ' + file);
-          out('run: wa connect ' + ph);
+          const savedPhone = String(finalStore.phoneNumber || ph);
+          const savedFile  = path.join(_sessDir, `${savedPhone}.json`);
+          saveStore(finalStore, savedFile);
+          if (r.canonicalPhoneNumber) {
+            out('note: WhatsApp knows this account as +' + r.canonicalPhoneNumber +
+                ', not +' + r.typedPhoneNumber);
+          }
+          out('registered  session saved to ' + savedFile);
+          out('run: wa connect ' + savedPhone);
+          ph = savedPhone;
         } else {
           out('  status  ' + (r && r.status ? r.status : JSON.stringify(r)));
         }
