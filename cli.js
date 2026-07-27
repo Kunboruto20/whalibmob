@@ -747,6 +747,14 @@ async function doConnect(phone) {
   const client = new WhalibmobClient({ sessionDir: _sessDir });
   attachEvents(client);
 
+  // The session may be re-filed mid-connect when WhatsApp turns out to keep the
+  // account under a different form of the number. Everything from here on has
+  // to use the corrected one, including the prompt.
+  client.on('number_corrected', ({ from, to }) => {
+    phone = to;
+    out('  this account is registered as +' + to + ' (not +' + from + ') — session updated');
+  });
+
   client.once('connected', () => {
     _client = client;
     _phone  = phone;
@@ -783,19 +791,17 @@ async function doConnect(phone) {
         const probe = await client.checkSessionAlive();
 
         if (probe.mismatch) {
-          // The session is filed under a number the server does not use for
-          // this account, so the handshake has been sending a username no
-          // registration matches. Renaming fixes it; re-registering would not.
+          // Reached only when the automatic correction inside init() could not
+          // run — a session already exists under the canonical number, or the
+          // rename failed. Say what it would have done.
           hr();
           out('  the session is filed under a number WhatsApp does not use');
           out('    session : +' + probe.current);
           out('    server  : +' + probe.canonical);
           hr();
-          out('  WhatsApp knows this account by the second form, so every login');
-          out('  has been sent under a number it has no registration for.');
-          out('');
-          out('  fix it in place:  /fixnumber');
-          out('  (renames the session files, keeps the registration)');
+          out('  this is normally corrected automatically; it could not be here.');
+          out('  check whether a session for +' + probe.canonical + ' already exists,');
+          out('  then:  /fixnumber');
         } else if (probe.alive) {
           out('  the number IS still registered, but this device was logged out.');
           out('  register it again:  /reg code ' + phone);
