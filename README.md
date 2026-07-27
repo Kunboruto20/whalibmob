@@ -189,6 +189,7 @@ npm install -g whalibmob
   - [Privacy](#privacy)
     - [Block / Unblock User](#block--unblock-user)
     - [Get Block List](#get-block-list)
+    - [Read Privacy Settings](#read-privacy-settings)
     - [Update Privacy Settings](#update-privacy-settings)
     - [Update Default Disappearing Mode](#update-default-disappearing-mode)
   - [Communities](#communities)
@@ -606,6 +607,7 @@ connect()
 | `chat_muted` | `{ jid, muted, until }` | Chat muted or unmuted; `until` is epoch ms (−1 = indefinite) |
 | `chat_pinned` | `{ jid, pinned }` | Chat pinned or unpinned |
 | `blocklist` | `{ action, dhash, prevDhash, changes }` | Block list changed on another device; `changes` is `[{ jid, action }]` |
+| `privacy_settings` | `{ changes, settings }` | Privacy settings changed on another device |
 | `chat_archived` | `{ jid, archived }` | Chat archived or unarchived |
 | `message_starred` | `{ msgId, chatJid, starred }` | Message starred or unstarred |
 | `stream_error` | `{ reason }` | Server sent a fatal stream error |
@@ -1476,16 +1478,39 @@ console.log(list)   // [ '919634847671@s.whatsapp.net', ... ]
 ### Update Privacy Settings
 
 ```js
-// type:  'last_seen' | 'profile_picture' | 'status' | 'online' | 'read_receipts' | 'groups_add'
-// value: 'all' | 'contacts' | 'contact_blacklist' | 'none' | 'match_last_seen'
+// type:  'last_seen' | 'profile_picture' | 'status' | 'online' | 'read_receipts'
+//        'groups_add' | 'call_add' | 'messages' | 'defense' | 'stickers'
+// value: 'all' | 'contacts' | 'contact_blacklist' | 'contact_allowlist' | 'none'
+//        'match_last_seen' | 'known' | 'on_standard' | 'off'
 
+// returns the settings as they now stand; throws if the server refuses
 await client.changePrivacySetting('last_seen',        'contacts')
 await client.changePrivacySetting('profile_picture',  'contacts')
 await client.changePrivacySetting('status',           'contacts')
 await client.changePrivacySetting('online',           'match_last_seen')
 await client.changePrivacySetting('read_receipts',    'none')
 await client.changePrivacySetting('groups_add',       'contacts')
+await client.changePrivacySetting('call_add',         'known')
 ```
+
+### Read Privacy Settings
+
+```js
+const s = await client.queryPrivacySettings()
+// { lastSeen, profile, status, online, readReceipts,
+//   groupAdd, callAdd, messages, defense, stickers }
+// anything the server did not report is null
+
+await client.queryPrivacySettings({ force: true })   // skip the cache
+
+// a change made on the phone arrives as an event
+client.on('privacy_settings', ({ changes, settings }) => console.log(changes))
+```
+
+Turning `read_receipts` off changes what read receipts go out: they become
+`read-self`, which syncs the read state across your own devices without telling
+the sender. The settings are fetched once after connect so this holds from the
+first message.
 
 ### Update Default Disappearing Mode
 

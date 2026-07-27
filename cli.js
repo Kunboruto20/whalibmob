@@ -354,11 +354,13 @@ const HELP = `
     /name    <text>                          change display name
     /about   <text>                          change own bio / about text
     /photo   <file>                          change own profile picture (JPEG)
-    /privacy <type> <value>                  change privacy setting
+    /privacy [<type> <value>]                show or change privacy settings
                                                types:  last_seen profile_picture status
                                                        online read_receipts groups_add
+                                                       call_add messages defense stickers
                                                values: all contacts contact_blacklist
-                                                       none match_last_seen
+                                                       contact_allowlist none known
+                                                       match_last_seen on_standard off
 
   Contacts
     /whatsapp  <phone...>                    check which numbers have WhatsApp
@@ -968,10 +970,19 @@ async function handleLine(line) {
       case '/privacy': {
         requireConn();
         const [, type, value] = p;
-        if (!type || !value) {
-          fail('usage: /privacy <type> <value>');
-          out('  types:  last_seen  profile_picture  status  online  read_receipts  groups_add');
-          out('  values: all  contacts  contact_blacklist  none  match_last_seen');
+        // with no arguments, show what the settings currently are
+        if (!type) {
+          const s = await _client.queryPrivacySettings({ force: true });
+          out('  privacy settings');
+          for (const k of Object.keys(s)) out('    ' + k.padEnd(14) + (s[k] || '(unset)'));
+          break;
+        }
+        if (!value) {
+          fail('usage: /privacy [<type> <value>]');
+          out('  types:  last_seen  profile_picture  status  online  read_receipts');
+          out('          groups_add  call_add  messages  defense  stickers');
+          out('  values: all  contacts  contact_blacklist  contact_allowlist  none');
+          out('          match_last_seen  known  on_standard  off');
           break;
         }
         await _client.changePrivacySetting(type, value);
