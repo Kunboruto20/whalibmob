@@ -166,6 +166,7 @@ npm install -g whalibmob
       - [Document Message](#document-message)
       - [Sticker Message](#sticker-message)
     - [Status / Stories](#status--stories)
+    - [Status Privacy](#status-privacy)
   - [Send States in Chat](#send-states-in-chat)
     - [Reading Messages](#reading-messages)
     - [Mark Voice Message Played](#mark-voice-message-played)
@@ -189,6 +190,7 @@ npm install -g whalibmob
   - [Privacy](#privacy)
     - [Block / Unblock User](#block--unblock-user)
     - [Get Block List](#get-block-list)
+    - [Read Privacy Settings](#read-privacy-settings)
     - [Update Privacy Settings](#update-privacy-settings)
     - [Update Default Disappearing Mode](#update-default-disappearing-mode)
   - [Communities](#communities)
@@ -605,6 +607,8 @@ connect()
 | `chat_read` | `{ jid, read }` | Chat marked read (`read: true`) or unread (`read: false`) |
 | `chat_muted` | `{ jid, muted, until }` | Chat muted or unmuted; `until` is epoch ms (−1 = indefinite) |
 | `chat_pinned` | `{ jid, pinned }` | Chat pinned or unpinned |
+| `blocklist` | `{ action, dhash, prevDhash, changes }` | Block list changed on another device; `changes` is `[{ jid, action }]` |
+| `privacy_settings` | `{ changes, settings }` | Privacy settings changed on another device |
 | `chat_archived` | `{ jid, archived }` | Chat archived or unarchived |
 | `message_starred` | `{ msgId, chatJid, starred }` | Message starred or unstarred |
 | `stream_error` | `{ reason }` | Server sent a fatal stream error |
@@ -1287,10 +1291,40 @@ await client.sendSticker('919634847671@s.whatsapp.net', './sticker.webp')
 
 ## Status / Stories
 
+A Status is posted to `status@broadcast` and travels the SenderKey path a group
+message does — one encrypted body plus a key distribution to every recipient.
+Who those recipients are comes from your status privacy settings, resolved
+against the contacts in the synced history store.
+
 ```js
-// post a text Status to status@broadcast
+// text
 await client.sendStatus('Good morning!')
+
+// photo, video, voice — same arguments as the matching send* methods
+await client.sendStatus({ image: './photo.jpg', caption: 'Look at this' })
+await client.sendStatus({ video: './clip.mp4' })
+await client.sendStatus({ audio: './voice.ogg' })
+
+// styled text status
+await client.sendStatus('Colorful', { backgroundArgb: 0xFF25D366, font: 3 })
+
+// post to an explicit list instead of the privacy-derived one
+await client.sendStatus('Hi', { recipients: ['919634847671@s.whatsapp.net'] })
 ```
+
+### Status Privacy
+
+```js
+const [def, ...rest] = await client.queryStatusPrivacy()
+// def = { type: 'contacts' | 'blacklist' | 'whitelist', isDefault, list }
+```
+
+`contacts` sends to everyone in your address book, `blacklist` to everyone
+except `list`, `whitelist` to `list` only. Your own JID is always included so
+the post reaches your other devices.
+
+If history has not synced yet the contact list is unknown, and `sendStatus`
+will say so rather than post to nobody — pass `recipients` in that case.
 
 ## Send States in Chat
 
@@ -1457,8 +1491,12 @@ await client.changeGroupPicture('120363000000000000@g.us', fs.readFileSync('./gr
 ### Block / Unblock User
 
 ```js
-await client.blockContact('919634847671@s.whatsapp.net')
+// both return the updated block list, and throw if the server refuses
+const blocked = await client.blockContact('919634847671@s.whatsapp.net')
 await client.unblockContact('919634847671@s.whatsapp.net')
+
+// blocking done from the phone arrives as an event
+client.on('blocklist', ({ changes }) => console.log(changes))
 ```
 
 ### Get Block List
@@ -1471,16 +1509,39 @@ console.log(list)   // [ '919634847671@s.whatsapp.net', ... ]
 ### Update Privacy Settings
 
 ```js
-// type:  'last_seen' | 'profile_picture' | 'status' | 'online' | 'read_receipts' | 'groups_add'
-// value: 'all' | 'contacts' | 'contact_blacklist' | 'none' | 'match_last_seen'
+// type:  'last_seen' | 'profile_picture' | 'status' | 'online' | 'read_receipts'
+//        'groups_add' | 'call_add' | 'messages' | 'defense' | 'stickers'
+// value: 'all' | 'contacts' | 'contact_blacklist' | 'contact_allowlist' | 'none'
+//        'match_last_seen' | 'known' | 'on_standard' | 'off'
 
+// returns the settings as they now stand; throws if the server refuses
 await client.changePrivacySetting('last_seen',        'contacts')
 await client.changePrivacySetting('profile_picture',  'contacts')
 await client.changePrivacySetting('status',           'contacts')
 await client.changePrivacySetting('online',           'match_last_seen')
 await client.changePrivacySetting('read_receipts',    'none')
 await client.changePrivacySetting('groups_add',       'contacts')
+await client.changePrivacySetting('call_add',         'known')
 ```
+
+### Read Privacy Settings
+
+```js
+const s = await client.queryPrivacySettings()
+// { lastSeen, profile, status, online, readReceipts,
+//   groupAdd, callAdd, messages, defense, stickers }
+// anything the server did not report is null
+
+await client.queryPrivacySettings({ force: true })   // skip the cache
+
+// a change made on the phone arrives as an event
+client.on('privacy_settings', ({ changes, settings }) => console.log(changes))
+```
+
+Turning `read_receipts` off changes what read receipts go out: they become
+`read-self`, which syncs the read state across your own devices without telling
+the sender. The settings are fetched once after connect so this holds from the
+first message.
 
 ### Update Default Disappearing Mode
 

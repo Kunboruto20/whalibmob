@@ -336,7 +336,8 @@ const HELP = `
     /react    <jid> <msgId> <emoji>           react to a message
     /edit     <jid> <msgId> <text>            edit a sent message
     /delete   <jid> <msgId> [all]             delete message (add 'all' for everyone)
-    /status   <text>                          post a Status/Story
+    /status   <text>                          post a text Status/Story
+    /status   image|video|audio <file> [caption]  post a media Status/Story
     /forward  <jid> <text|msgObj>             forward text (or decoded msg) with forwarded flag
     /poll     <jid> <question> | <opt1> | <opt2> [selectable=N]  send a poll
     /location <jid> <lat> <lon> [name] [| address]              send a location pin
@@ -354,11 +355,13 @@ const HELP = `
     /name    <text>                          change display name
     /about   <text>                          change own bio / about text
     /photo   <file>                          change own profile picture (JPEG)
-    /privacy <type> <value>                  change privacy setting
+    /privacy [<type> <value>]                show or change privacy settings
                                                types:  last_seen profile_picture status
                                                        online read_receipts groups_add
+                                                       call_add messages defense stickers
                                                values: all contacts contact_blacklist
-                                                       none match_last_seen
+                                                       contact_allowlist none known
+                                                       match_last_seen on_standard off
 
   Contacts
     /whatsapp  <phone...>                    check which numbers have WhatsApp
@@ -828,8 +831,19 @@ async function handleLine(line) {
       case '/status': {
         requireConn();
         const [, ...rest] = p;
-        if (!rest.length) { fail('usage: /status <text>'); break; }
-        const r = await _client.sendStatus(rest.join(' '));
+        if (!rest.length) {
+          fail('usage: /status <text>   |   /status image|video|audio <file> [caption]');
+          break;
+        }
+        const kind = rest[0] && rest[0].toLowerCase();
+        let r;
+        if ((kind === 'image' || kind === 'video' || kind === 'audio') && rest[1]) {
+          const opts = { [kind]: rest[1] };
+          if (rest.length > 2) opts.caption = rest.slice(2).join(' ');
+          r = await _client.sendStatus(opts);
+        } else {
+          r = await _client.sendStatus(rest.join(' '));
+        }
         out('status posted  ' + (r && r.id ? r.id : ''));
         break;
       }
@@ -968,10 +982,19 @@ async function handleLine(line) {
       case '/privacy': {
         requireConn();
         const [, type, value] = p;
-        if (!type || !value) {
-          fail('usage: /privacy <type> <value>');
-          out('  types:  last_seen  profile_picture  status  online  read_receipts  groups_add');
-          out('  values: all  contacts  contact_blacklist  none  match_last_seen');
+        // with no arguments, show what the settings currently are
+        if (!type) {
+          const s = await _client.queryPrivacySettings({ force: true });
+          out('  privacy settings');
+          for (const k of Object.keys(s)) out('    ' + k.padEnd(14) + (s[k] || '(unset)'));
+          break;
+        }
+        if (!value) {
+          fail('usage: /privacy [<type> <value>]');
+          out('  types:  last_seen  profile_picture  status  online  read_receipts');
+          out('          groups_add  call_add  messages  defense  stickers');
+          out('  values: all  contacts  contact_blacklist  contact_allowlist  none');
+          out('          match_last_seen  known  on_standard  off');
           break;
         }
         await _client.changePrivacySetting(type, value);
@@ -1161,8 +1184,8 @@ async function handleLine(line) {
         requireConn();
         const jid = normalizeJid(p[1]);
         if (!jid) { fail('usage: /block <jid>'); break; }
-        await _client.blockContact(jid);
-        out('blocked  ' + jid);
+        const after = await _client.blockContact(jid);
+        out('blocked  ' + jid + '  (' + after.length + ' blocked in total)');
         break;
       }
 
@@ -1170,8 +1193,8 @@ async function handleLine(line) {
         requireConn();
         const jid = normalizeJid(p[1]);
         if (!jid) { fail('usage: /unblock <jid>'); break; }
-        await _client.unblockContact(jid);
-        out('unblocked  ' + jid);
+        const left = await _client.unblockContact(jid);
+        out('unblocked  ' + jid + '  (' + left.length + ' blocked in total)');
         break;
       }
 
