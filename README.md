@@ -1323,8 +1323,10 @@ const [def, ...rest] = await client.queryStatusPrivacy()
 except `list`, `whitelist` to `list` only. Your own JID is always included so
 the post reaches your other devices.
 
-If history has not synced yet the contact list is unknown, and `sendStatus`
-will say so rather than post to nobody — pass `recipients` in that case.
+Recipients are taken from the named contacts history sync brought; when there
+are none, the people you have chats with stand in. If neither is known,
+`sendStatus` says so rather than posting a message no one holds the key for —
+pass `recipients` in that case.
 
 ## Send States in Chat
 
