@@ -141,6 +141,15 @@ npm install -g whalibmob
     - [Media in Companion Mode](#media-in-companion-mode)
     - [Device Identity](#device-identity)
     - [How the Code Protects the Link](#how-the-code-protects-the-link)
+  - [Companion Mode — Node.js API](#companion-mode--nodejs-api)
+    - [Complete Working Example](#complete-working-example)
+    - [Methods](#methods)
+    - [Events](#events)
+    - [Reading What the Phone Sent](#reading-what-the-phone-sent)
+    - [Sending](#sending)
+    - [Handling Reconnects](#handling-reconnects)
+    - [Knowing Which Mode You Are In](#knowing-which-mode-you-are-in)
+    - [Two Sessions on One Number](#two-sessions-on-one-number)
   - [Saving & Restoring Sessions](#saving--restoring-sessions)
   - [Signal Store Utilities](#signal-store-utilities)
     - [makeCacheableSignalKeyStore](#makecacheablesignalkeystore)
@@ -538,7 +547,8 @@ History arrives in chunks over the first minute or so after linking, largest fir
 | `<phone>.web.signal.json` | Signal sessions and pre-keys for the linked device |
 | `<phone>.web.sk.json` | group SenderKeys |
 | `<phone>.web.tctoken.json` | privacy tokens |
-| `<phone>.web.history.json` | synced chats, contacts and push names |
+| `<phone>.web.history.json` | synced chats, contacts, push names, LID↔PN mappings |
+| `<phone>.web.messages.json` | flat map of message id → message metadata |
 
 The `.web.` prefix keeps a linked session entirely separate from an SMS-registered one for the same number.
 
@@ -571,6 +581,206 @@ whalibmob attaches it automatically whenever a `pkmsg` is in the stanza, in dire
 The pairing code is a password, not an identifier. It is never sent to the server in the clear. Both sides run it through PBKDF2-SHA256 (131,072 iterations) to derive a key that wraps the ephemeral public keys they exchange, then combine two Diffie-Hellman results into `adv_secret` — the key every later proof of account membership is authenticated under.
 
 whalibmob verifies three things before accepting a link, and refuses it outright if any fails: the HMAC over the signed device identity, the account signature over its own identity key, and the device slot it was issued. A wrong code cannot produce a working link, and a tampered response cannot either.
+
+## Companion Mode — Node.js API
+
+Everything below is the full surface for running whalibmob as a linked device. If you have used the SMS primary API, none of it will surprise you: the client is the same class, the methods take the same arguments, and the events carry the same shapes. Only the way in differs.
+
+### Complete Working Example
+
+A bot that links itself on first run, reconnects silently on every run after that, and replies to messages.
+
+```js
+const { WhalibmobClient } = require('whalibmob')
+const path = require('path')
+const fs   = require('fs')
+
+const PHONE    = '919634847671'                              // no '+', no spaces
+const SESS_DIR = path.join(process.env.HOME, '.waSession')
+
+// A session is already linked when this file exists and carries a device JID.
+function isLinked() {
+  const f = path.join(SESS_DIR, PHONE + '.web.json')
+  if (!fs.existsSync(f)) return false
+  try {
+    const j = JSON.parse(fs.readFileSync(f, 'utf8'))
+    return !!(j.registered && j.me && j.me.id)
+  } catch { return false }
+}
+
+async function start() {
+  const client = new WhalibmobClient({ sessionDir: SESS_DIR })
+
+  client.on('pairing_code', ({ code }) => {
+    console.log('\n  pairing code:', code.slice(0, 4) + '-' + code.slice(4))
+    console.log('  phone → Settings → Linked Devices → Link a device')
+    console.log('        → Link with phone number instead\n')
+  })
+
+  client.on('paired', ({ jid, lid, deviceIndex, platform }) => {
+    console.log('linked as', jid, '· slot', deviceIndex, '· primary is', platform)
+  })
+
+  // The server restarts the stream right after pairing. This is normal and the
+  // reconnect is automatic — there is nothing to do but log it.
+  client.on('restart_required', () => console.log('restarting stream...'))
+
+  client.on('connected', () => console.log('connected'))
+
+  client.on('history_sync', (r) => {
+    console.log(`history ${r.syncTypeName}: ${r.chats.length} chats, ${r.contacts.length} contacts`)
+  })
+
+  client.on('message', async (msg) => {
+    const d = msg.decoded
+    if (!d) return
+    console.log(msg.from, d.type, d.text || '')
+
+    if (d.type === 'text' && d.text === 'ping') {
+      await client.sendText(msg.from, 'pong')
+    }
+  })
+
+  client.on('error', (e) => console.error('error:', e.message))
+
+  await client.connectWeb(PHONE, { syncFullHistory: true })
+
+  if (!isLinked()) {
+    await client.requestPairingCode(PHONE)
+  }
+}
+
+start()
+```
+
+Run it once, type the code into the phone, and it is linked. Run it again and it connects straight away.
+
+### Methods
+
+| Method | Description |
+|---|---|
+| `client.connectWeb(phone, opts?)` | Open the companion connection. Resolves as soon as the encrypted channel is up when unlinked, or after `<success>` when already linked. |
+| `client.requestPairingCode(phone?, customCode?)` | Ask for an 8-character code. Returns it immediately; the link completes later. Throws if the session is already linked. |
+| `client.disconnect()` | Close the connection. The link survives — reconnect with `connectWeb()`. |
+
+`connectWeb(phone, opts)` options:
+
+| Option | Default | Description |
+|---|---|---|
+| `syncFullHistory` | `true` | Ask the phone for the full archive. `false` requests recent messages only and links noticeably faster. |
+| `browser` | `['Ubuntu', 'Chrome', '120.0.0.0']` | `[os, client, version]`. The second element picks the icon shown under Linked Devices: `Chrome`, `Firefox`, `Safari`, `Edge`, `Opera`, `Desktop`. |
+
+`requestPairingCode(phone, customCode)`:
+
+- `phone` — optional; defaults to the number given to `connectWeb`.
+- `customCode` — optional; must be **exactly 8 characters** or it throws. Use it to show a code you generated yourself.
+
+### Events
+
+Every event from the SMS primary API fires here too — `message`, `receipt`, `presence`, `group_update`, `call`, `blocklist`, `privacy_settings`, and the rest. These are the ones only companion mode produces:
+
+| Event | Payload | Fires when |
+|---|---|---|
+| `pairing_code` | `{ code, phoneNumber }` | a code was requested |
+| `paired` | `{ jid, lid, deviceIndex, platform }` | the owner accepted the code |
+| `restart_required` | `{ reason }` | the server is restarting the stream after pairing — the reconnect is automatic |
+| `pair_device` | `{ refs }` | the QR path produced reference strings |
+| `history_sync` | `{ syncTypeName, chats, contacts, pushNames, merged }` | a chunk of history arrived |
+| `history_sync_error` | `{ err, notification }` | a chunk could not be fetched or decrypted |
+
+### Reading What the Phone Sent
+
+```js
+client.on('history_sync', (r) => {
+  // r.syncTypeName — INITIAL_BOOTSTRAP | RECENT | FULL | PUSH_NAME | ...
+  for (const chat of r.chats) {
+    // { id, name, unreadCount, lastMsgTimestamp, messageCount }
+    console.log(chat.id, chat.name, chat.unreadCount, chat.messageCount)
+  }
+  for (const contact of r.contacts) {
+    // { id, name, username, pnJid, lidJid }
+    console.log(contact.id, contact.name, contact.pnJid, contact.lidJid)
+  }
+  for (const p of r.pushNames || []) {
+    console.log(p.id, p.pushname)
+  }
+})
+```
+
+Chunks arrive over the first minute or so after linking, largest first. Everything is merged into `<phone>.web.history.json`, so you can also read it straight off disk once and skip the event:
+
+```js
+const hist = JSON.parse(
+  fs.readFileSync(path.join(SESS_DIR, PHONE + '.web.history.json'), 'utf8')
+)
+console.log(Object.keys(hist.chats || {}).length, 'chats on disk')
+```
+
+### Sending
+
+Identical to primary mode — same methods, same arguments, same return shapes:
+
+```js
+await client.sendText(jid, 'hello')
+await client.sendImage(jid, './photo.jpg', 'a caption')
+await client.sendVideo(jid, './clip.mp4', 'watch this')
+await client.sendAudio(jid, './voice.ogg', { ptt: true })
+await client.sendDocument(jid, './report.pdf', 'report.pdf')
+await client.sendSticker(jid, './sticker.webp')
+await client.sendLocation(jid, 44.4268, 26.1025, 'Bucharest')
+await client.sendContact(jid, 'Ana', vcard)
+await client.sendPoll(jid, 'Lunch?', ['Pizza', 'Sushi'], 1)
+await client.sendReaction(jid, msgId, '👍')
+await client.sendStatus({ image: './photo.jpg', caption: 'hi' })
+```
+
+Full signatures for each of these are in [Sending Messages](#sending-messages) and [Media Messages](#media-messages); nothing about them changes in companion mode.
+
+Groups, blocking, privacy settings and profile changes work the same way too.
+
+> [!NOTE]
+> Media uploads go to the endpoints the web client uses, which are not the same as the mobile ones for stickers, GIFs and voice notes. whalibmob switches automatically — see [Media in Companion Mode](#media-in-companion-mode).
+
+### Handling Reconnects
+
+The library reconnects on its own with backoff. What you should handle is the difference between a transient drop and a revoked link:
+
+```js
+client.on('disconnected',  ()      => console.log('dropped'))
+client.on('reconnecting',  ({ delay }) => console.log('retry in', delay / 1000, 's'))
+client.on('reconnected',   ()      => console.log('back'))
+
+// The owner removed this device under Linked Devices. The session is dead —
+// delete it and pair again.
+client.on('auth_failure', ({ reason }) => {
+  console.error('link revoked:', reason)
+  fs.rmSync(path.join(SESS_DIR, PHONE + '.web.json'), { force: true })
+  process.exit(1)
+})
+```
+
+### Knowing Which Mode You Are In
+
+```js
+console.log(client._mode)              // 'web' or 'mobile'
+console.log(client.store.me.id)        // 919634847671:7@s.whatsapp.net
+console.log(client.store.me.lid)       // 112713111982325:7@lid
+console.log(client.store.deviceIndex)  // 7 — which linked-device slot
+console.log(client.store.platform)     // 'android' — what the primary runs
+```
+
+`deviceIndex` is what makes a companion a companion. A primary is device 0 and its JID is the bare number; a companion occupies a numbered slot, and the account's own phone becomes a peer it encrypts to like any other device.
+
+### Two Sessions on One Number
+
+A number may be SMS-registered and separately linked as a companion. They never share state — separate files, separate Signal sessions, separate history. Which one you get is decided by the method you call:
+
+```js
+await client.init(PHONE)        // mobile / primary, over TCP
+await client.connectWeb(PHONE)  // web / companion, over WebSocket
+```
+
+Use two `WhalibmobClient` instances if you want both at once.
 
 ## Saving & Restoring Sessions
 
