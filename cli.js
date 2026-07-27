@@ -754,6 +754,24 @@ async function doConnect(phone) {
         out('  register it:  /reg code ' + phone + '   then  /reg confirm ' + phone + ' <code>');
         out('  or link it to an account already on a phone:  /pair ' + phone);
       }
+    } else if (e.code === '401' || /auth failure 401/i.test(e.message)) {
+      // 401 says the credentials were refused; it does not say whether the
+      // number itself is still registered. Ask, so the next step is obvious.
+      out('  checking whether the number is still registered...');
+      try {
+        const probe = await client.checkSessionAlive();
+        if (probe.alive) {
+          out('  the number IS still registered, but this device was logged out.');
+          out('  register it again:  /reg code ' + phone);
+        } else if (probe.error) {
+          out('  could not reach the registration endpoint: ' + probe.error);
+        } else {
+          out('  the registration is gone server-side (' + (probe.status || 'no status') + ').');
+          out('  register it again:  /reg code ' + phone);
+        }
+      } catch (probeErr) {
+        out('  status check failed: ' + probeErr.message);
+      }
     }
     notConnected();
   }
