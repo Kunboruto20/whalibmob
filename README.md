@@ -669,6 +669,29 @@ Run it once, type the code into the phone, and it is linked. Run it again and it
 |---|---|---|
 | `syncFullHistory` | `true` | Ask the phone for the full archive. `false` requests recent messages only and links noticeably faster. |
 | `browser` | `['Ubuntu', 'Chrome', '120.0.0.0']` | `[os, client, version]`. The second element picks the icon shown under Linked Devices: `Chrome`, `Firefox`, `Safari`, `Edge`, `Opera`, `Desktop`. |
+| `version` | fetched live | Web client revision to announce, e.g. `[2, 3000, 1035194821]`. Set it to pin one. |
+| `fetchVersion` | `true` | Set `false` to skip the live lookup and use the pinned fallback. |
+
+#### The Announced Version
+
+The web endpoint checks the client revision during the handshake and refuses an unrecognised one with `<failure reason="405">` — before any stanza is exchanged, and with nothing in the failure to say the version was the problem. The mobile endpoint is far more forgiving; this one is not.
+
+whalibmob therefore reads the live revision from WhatsApp Web's own service worker on each `connectWeb()`, and falls back to a pinned value if that lookup fails. You should not have to think about it, but you can:
+
+```js
+const { fetchWaWebVersion } = require('whalibmob')
+
+const { version, isLatest } = await fetchWaWebVersion()
+console.log(version, isLatest)   // [2, 3000, 1035194821] true
+
+// pin it yourself
+await client.connectWeb(phone, { version: [2, 3000, 1035194821] })
+
+// or skip the lookup entirely
+await client.connectWeb(phone, { fetchVersion: false })
+```
+
+If you ever see `405`, this is what it means. It is not a revoked session and there is nothing to re-pair — reconnect to pick up the current revision.
 
 `requestPairingCode(phone, customCode)`:
 
@@ -687,6 +710,7 @@ Every event from the SMS primary API fires here too — `message`, `receipt`, `p
 | `pair_device` | `{ refs }` | the QR path produced reference strings |
 | `history_sync` | `{ syncTypeName, chats, contacts, pushNames, merged }` | a chunk of history arrived |
 | `history_sync_error` | `{ err, notification }` | a chunk could not be fetched or decrypted |
+| `client_rejected` | `{ reason, location, message }` | the server refused the client itself, not the session — `405` means the announced version is not accepted. Distinct from `auth_failure`, and there is nothing to re-pair. |
 
 ### Reading What the Phone Sent
 
