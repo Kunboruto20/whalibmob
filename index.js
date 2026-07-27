@@ -18,6 +18,21 @@ const {
   initAuthCreds
 } = require('./lib/auth-utils');
 const {
+  createNewWebStore, saveWebStore, loadWebStore, webSessionPath
+} = require('./lib/WebStore');
+const {
+  generatePairingCode,
+  derivePairingCodeKey,
+  buildWrappedEphemeralPub,
+  decipherLinkPublicKey,
+  buildCompanionFinishBundle
+} = require('./lib/PairingCode');
+const { configureSuccessfulPairing } = require('./lib/CompanionPairing');
+const {
+  encodeCompanionRegisterPayload,
+  encodeCompanionLoginPayload
+} = require('./lib/webproto');
+const {
   processHistorySyncNotification,
   decodeHistorySyncNotification,
   decodeHistorySync,
@@ -53,6 +68,19 @@ module.exports = {
   storeFromJson,
   toSixParts,
   fromSixParts,
+  // WhatsApp Web (companion) mode — pairing-code linking to an existing account
+  createNewWebStore,
+  saveWebStore,
+  loadWebStore,
+  webSessionPath,
+  generatePairingCode,
+  derivePairingCodeKey,
+  buildWrappedEphemeralPub,
+  decipherLinkPublicKey,
+  buildCompanionFinishBundle,
+  configureSuccessfulPairing,
+  encodeCompanionRegisterPayload,
+  encodeCompanionLoginPayload,
   // Signal / encryption internals
   SignalProtocol,
   SignalStore,

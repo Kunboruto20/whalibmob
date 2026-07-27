@@ -36,7 +36,8 @@ Usdc ethereum network.
 > This project is not affiliated, associated, authorized, endorsed by, or in any way officially connected with WhatsApp or any of its subsidiaries or affiliates. "WhatsApp" and related names are registered trademarks of their respective owners. Use at your own discretion.
 
 - whalibmob does not require a browser, Selenium, or any other external runtime — it communicates directly with WhatsApp using a **TCP socket** and the **Noise Protocol** handshake.
-- The library operates as a real **iOS mobile device**, not as WhatsApp Web. It uses the Mobile API endpoint, which behaves differently from the Web API.
+- The library operates as a real **iOS mobile device**, using the Mobile API endpoint, which behaves differently from the Web API.
+- It **also speaks WhatsApp Web over a WebSocket**. When a number cannot receive an SMS, or is already in use on a phone, whalibmob can link itself to that existing account with an **8-character pairing code** and run as one of its linked devices — with full message history and the account's address book. See [Linking to an Existing Account](#linking-to-an-existing-account-pairing-code). The API is identical in both modes.
 - Signal Protocol encryption is **fully inlined** in pure JavaScript — no native binaries, no node-gyp, runs anywhere Node.js runs.
 
 ## Install
@@ -57,6 +58,7 @@ npm install -g whalibmob
   - [Install the CLI](#install-the-cli)
   - [First-Time Setup: Register a Number](#first-time-setup-register-a-number)
   - [Connect](#cli-connect)
+  - [Pairing Code](#cli-pairing-code)
   - [Listen Mode](#listen-mode)
 - [CLI — Interactive Shell Commands](#cli--interactive-shell-commands)
   - [Messaging Commands](#messaging-commands)
@@ -128,6 +130,26 @@ npm install -g whalibmob
     - [Register a New Number](#register-a-new-number)
     - [Device Attestation with Frida (optional)](#device-attestation-with-frida-optional)
     - [Connect](#connect)
+  - [Linking to an Existing Account (Pairing Code)](#linking-to-an-existing-account-pairing-code)
+    - [Requesting a Pairing Code](#requesting-a-pairing-code)
+    - [Reconnecting a Linked Session](#reconnecting-a-linked-session)
+    - [Choosing Your Own Code](#choosing-your-own-code)
+    - [Options](#options)
+    - [Events Specific to Linking](#events-specific-to-linking)
+    - [Getting the History and the Address Book](#getting-the-history-and-the-address-book)
+    - [Session Files](#session-files)
+    - [Media in Companion Mode](#media-in-companion-mode)
+    - [Device Identity](#device-identity)
+    - [How the Code Protects the Link](#how-the-code-protects-the-link)
+  - [Companion Mode — Node.js API](#companion-mode--nodejs-api)
+    - [Complete Working Example](#complete-working-example)
+    - [Methods](#methods)
+    - [Events](#events)
+    - [Reading What the Phone Sent](#reading-what-the-phone-sent)
+    - [Sending](#sending)
+    - [Handling Reconnects](#handling-reconnects)
+    - [Knowing Which Mode You Are In](#knowing-which-mode-you-are-in)
+    - [Two Sessions on One Number](#two-sessions-on-one-number)
   - [Saving & Restoring Sessions](#saving--restoring-sessions)
   - [Signal Store Utilities](#signal-store-utilities)
     - [makeCacheableSignalKeyStore](#makecacheablesignalkeystore)
@@ -399,6 +421,366 @@ client.on('connected', () => {
 
 await client.init('919634847671')
 ```
+
+## Linking to an Existing Account (Pairing Code)
+
+Registering a number over SMS makes whalibmob that number's **own device**. Sometimes that is not what you want — the number is already in use on a phone, or the verification SMS never arrives. For those cases whalibmob can instead connect over a **WebSocket** and link itself to an account that already exists, exactly the way the WhatsApp Web and desktop clients do.
+
+You get an 8-character pairing code, the account owner types it into their phone, and from then on whalibmob is one of the account's linked devices. The whole library works the same afterwards — same client, same methods, same events.
+
+> [!IMPORTANT]
+> The two modes are independent. SMS registration is unchanged and still the default; nothing about it is affected by linking. A single number can even have both a registered session and a linked session — they are stored in separate files and never share state.
+
+### Requesting a Pairing Code
+
+Connect first, then ask for the code: the request travels over the encrypted channel, so the channel has to exist before there can be a code.
+
+```js
+const { WhalibmobClient } = require('whalibmob')
+const path = require('path')
+
+const client = new WhalibmobClient({
+  sessionDir: path.join(process.env.HOME, '.waSession')
+})
+
+client.on('paired', (p) => {
+  console.log('linked as', p.jid)          // 919634847671:7@s.whatsapp.net
+  console.log('lid      ', p.lid)          // 112713111982325:7@lid
+  console.log('slot     ', p.deviceIndex)  // 7
+})
+
+client.on('connected', () => {
+  console.log('ready')
+})
+
+// open the WebSocket connection as a companion
+await client.connectWeb('919634847671', { syncFullHistory: true })
+
+// ask for the code — returns immediately, the link completes later
+const code = await client.requestPairingCode('919634847671')
+console.log('enter this on the phone:', code)   // e.g. "K7M2QX4B"
+```
+
+On the phone that owns the number:
+
+**WhatsApp → Settings → Linked Devices → Link a device → Link with phone number instead**, then type the code.
+
+A few seconds after the code is accepted you will see `paired`, the server restarts the stream, and `connected` fires on the new connection. From that point on everything else in this document applies unchanged:
+
+```js
+await client.sendText('919876543210@s.whatsapp.net', 'sent from a linked device')
+```
+
+### Reconnecting a Linked Session
+
+The link is persisted. On every later run, `connectWeb()` alone is enough — do **not** request a new code:
+
+```js
+const client = new WhalibmobClient({ sessionDir })
+
+client.on('connected', () => console.log('reconnected'))
+
+await client.connectWeb('919634847671')
+```
+
+`requestPairingCode()` throws if the session is already linked, so it is safe to guard on that.
+
+### Choosing Your Own Code
+
+If you would rather show the user a code you picked, pass it as the second argument. It must be exactly 8 characters:
+
+```js
+const code = await client.requestPairingCode('919634847671', 'MYCODE12')
+```
+
+### Options
+
+```js
+await client.connectWeb(phone, {
+  syncFullHistory: true,                       // ask the phone for full history (default true)
+  browser: ['Ubuntu', 'Chrome', '120.0.0.0']   // what the owner sees in Linked Devices
+})
+```
+
+`browser` is `[os, client, version]`. The second element decides the device icon shown on the phone — `Chrome`, `Firefox`, `Safari`, `Edge`, `Opera`, `Desktop` are all recognised.
+
+### Events Specific to Linking
+
+| Event | Fires when |
+|---|---|
+| `pairing_code` | a code has been requested — `{ code, phoneNumber }` |
+| `paired` | the owner accepted the code — `{ jid, lid, deviceIndex, platform }` |
+| `restart_required` | the server is restarting the stream after pairing (normal; the reconnect is automatic) |
+| `pair_device` | the QR path produced reference strings — `{ refs }` |
+| `history_sync` | a chunk of history arrived from the phone |
+
+### Getting the History and the Address Book
+
+This is the part a registered number can never do. A device registered over SMS **is** the account's primary, and a primary has nobody to receive history from — it starts with an empty contact list and an empty chat list, and only learns about people who message it.
+
+A linked device is different: the account's phone ships its chats, its contacts and its push names over as soon as the link is established. whalibmob decrypts and stores those automatically, and emits them as they arrive:
+
+```js
+client.on('history_sync', (r) => {
+  console.log(r.syncTypeName)          // INITIAL_BOOTSTRAP, RECENT, FULL, PUSH_NAME
+  console.log('chats   ', r.chats.length)
+  console.log('contacts', r.contacts.length)
+
+  for (const c of r.contacts.slice(0, 5)) {
+    console.log(c.jid, c.name || c.notify)
+  }
+})
+
+await client.connectWeb(phone, { syncFullHistory: true })
+```
+
+History arrives in chunks over the first minute or so after linking, largest first. Everything is merged into `<phone>.web.history.json` in your session directory, so it survives restarts and you can read it directly.
+
+> [!NOTE]
+> `syncFullHistory: false` asks only for recent messages, which links noticeably faster on accounts with years of history.
+
+### Session Files
+
+| File | Holds |
+|---|---|
+| `<phone>.web.json` | link state — keys, `advSecretKey`, the device slot you were given |
+| `<phone>.web.signal.json` | Signal sessions and pre-keys for the linked device |
+| `<phone>.web.sk.json` | group SenderKeys |
+| `<phone>.web.tctoken.json` | privacy tokens |
+| `<phone>.web.history.json` | synced chats, contacts, push names, LID↔PN mappings |
+| `<phone>.web.messages.json` | flat map of message id → message metadata |
+
+The `.web.` prefix keeps a linked session entirely separate from an SMS-registered one for the same number.
+
+### Media in Companion Mode
+
+Uploads and downloads go to the CDN endpoints the web client uses, not the mobile ones. This is handled for you — `sendImage`, `sendVideo`, `sendSticker` and the rest take the same arguments in both modes — but it is worth knowing why the distinction exists.
+
+The web client has no endpoint per media type. A sticker is uploaded to the image endpoint and a GIF to the video one; what makes them a sticker or a GIF lives in the message itself, not in the URL. Uploading a sticker to `/mms/sticker` as a companion gets a 404. The CDN also expects a browser `Origin` on both the upload and the download, and a mobile WhatsApp user agent against a web-issued auth token is a mismatch it can reject.
+
+| Media | Primary endpoint | Companion endpoint |
+|---|---|---|
+| image | `/mms/image` | `/mms/image` |
+| video | `/mms/video` | `/mms/video` |
+| audio | `/mms/audio` | `/mms/audio` |
+| document | `/mms/document` | `/mms/document` |
+| sticker | `/mms/sticker` | `/mms/image` |
+| gif | `/mms/gif` | `/mms/video` |
+| voice note | `/mms/ptt` | `/mms/audio` |
+
+The same applies to history sync blobs and profile pictures.
+
+### Device Identity
+
+Every message a companion sends that opens a new Signal session carries a `device-identity` node: the signed record the account's primary device issued during pairing, including the account signature key. That is how the recipient's client knows a message from device 7 of an account genuinely belongs to that account rather than to someone who merely knows the number.
+
+whalibmob attaches it automatically whenever a `pkmsg` is in the stanza, in direct messages and in groups alike. A device registered over SMS has no such record — nothing issued one to it — and correctly sends nothing.
+
+### How the Code Protects the Link
+
+The pairing code is a password, not an identifier. It is never sent to the server in the clear. Both sides run it through PBKDF2-SHA256 (131,072 iterations) to derive a key that wraps the ephemeral public keys they exchange, then combine two Diffie-Hellman results into `adv_secret` — the key every later proof of account membership is authenticated under.
+
+whalibmob verifies three things before accepting a link, and refuses it outright if any fails: the HMAC over the signed device identity, the account signature over its own identity key, and the device slot it was issued. A wrong code cannot produce a working link, and a tampered response cannot either.
+
+## Companion Mode — Node.js API
+
+Everything below is the full surface for running whalibmob as a linked device. If you have used the SMS primary API, none of it will surprise you: the client is the same class, the methods take the same arguments, and the events carry the same shapes. Only the way in differs.
+
+### Complete Working Example
+
+A bot that links itself on first run, reconnects silently on every run after that, and replies to messages.
+
+```js
+const { WhalibmobClient } = require('whalibmob')
+const path = require('path')
+const fs   = require('fs')
+
+const PHONE    = '919634847671'                              // no '+', no spaces
+const SESS_DIR = path.join(process.env.HOME, '.waSession')
+
+// A session is already linked when this file exists and carries a device JID.
+function isLinked() {
+  const f = path.join(SESS_DIR, PHONE + '.web.json')
+  if (!fs.existsSync(f)) return false
+  try {
+    const j = JSON.parse(fs.readFileSync(f, 'utf8'))
+    return !!(j.registered && j.me && j.me.id)
+  } catch { return false }
+}
+
+async function start() {
+  const client = new WhalibmobClient({ sessionDir: SESS_DIR })
+
+  client.on('pairing_code', ({ code }) => {
+    console.log('\n  pairing code:', code.slice(0, 4) + '-' + code.slice(4))
+    console.log('  phone → Settings → Linked Devices → Link a device')
+    console.log('        → Link with phone number instead\n')
+  })
+
+  client.on('paired', ({ jid, lid, deviceIndex, platform }) => {
+    console.log('linked as', jid, '· slot', deviceIndex, '· primary is', platform)
+  })
+
+  // The server restarts the stream right after pairing. This is normal and the
+  // reconnect is automatic — there is nothing to do but log it.
+  client.on('restart_required', () => console.log('restarting stream...'))
+
+  client.on('connected', () => console.log('connected'))
+
+  client.on('history_sync', (r) => {
+    console.log(`history ${r.syncTypeName}: ${r.chats.length} chats, ${r.contacts.length} contacts`)
+  })
+
+  client.on('message', async (msg) => {
+    const d = msg.decoded
+    if (!d) return
+    console.log(msg.from, d.type, d.text || '')
+
+    if (d.type === 'text' && d.text === 'ping') {
+      await client.sendText(msg.from, 'pong')
+    }
+  })
+
+  client.on('error', (e) => console.error('error:', e.message))
+
+  await client.connectWeb(PHONE, { syncFullHistory: true })
+
+  if (!isLinked()) {
+    await client.requestPairingCode(PHONE)
+  }
+}
+
+start()
+```
+
+Run it once, type the code into the phone, and it is linked. Run it again and it connects straight away.
+
+### Methods
+
+| Method | Description |
+|---|---|
+| `client.connectWeb(phone, opts?)` | Open the companion connection. Resolves as soon as the encrypted channel is up when unlinked, or after `<success>` when already linked. |
+| `client.requestPairingCode(phone?, customCode?)` | Ask for an 8-character code. Returns it immediately; the link completes later. Throws if the session is already linked. |
+| `client.disconnect()` | Close the connection. The link survives — reconnect with `connectWeb()`. |
+
+`connectWeb(phone, opts)` options:
+
+| Option | Default | Description |
+|---|---|---|
+| `syncFullHistory` | `true` | Ask the phone for the full archive. `false` requests recent messages only and links noticeably faster. |
+| `browser` | `['Ubuntu', 'Chrome', '120.0.0.0']` | `[os, client, version]`. The second element picks the icon shown under Linked Devices: `Chrome`, `Firefox`, `Safari`, `Edge`, `Opera`, `Desktop`. |
+
+`requestPairingCode(phone, customCode)`:
+
+- `phone` — optional; defaults to the number given to `connectWeb`.
+- `customCode` — optional; must be **exactly 8 characters** or it throws. Use it to show a code you generated yourself.
+
+### Events
+
+Every event from the SMS primary API fires here too — `message`, `receipt`, `presence`, `group_update`, `call`, `blocklist`, `privacy_settings`, and the rest. These are the ones only companion mode produces:
+
+| Event | Payload | Fires when |
+|---|---|---|
+| `pairing_code` | `{ code, phoneNumber }` | a code was requested |
+| `paired` | `{ jid, lid, deviceIndex, platform }` | the owner accepted the code |
+| `restart_required` | `{ reason }` | the server is restarting the stream after pairing — the reconnect is automatic |
+| `pair_device` | `{ refs }` | the QR path produced reference strings |
+| `history_sync` | `{ syncTypeName, chats, contacts, pushNames, merged }` | a chunk of history arrived |
+| `history_sync_error` | `{ err, notification }` | a chunk could not be fetched or decrypted |
+
+### Reading What the Phone Sent
+
+```js
+client.on('history_sync', (r) => {
+  // r.syncTypeName — INITIAL_BOOTSTRAP | RECENT | FULL | PUSH_NAME | ...
+  for (const chat of r.chats) {
+    // { id, name, unreadCount, lastMsgTimestamp, messageCount }
+    console.log(chat.id, chat.name, chat.unreadCount, chat.messageCount)
+  }
+  for (const contact of r.contacts) {
+    // { id, name, username, pnJid, lidJid }
+    console.log(contact.id, contact.name, contact.pnJid, contact.lidJid)
+  }
+  for (const p of r.pushNames || []) {
+    console.log(p.id, p.pushname)
+  }
+})
+```
+
+Chunks arrive over the first minute or so after linking, largest first. Everything is merged into `<phone>.web.history.json`, so you can also read it straight off disk once and skip the event:
+
+```js
+const hist = JSON.parse(
+  fs.readFileSync(path.join(SESS_DIR, PHONE + '.web.history.json'), 'utf8')
+)
+console.log(Object.keys(hist.chats || {}).length, 'chats on disk')
+```
+
+### Sending
+
+Identical to primary mode — same methods, same arguments, same return shapes:
+
+```js
+await client.sendText(jid, 'hello')
+await client.sendImage(jid, './photo.jpg', 'a caption')
+await client.sendVideo(jid, './clip.mp4', 'watch this')
+await client.sendAudio(jid, './voice.ogg', { ptt: true })
+await client.sendDocument(jid, './report.pdf', 'report.pdf')
+await client.sendSticker(jid, './sticker.webp')
+await client.sendLocation(jid, 44.4268, 26.1025, 'Bucharest')
+await client.sendContact(jid, 'Ana', vcard)
+await client.sendPoll(jid, 'Lunch?', ['Pizza', 'Sushi'], 1)
+await client.sendReaction(jid, msgId, '👍')
+await client.sendStatus({ image: './photo.jpg', caption: 'hi' })
+```
+
+Full signatures for each of these are in [Sending Messages](#sending-messages) and [Media Messages](#media-messages); nothing about them changes in companion mode.
+
+Groups, blocking, privacy settings and profile changes work the same way too.
+
+> [!NOTE]
+> Media uploads go to the endpoints the web client uses, which are not the same as the mobile ones for stickers, GIFs and voice notes. whalibmob switches automatically — see [Media in Companion Mode](#media-in-companion-mode).
+
+### Handling Reconnects
+
+The library reconnects on its own with backoff. What you should handle is the difference between a transient drop and a revoked link:
+
+```js
+client.on('disconnected',  ()      => console.log('dropped'))
+client.on('reconnecting',  ({ delay }) => console.log('retry in', delay / 1000, 's'))
+client.on('reconnected',   ()      => console.log('back'))
+
+// The owner removed this device under Linked Devices. The session is dead —
+// delete it and pair again.
+client.on('auth_failure', ({ reason }) => {
+  console.error('link revoked:', reason)
+  fs.rmSync(path.join(SESS_DIR, PHONE + '.web.json'), { force: true })
+  process.exit(1)
+})
+```
+
+### Knowing Which Mode You Are In
+
+```js
+console.log(client._mode)              // 'web' or 'mobile'
+console.log(client.store.me.id)        // 919634847671:7@s.whatsapp.net
+console.log(client.store.me.lid)       // 112713111982325:7@lid
+console.log(client.store.deviceIndex)  // 7 — which linked-device slot
+console.log(client.store.platform)     // 'android' — what the primary runs
+```
+
+`deviceIndex` is what makes a companion a companion. A primary is device 0 and its JID is the bare number; a companion occupies a numbered slot, and the account's own phone becomes a peer it encrypts to like any other device.
+
+### Two Sessions on One Number
+
+A number may be SMS-registered and separately linked as a companion. They never share state — separate files, separate Signal sessions, separate history. Which one you get is decided by the method you call:
+
+```js
+await client.init(PHONE)        // mobile / primary, over TCP
+await client.connectWeb(PHONE)  // web / companion, over WebSocket
+```
+
+Use two `WhalibmobClient` instances if you want both at once.
 
 ## Saving & Restoring Sessions
 
@@ -1906,6 +2288,69 @@ Use a custom session directory with `--session`:
 wa connect 919634847671 --session /data/my-sessions
 ```
 
+### CLI Pairing Code
+
+If the number is already in use on a phone, or the verification SMS never arrives, link to the existing account instead. When it is not obvious which way you mean, `wa connect` asks:
+
+```
+  how do you want to connect?
+    1) sms           register this number as its own device
+    2) pairing code  link to an existing WhatsApp account (8-digit code)
+  sms or pairing code?  [1/2] 2
+```
+
+The question is skipped when only one kind of session exists on disk, and when stdin is not a terminal. Force either one:
+
+```sh
+wa connect 919634847671 --sms
+wa connect 919634847671 --pair
+```
+
+Or go straight to linking:
+
+```sh
+wa pair 919634847671
+```
+
+```
+linking +919634847671 to an existing WhatsApp account...
+────────────────────────────────────────────────────────
+  pairing code   K7M2-QX4B
+────────────────────────────────────────────────────────
+  on the phone that owns +919634847671:
+    WhatsApp → Settings → Linked Devices → Link a device
+    → Link with phone number instead → enter the code above
+
+  the code is valid for a few minutes; waiting...
+
+  linked as 919634847671:7@s.whatsapp.net  (112713111982325:7@lid)
+  device slot 7  ·  primary is android
+  finishing handshake...
+connected as +919634847671  (web / companion)
+  history  INITIAL_BOOTSTRAP  chats=214  contacts=486
+wa +919634847671>
+```
+
+Once linked, plain `wa connect` reconnects without asking for a new code. To pick your own code, pass it as a second argument — exactly 8 characters:
+
+```sh
+wa pair 919634847671 MYCODE12
+```
+
+The debug prompt works the same in both modes. Answer `y` at startup, or pass `--debug`, to see every stanza of the pairing exchange:
+
+```sh
+wa pair 919634847671 --debug
+```
+
+From inside the shell:
+
+```sh
+wa> /pair 919634847671
+wa> /connect 919634847671 pair
+wa> /connect 919634847671 sms
+```
+
 ### Listen Mode
 
 Connect and print all incoming events to the terminal. The process stays alive indefinitely until you press Ctrl+C:
@@ -2623,7 +3068,18 @@ now run: /connect 919634847671
 
 ```sh
 # connect to a number (while already in the shell)
+# asks sms or pairing code when both are possible
 wa> /connect 919634847671
+
+# force one or the other
+wa> /connect 919634847671 sms
+wa> /connect 919634847671 pair
+
+# link to an existing account by 8-digit pairing code
+wa> /pair 919634847671
+
+# with a code you chose yourself (exactly 8 characters)
+wa> /pair 919634847671 MYCODE12
 
 # disconnect
 wa> /disconnect
@@ -2739,7 +3195,8 @@ wa> /quit
 | `/reg code <phone> [method]` | Request verification code |
 | `/reg confirm <phone> <code>` | Complete registration |
 | **Connection** | |
-| `/connect <phone>` | Connect to WhatsApp |
+| `/connect <phone> [sms\|pair]` | Connect to WhatsApp — asks which method when unset |
+| `/pair <phone> [code]` | Link to an existing account by 8-digit pairing code |
 | `/disconnect` | Disconnect current session |
 | `/reconnect` | Force reconnection |
 | `/session` | Show session info |
