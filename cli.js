@@ -436,7 +436,8 @@ const HELP = `
     /reg confirm <phone> <code>                       complete registration
 
   Connection
-    /connect    <phone>                      connect to WhatsApp
+    /connect    <phone> [sms|pair]           connect to WhatsApp (asks which if unset)
+    /pair       <phone> [code]               link to an existing account by 8-digit code
     /disconnect                              disconnect
     /reconnect                              force reconnection
     /session                                show session info
@@ -604,6 +605,108 @@ function openShell(prompt) {
 
 // ─── connect helper ───────────────────────────────────────────────────────────
 
+// Which way in: register this number over SMS as the account's own device, or
+// link to an account that already exists the way WhatsApp Web does.
+//
+// Asked only when it is genuinely ambiguous. If exactly one kind of session is
+// already on disk that one wins, and a non-interactive stdin never blocks on a
+// question nobody is there to answer.
+function hasMobileSession(phone) {
+  return fs.existsSync(path.join(_sessDir, phone + '.json'));
+}
+
+function hasWebSession(phone) {
+  const f = path.join(_sessDir, phone + '.web.json');
+  if (!fs.existsSync(f)) return false;
+  try {
+    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+    return !!(j.registered && j.me && j.me.id);
+  } catch (_) { return false; }
+}
+
+function askLoginMethod(phone) {
+  const mob = hasMobileSession(phone);
+  const web = hasWebSession(phone);
+  if (web && !mob) return Promise.resolve('pairing');
+  if (mob && !web) return Promise.resolve('sms');
+  if (!process.stdin.isTTY) return Promise.resolve(mob ? 'sms' : 'pairing');
+
+  return new Promise(resolve => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    out('');
+    out('  how do you want to connect?');
+    out('    1) sms           register this number as its own device');
+    out('    2) pairing code  link to an existing WhatsApp account (8-digit code)');
+    rl.question('  sms or pairing code?  [1/2] ', (answer) => {
+      rl.close();
+      const a = String(answer).trim().toLowerCase();
+      resolve((a === '2' || a.startsWith('p')) ? 'pairing' : 'sms');
+    });
+  });
+}
+
+// Link as a companion device.
+//
+// Connect first, then ask for the code: the request rides on the encrypted
+// channel, so there has to be one before there can be a code.
+async function doConnectWeb(phone, opts) {
+  opts  = opts || {};
+  phone = normalizePhone(phone);
+  const client = new WhalibmobClient({ sessionDir: _sessDir });
+  attachEvents(client);
+
+  client.on('pair_device', () => { /* QR path — nothing to draw in a terminal */ });
+
+  client.once('paired', (p) => {
+    out('');
+    out('  linked as ' + p.jid + (p.lid ? '  (' + p.lid + ')' : ''));
+    out('  device slot ' + p.deviceIndex + (p.platform ? '  ·  primary is ' + p.platform : ''));
+    out('  finishing handshake...');
+  });
+
+  client.on('history_sync', (r) => {
+    out('  history  ' + r.syncTypeName +
+        '  chats=' + r.chats.length +
+        '  contacts=' + r.contacts.length);
+  });
+
+  client.once('connected', () => {
+    _client = client;
+    _phone  = phone;
+    out('connected as +' + phone + '  (web / companion)');
+    _rl.setPrompt('wa +' + phone + '> ');
+    _rl.prompt();
+  });
+
+  const alreadyLinked = hasWebSession(phone);
+
+  try {
+    await client.connectWeb(phone, { syncFullHistory: true });
+
+    if (!alreadyLinked) {
+      const code = await client.requestPairingCode(phone, opts.customCode);
+      out('');
+      hr();
+      out('  pairing code   ' + code.slice(0, 4) + '-' + code.slice(4));
+      hr();
+      out('  on the phone that owns +' + phone + ':');
+      out('    WhatsApp → Settings → Linked Devices → Link a device');
+      out('    → Link with phone number instead → enter the code above');
+      out('');
+      out('  the code is valid for a few minutes; waiting...');
+    } else {
+      out('session already linked — reconnecting');
+    }
+
+    const keepAlive = setInterval(() => {}, 10000);
+    client.once('connected',    () => clearInterval(keepAlive));
+    client.once('auth_failure', () => clearInterval(keepAlive));
+  } catch (e) {
+    fail(e.message);
+    _rl.prompt();
+  }
+}
+
 async function doConnect(phone) {
   phone = normalizePhone(phone);
   const client = new WhalibmobClient({ sessionDir: _sessDir });
@@ -676,9 +779,16 @@ async function handleLine(line) {
         if (!_client || !_client.store) { fail('not connected'); break; }
         let _meJid = '—';
         try { _meJid = assertMeId(_client.store); } catch (_) {}
+        const web = _client._mode === 'web';
         hr();
         kv('phone',   _client.store.phoneNumber);
-        kv('jid',     _meJid);
+        kv('mode',    web ? 'web / companion' : 'mobile / primary');
+        kv('jid',     web && _client.store.me ? _client.store.me.id : _meJid);
+        if (web) {
+          kv('lid',    (_client.store.me && _client.store.me.lid) || '—');
+          kv('device', String(_client.store.deviceIndex || 0));
+          kv('primary', _client.store.platform || '—');
+        }
         kv('name',    _client.store.pushName || _client.store.name || '—');
         kv('session', _sessDir);
         hr();
@@ -687,10 +797,25 @@ async function handleLine(line) {
 
       case '/connect': {
         const ph = p[1];
-        if (!ph) { fail('usage: /connect <phone>'); break; }
+        if (!ph) { fail('usage: /connect <phone> [sms|pair]'); break; }
         if (_client && _client.connected) { fail('already connected'); break; }
+        const phn = normalizePhone(ph);
+        const forced = (p[2] || '').toLowerCase();
+        const method = forced === 'pair' || forced === 'pairing' ? 'pairing'
+                     : forced === 'sms'                          ? 'sms'
+                     : await askLoginMethod(phn);
         out('connecting...');
-        await doConnect(ph);
+        if (method === 'pairing') await doConnectWeb(phn);
+        else                      await doConnect(phn);
+        break;
+      }
+
+      case '/pair': {
+        const ph = p[1] || _phone;
+        if (!ph) { fail('usage: /pair <phone> [8-char-code]'); break; }
+        if (_client && _client.connected) { fail('already connected — /disconnect first'); break; }
+        out('connecting...');
+        await doConnectWeb(ph, { customCode: p[2] });
         break;
       }
 
@@ -1709,6 +1834,7 @@ whalibmob v${VERSION}
 usage:
   wa                                        open interactive shell
   wa connect <phone>                        connect and open interactive shell
+  wa pair    <phone> [code]                 link to an existing account (8-digit code)
   wa listen  <phone>                        connect and listen (stay-alive)
   wa registration --request-code <phone>    request SMS code
   wa registration --register <phone> --code <code>
@@ -1717,6 +1843,8 @@ usage:
 
 options:
   --session <dir>   session directory  (default: ~/.waSession)
+  --sms             connect by registering this number over SMS
+  --pair            connect by linking to an existing account (8-digit code)
   --method          sms | voice | wa_old | email  (default: sms)
   --email <address> email address (required when --method email)
 
@@ -1890,9 +2018,27 @@ async function main() {
   if (cmd === 'connect') {
     const phone = normalizePhone(sub || pos[0] || flags.phone || '');
     if (!phone) { fail('phone number required'); process.exit(1); }
+    const forced = String(flags.method || '').toLowerCase();
+    const method = flags.pair || forced === 'pair' || forced === 'pairing' ? 'pairing'
+                 : flags.sms  || forced === 'sms'                          ? 'sms'
+                 : await askLoginMethod(phone);
     openShell('wa +' + phone + '> ');
     out('connecting to +' + phone + '...');
-    await doConnect(phone);
+    if (method === 'pairing') await doConnectWeb(phone);
+    else                      await doConnect(phone);
+    return;
+  }
+
+  if (cmd === 'pair') {
+    // `wa pair <phone> [code]` — parseArgs puts the phone in sub, so the
+    // optional code is the first positional that remains.
+    const phone = normalizePhone(sub || pos[0] || flags.phone || '');
+    if (!phone) { fail('phone number required'); process.exit(1); }
+    const custom = (sub ? pos[0] : pos[1]) ||
+                   (typeof flags.code === 'string' ? flags.code : undefined);
+    openShell('wa +' + phone + '> ');
+    out('linking +' + phone + ' to an existing WhatsApp account...');
+    await doConnectWeb(phone, { customCode: custom });
     return;
   }
 
