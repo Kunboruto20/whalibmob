@@ -580,6 +580,23 @@ function attachEvents(client) {
     notConnected();
   });
 
+  // Someone else opened a session for this number. Reconnecting would fight
+  // them for it, so the client stands down and says so.
+  client.on('connection_replaced', (r) => {
+    _rl && _rl.pause();
+    fail('connection replaced');
+    out('  ' + r.message);
+    _rl && _rl.resume();
+    notConnected();
+  });
+
+  // A stanza whose shape we mishandled. Not fatal — the connection kept going.
+  client.on('node_error', (e) => {
+    _rl && _rl.pause();
+    fail('could not handle a <' + e.tag + '>: ' + (e.err && e.err.message));
+    _rl && (_rl.resume(), _rl.prompt(true));
+  });
+
   // The server declined the client, not the session. Nothing to re-register.
   client.on('client_rejected', (r) => {
     _rl && _rl.pause();
