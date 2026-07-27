@@ -336,7 +336,8 @@ const HELP = `
     /react    <jid> <msgId> <emoji>           react to a message
     /edit     <jid> <msgId> <text>            edit a sent message
     /delete   <jid> <msgId> [all]             delete message (add 'all' for everyone)
-    /status   <text>                          post a Status/Story
+    /status   <text>                          post a text Status/Story
+    /status   image|video|audio <file> [caption]  post a media Status/Story
     /forward  <jid> <text|msgObj>             forward text (or decoded msg) with forwarded flag
     /poll     <jid> <question> | <opt1> | <opt2> [selectable=N]  send a poll
     /location <jid> <lat> <lon> [name] [| address]              send a location pin
@@ -830,8 +831,19 @@ async function handleLine(line) {
       case '/status': {
         requireConn();
         const [, ...rest] = p;
-        if (!rest.length) { fail('usage: /status <text>'); break; }
-        const r = await _client.sendStatus(rest.join(' '));
+        if (!rest.length) {
+          fail('usage: /status <text>   |   /status image|video|audio <file> [caption]');
+          break;
+        }
+        const kind = rest[0] && rest[0].toLowerCase();
+        let r;
+        if ((kind === 'image' || kind === 'video' || kind === 'audio') && rest[1]) {
+          const opts = { [kind]: rest[1] };
+          if (rest.length > 2) opts.caption = rest.slice(2).join(' ');
+          r = await _client.sendStatus(opts);
+        } else {
+          r = await _client.sendStatus(rest.join(' '));
+        }
         out('status posted  ' + (r && r.id ? r.id : ''));
         break;
       }

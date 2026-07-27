@@ -166,6 +166,7 @@ npm install -g whalibmob
       - [Document Message](#document-message)
       - [Sticker Message](#sticker-message)
     - [Status / Stories](#status--stories)
+    - [Status Privacy](#status-privacy)
   - [Send States in Chat](#send-states-in-chat)
     - [Reading Messages](#reading-messages)
     - [Mark Voice Message Played](#mark-voice-message-played)
@@ -1290,10 +1291,40 @@ await client.sendSticker('919634847671@s.whatsapp.net', './sticker.webp')
 
 ## Status / Stories
 
+A Status is posted to `status@broadcast` and travels the SenderKey path a group
+message does — one encrypted body plus a key distribution to every recipient.
+Who those recipients are comes from your status privacy settings, resolved
+against the contacts in the synced history store.
+
 ```js
-// post a text Status to status@broadcast
+// text
 await client.sendStatus('Good morning!')
+
+// photo, video, voice — same arguments as the matching send* methods
+await client.sendStatus({ image: './photo.jpg', caption: 'Look at this' })
+await client.sendStatus({ video: './clip.mp4' })
+await client.sendStatus({ audio: './voice.ogg' })
+
+// styled text status
+await client.sendStatus('Colorful', { backgroundArgb: 0xFF25D366, font: 3 })
+
+// post to an explicit list instead of the privacy-derived one
+await client.sendStatus('Hi', { recipients: ['919634847671@s.whatsapp.net'] })
 ```
+
+### Status Privacy
+
+```js
+const [def, ...rest] = await client.queryStatusPrivacy()
+// def = { type: 'contacts' | 'blacklist' | 'whitelist', isDefault, list }
+```
+
+`contacts` sends to everyone in your address book, `blacklist` to everyone
+except `list`, `whitelist` to `list` only. Your own JID is always included so
+the post reaches your other devices.
+
+If history has not synced yet the contact list is unknown, and `sendStatus`
+will say so rather than post to nobody — pass `recipients` in that case.
 
 ## Send States in Chat
 
