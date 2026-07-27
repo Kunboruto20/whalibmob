@@ -150,6 +150,7 @@ npm install -g whalibmob
     - [Handling Reconnects](#handling-reconnects)
     - [Knowing Which Mode You Are In](#knowing-which-mode-you-are-in)
     - [Two Sessions on One Number](#two-sessions-on-one-number)
+  - [The Number WhatsApp Files Your Account Under](#the-number-whatsapp-files-your-account-under)
   - [Routing Registration Through a Proxy](#routing-registration-through-a-proxy)
   - [Saving & Restoring Sessions](#saving--restoring-sessions)
   - [Signal Store Utilities](#signal-store-utilities)
@@ -806,6 +807,53 @@ await client.connectWeb(PHONE)  // web / companion, over WebSocket
 ```
 
 Use two `WhalibmobClient` instances if you want both at once.
+
+## The Number WhatsApp Files Your Account Under
+
+WhatsApp does not always keep an account under the number you type. Brazilian mobiles are the standing example: they gained a ninth digit, and WhatsApp keeps older accounts under the eight-digit form. `5596976042705` and `559676042705` are the same account, but only the second is the one the server recognises.
+
+This matters because the number in your session is sent as the username on every connection. Get the form wrong and the server has no registration matching it, so the login is refused with `401` — a code that says "logged out" and gives no hint that the number was the problem.
+
+whalibmob handles this on its own, in both directions:
+
+**When you register**, the canonical form is read from the server's reply and the session is saved under it. Numbers registered through whalibmob cannot end up in this state.
+
+**When you connect** an older session that is in this state, the first login is refused, whalibmob asks the server which form it uses, re-files the session, and connects. You see one line:
+
+```
+connecting to +5596976042705...
+  this account is registered as +559676042705 (not +5596976042705) — session updated
+connected as +559676042705
+```
+
+The rename keeps the registration and the Signal keys — it moves the session files, it does not re-register anything.
+
+```js
+client.on('number_corrected', ({ from, to }) => {
+  console.log('session re-filed:', from, '→', to)
+})
+```
+
+To be told rather than fixed:
+
+```js
+const client = new WhalibmobClient({ sessionDir, autoFixNumber: false })
+```
+
+Then the `401` is thrown as-is, and `checkSessionAlive()` tells you what the server calls the account:
+
+```js
+const probe = await client.checkSessionAlive()
+// { alive: true, status: 'ok', current: '5596976042705',
+//   canonical: '559676042705', mismatch: true }
+
+if (probe.mismatch) {
+  await client.adoptCanonicalNumber(probe.canonical)
+}
+```
+
+> [!NOTE]
+> The check costs nothing when things work — it runs only after a login has already been refused.
 
 ## Routing Registration Through a Proxy
 
