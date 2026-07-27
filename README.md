@@ -1495,6 +1495,9 @@ await client.changeGroupPicture('120363000000000000@g.us', fs.readFileSync('./gr
 const blocked = await client.blockContact('919634847671@s.whatsapp.net')
 await client.unblockContact('919634847671@s.whatsapp.net')
 
+// the block list is addressed by LID; a phone number is resolved to one first,
+// looking it up if it is not already known
+
 // blocking done from the phone arrives as an event
 client.on('blocklist', ({ changes }) => console.log(changes))
 ```
