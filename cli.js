@@ -576,7 +576,8 @@ function attachEvents(client) {
       ? 'link again with /pair'
       : 're-register with /reg code';
     fail('session revoked: ' + f.reason + ' — ' + how);
-    _rl && (_rl.resume(), _rl.prompt(true));
+    _rl && _rl.resume();
+    notConnected();
   });
 
   // The server declined the client, not the session. Nothing to re-register.
@@ -585,7 +586,8 @@ function attachEvents(client) {
     fail('rejected by WhatsApp (' + r.reason +
          (r.location ? ', edge ' + r.location : '') + ')');
     out('  ' + r.message);
-    _rl && (_rl.resume(), _rl.prompt(true));
+    _rl && _rl.resume();
+    notConnected();
   });
 
   client.on('error', (e) => {
@@ -715,7 +717,7 @@ async function doConnectWeb(phone, opts) {
     client.once('auth_failure', () => clearInterval(keepAlive));
   } catch (e) {
     fail(e.message);
-    _rl.prompt();
+    notConnected();
   }
 }
 
@@ -735,7 +737,7 @@ async function doConnect(phone) {
   client.once('auth_failure', () => {
     fail('auth failed — session revoked');
     out('use /reg code ' + phone + ' to re-register');
-    _rl.prompt();
+    notConnected();
   });
 
   try {
@@ -745,9 +747,28 @@ async function doConnect(phone) {
     client.once('auth_failure', () => clearInterval(keepAlive));
   } catch (e) {
     fail(e.message);
-    out('register first with: /reg code ' + phone);
-    _rl.prompt();
+    if (/No (primary )?session for/i.test(e.message)) {
+      if (hasWebSession(phone)) {
+        out('  this number is linked as a companion — use:  /pair ' + phone);
+      } else {
+        out('  register it:  /reg code ' + phone + '   then  /reg confirm ' + phone + ' <code>');
+        out('  or link it to an account already on a phone:  /pair ' + phone);
+      }
+    }
+    notConnected();
   }
+}
+
+// Put the shell back in its disconnected state.
+//
+// The prompt is the only standing indication of whether there is a session, so
+// it has to be right after a failure: a prompt reading "wa +<number>>" under an
+// error saying there is no session for that number is the shell contradicting
+// itself.
+function notConnected() {
+  _client = null;
+  _phone  = null;
+  if (_rl) { _rl.setPrompt('wa> '); _rl.prompt(); }
 }
 
 // ─── guard ────────────────────────────────────────────────────────────────────
@@ -2039,7 +2060,11 @@ async function main() {
     const method = flags.pair || forced === 'pair' || forced === 'pairing' ? 'pairing'
                  : flags.sms  || forced === 'sms'                          ? 'sms'
                  : await askLoginMethod(phone);
-    openShell('wa +' + phone + '> ');
+    // Plain `wa>` until the connection actually opens. Naming the number in the
+    // prompt before that says "connected as this number" while the line above
+    // it says there is no session, which is the opposite of what happened —
+    // doConnect sets the real prompt from the 'connected' event.
+    openShell();
     out('connecting to +' + phone + '...');
     if (method === 'pairing') await doConnectWeb(phone);
     else                      await doConnect(phone);
@@ -2053,7 +2078,7 @@ async function main() {
     if (!phone) { fail('phone number required'); process.exit(1); }
     const custom = (sub ? pos[0] : pos[1]) ||
                    (typeof flags.code === 'string' ? flags.code : undefined);
-    openShell('wa +' + phone + '> ');
+    openShell();
     out('linking +' + phone + ' to an existing WhatsApp account...');
     await doConnectWeb(phone, { customCode: custom });
     return;
