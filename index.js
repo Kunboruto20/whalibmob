@@ -28,6 +28,7 @@ const {
   buildCompanionFinishBundle
 } = require('./lib/PairingCode');
 const { configureSuccessfulPairing } = require('./lib/CompanionPairing');
+const { fetchWaWebVersion } = require('./lib/WebVersion');
 const {
   encodeCompanionRegisterPayload,
   encodeCompanionLoginPayload
@@ -81,6 +82,7 @@ module.exports = {
   configureSuccessfulPairing,
   encodeCompanionRegisterPayload,
   encodeCompanionLoginPayload,
+  fetchWaWebVersion,
   // Signal / encryption internals
   SignalProtocol,
   SignalStore,

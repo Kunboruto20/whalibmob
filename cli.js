@@ -572,7 +572,19 @@ function attachEvents(client) {
 
   client.on('auth_failure', (f) => {
     _rl && _rl.pause();
-    fail('session revoked: ' + f.reason + ' — re-register with /reg code');
+    const how = client._mode === 'web'
+      ? 'link again with /pair'
+      : 're-register with /reg code';
+    fail('session revoked: ' + f.reason + ' — ' + how);
+    _rl && (_rl.resume(), _rl.prompt(true));
+  });
+
+  // The server declined the client, not the session. Nothing to re-register.
+  client.on('client_rejected', (r) => {
+    _rl && _rl.pause();
+    fail('rejected by WhatsApp (' + r.reason +
+         (r.location ? ', edge ' + r.location : '') + ')');
+    out('  ' + r.message);
     _rl && (_rl.resume(), _rl.prompt(true));
   });
 
@@ -812,7 +824,12 @@ async function handleLine(line) {
 
       case '/pair': {
         const ph = p[1] || _phone;
-        if (!ph) { fail('usage: /pair <phone> [8-char-code]'); break; }
+        if (!ph) {
+          fail('usage: /pair <phone> [8-char-code]');
+          out('  the phone number is the account you want to link to, digits only');
+          out('  example: /pair 40756469325');
+          break;
+        }
         if (_client && _client.connected) { fail('already connected — /disconnect first'); break; }
         out('connecting...');
         await doConnectWeb(ph, { customCode: p[2] });
