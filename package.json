@@ -1,6 +1,6 @@
 {
   "name": "whalibmob",
-  "version": "5.5.84",
+  "version": "5.5.85",
   "description": "WhatsApp library for interaction with WhatsApp Mobile API no web",
   "author": "Kunboruto50",
   "main": "index.js",
@@ -41,12 +41,15 @@
   "dependencies": {
     "@cacheable/node-cache": "^3.0.1",
     "@noble/hashes": "^1.7.2",
-"async-mutex": "^0.5.0",
+    "async-mutex": "^0.5.0",
     "axios": "^1.7.2",
     "curve25519-js": "^0.0.4",
     "dotenv": "^16.4.5",
     "pino": "^9.0.0",
     "protobufjs": "^6.11.4",
     "uuid": "^11.1.0"
+  },
+  "optionalDependencies": {
+    "jimp": "^1.6.0"
   }
 }
