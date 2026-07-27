@@ -138,6 +138,8 @@ npm install -g whalibmob
     - [Events Specific to Linking](#events-specific-to-linking)
     - [Getting the History and the Address Book](#getting-the-history-and-the-address-book)
     - [Session Files](#session-files)
+    - [Media in Companion Mode](#media-in-companion-mode)
+    - [Device Identity](#device-identity)
     - [How the Code Protects the Link](#how-the-code-protects-the-link)
   - [Saving & Restoring Sessions](#saving--restoring-sessions)
   - [Signal Store Utilities](#signal-store-utilities)
@@ -539,6 +541,30 @@ History arrives in chunks over the first minute or so after linking, largest fir
 | `<phone>.web.history.json` | synced chats, contacts and push names |
 
 The `.web.` prefix keeps a linked session entirely separate from an SMS-registered one for the same number.
+
+### Media in Companion Mode
+
+Uploads and downloads go to the CDN endpoints the web client uses, not the mobile ones. This is handled for you — `sendImage`, `sendVideo`, `sendSticker` and the rest take the same arguments in both modes — but it is worth knowing why the distinction exists.
+
+The web client has no endpoint per media type. A sticker is uploaded to the image endpoint and a GIF to the video one; what makes them a sticker or a GIF lives in the message itself, not in the URL. Uploading a sticker to `/mms/sticker` as a companion gets a 404. The CDN also expects a browser `Origin` on both the upload and the download, and a mobile WhatsApp user agent against a web-issued auth token is a mismatch it can reject.
+
+| Media | Primary endpoint | Companion endpoint |
+|---|---|---|
+| image | `/mms/image` | `/mms/image` |
+| video | `/mms/video` | `/mms/video` |
+| audio | `/mms/audio` | `/mms/audio` |
+| document | `/mms/document` | `/mms/document` |
+| sticker | `/mms/sticker` | `/mms/image` |
+| gif | `/mms/gif` | `/mms/video` |
+| voice note | `/mms/ptt` | `/mms/audio` |
+
+The same applies to history sync blobs and profile pictures.
+
+### Device Identity
+
+Every message a companion sends that opens a new Signal session carries a `device-identity` node: the signed record the account's primary device issued during pairing, including the account signature key. That is how the recipient's client knows a message from device 7 of an account genuinely belongs to that account rather than to someone who merely knows the number.
+
+whalibmob attaches it automatically whenever a `pkmsg` is in the stanza, in direct messages and in groups alike. A device registered over SMS has no such record — nothing issued one to it — and correctly sends nothing.
 
 ### How the Code Protects the Link
 
