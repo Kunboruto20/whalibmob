@@ -1459,6 +1459,11 @@ client.on('account_restriction', (r) => {
 > was tried against a live server, which responded by dropping the stanza
 > entirely. An answer in a format you cannot read still beats no answer.
 >
+> The newsletter calls use the same transport, so a server that answers this
+> query in Argo answers those the same way. They now throw with `err.mexFormat`
+> set rather than returning `null`, which would have read as "no such
+> newsletter".
+>
 > It never guesses. Reporting "not restricted" from an answer nobody decoded
 > would have you send more messages and make the restriction longer, so an
 > unreadable reply is an error rather than an all-clear.
