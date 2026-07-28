@@ -97,6 +97,7 @@ npm install -g whalibmob
     - [Pin / Unpin](#pin--unpin)
     - [Archive / Unarchive](#archive--unarchive)
     - [Star / Unstar a Message](#star--unstar-a-message-cli)
+    - [Sync App State (CLI)](#cli-app-state)
     - [Disappearing Messages](#cli-disappearing-messages)
     - [Default Disappearing Timer](#default-disappearing-timer)
     - [Block / Unblock](#block--unblock)
@@ -202,6 +203,7 @@ npm install -g whalibmob
     - [Mark a Chat Read / Unread](#mark-a-chat-read--unread)
     - [Pin / Unpin a Chat](#pin--unpin-a-chat)
     - [Star / Unstar a Message](#star--unstar-a-message)
+    - [Reading Changes Made Elsewhere](#app-state-sync)
     - [Disappearing Messages](#disappearing-messages)
   - [User Queries](#user-queries)
     - [Check If a Number Has WhatsApp](#check-if-a-number-has-whatsapp)
@@ -551,6 +553,8 @@ History arrives in chunks over the first minute or so after linking, largest fir
 | `<phone>.web.signal.json` | Signal sessions and pre-keys for the linked device |
 | `<phone>.web.sk.json` | group SenderKeys |
 | `<phone>.web.tctoken.json` | privacy tokens |
+| `<phone>.web.appState.json` | app-state version and hash per collection |
+| `<phone>.appStateKeys.json` | app-state sync keys shared by the phone |
 | `<phone>.web.history.json` | synced chats, contacts, push names, LID↔PN mappings |
 | `<phone>.web.messages.json` | flat map of message id → message metadata |
 
@@ -1095,13 +1099,23 @@ connect()
 | `group_update` | `{ type, groupJid, actor, participants, subject, timestamp }` | Member added / removed / promoted / demoted, subject or settings changed |
 | `notification` | node object | Group or contact update notification |
 | `call` | `{ from }` | Incoming call event |
-| `chat_read` | `{ jid, read }` | Chat marked read (`read: true`) or unread (`read: false`) |
-| `chat_muted` | `{ jid, muted, until }` | Chat muted or unmuted; `until` is epoch ms (−1 = indefinite) |
-| `chat_pinned` | `{ jid, pinned }` | Chat pinned or unpinned |
+| `chat_read` | `{ jid, read, remote? }` | Chat marked read (`read: true`) or unread (`read: false`) |
+| `chat_muted` | `{ jid, muted, until, remote? }` | Chat muted or unmuted; `until` is epoch ms (−1 = indefinite) |
+| `chat_pinned` | `{ jid, pinned, remote? }` | Chat pinned or unpinned |
 | `blocklist` | `{ action, dhash, prevDhash, changes }` | Block list changed on another device; `changes` is `[{ jid, action }]` |
 | `privacy_settings` | `{ changes, settings }` | Privacy settings changed on another device |
-| `chat_archived` | `{ jid, archived }` | Chat archived or unarchived |
-| `message_starred` | `{ msgId, chatJid, starred }` | Message starred or unstarred |
+| `chat_archived` | `{ jid, archived, remote? }` | Chat archived or unarchived |
+| `message_starred` | `{ msgId, chatJid, starred, fromMe?, remote? }` | Message starred or unstarred |
+| `chat_removed` | `{ jid, kind, remote }` | A chat was cleared or deleted on another device |
+| `contact_update` | `{ jid, name, firstName, lid, username, removed, remote }` | A contact was renamed or removed elsewhere |
+| `push_name_update` | `{ name, remote }` | Your own display name changed on another device |
+| `app_state_sync` | `{ collections, applied }` | An app-state sync finished; see [Reading Changes Made Elsewhere](#app-state-sync) |
+| `app_state_mutation` | `{ collection, index, action, removed }` | An app-state change this library does not model |
+| `app_state_key_missing` | `{ collection, keyId }` | App state cannot be read until your phone shares this key |
+
+`remote: true` on a chat event means the change was made on your phone or another
+linked device rather than by this session. Your own calls emit the same events
+without it.
 | `stream_error` | `{ reason }` | Server sent a fatal stream error |
 | `decrypt_error` | `{ id, from, participant, err }` | Failed to decrypt an incoming message |
 | `session_refresh` | `{ node }` | Late re-authentication success; Signal session refreshed |
@@ -1275,7 +1289,8 @@ The library automatically writes these files to `sessionDir` per account. You do
 |---|---|
 | `<phone>.history.json` | Chats, contacts, push names, LID↔PN mappings, tcTokens |
 | `<phone>.messages.json` | Flat map of `msgId → message metadata` |
-| `<phone>.appStateKeys.json` | App-state sync keys (used for app-state patch decryption) |
+| `<phone>.appStateKeys.json` | App-state sync keys, shared by your primary device |
+| `<phone>.appState.json` | Per-collection app-state version, hash and index map |
 | `<phone>.tctoken.json` | Trusted-contact token store (tcToken per contact JID) |
 
 ### Reading the History Store
@@ -1386,6 +1401,9 @@ Token storage uses the **LID JID** of the contact (e.g. `112345678901234@lid`) a
 | Persist chats / contacts / push names | ✅ | Written to `<phone>.history.json` |
 | Persist message metadata | ✅ | Written to `<phone>.messages.json` |
 | Persist app-state sync keys | ✅ | Written to `<phone>.appStateKeys.json` |
+| Sync app state when the server says it changed | ✅ | Pins, archives, mutes, stars, contact names |
+| Verify app-state MACs and LT hash | ✅ | A collection that drifts is re-read from a snapshot |
+| Persist app-state versions across restarts | ✅ | Written to `<phone>.appState.json` |
 | Seed tcTokens into memory on connect | ✅ | Prevents error 463 on first send after reconnect |
 | Attach tcToken to every outbound DM | ✅ | |
 | Issue fresh tcTokens after each send | ✅ | Once per 7-day bucket per contact |
@@ -1805,40 +1823,133 @@ client.setChatPresence('919634847671@s.whatsapp.net', 'paused')      // stopped
 
 ## Modifying Chats
 
+Pinning, archiving, muting, marking read and starring are **app state**. That is
+WhatsApp's own synchronised settings store — the same one your phone writes to —
+so a change made here shows up on the phone and on every other linked device,
+and survives reinstalling.
+
+Each of these sends a patch and waits for the server to accept it. They are all
+`async`, they throw if the server refuses, and the local view only moves once the
+change is actually stored.
+
+> [!IMPORTANT]
+> App state is encrypted under a key your **primary device** shares with this
+> session. Until it has, these calls throw and `syncAppState()` reports
+> `waitingForKeys`. The key arrives on its own shortly after linking — open
+> WhatsApp on the phone and leave it connected for a moment.
+
 ### Archive / Unarchive a Chat
 
 ```js
-client.archiveChat('919634847671@s.whatsapp.net')
-client.unarchiveChat('919634847671@s.whatsapp.net')
+await client.archiveChat('919634847671@s.whatsapp.net')
+await client.unarchiveChat('919634847671@s.whatsapp.net')
 ```
 
 ### Mute / Unmute a Chat
 
 ```js
-await client.muteChat('919634847671@s.whatsapp.net', 8 * 60 * 60 * 1000)  // mute for 8 hours (ms)
-await client.muteChat('919634847671@s.whatsapp.net', 0)                    // mute indefinitely
+await client.muteChat('919634847671@s.whatsapp.net', 8 * 60 * 60 * 1000)  // 8 hours
+await client.muteChat('919634847671@s.whatsapp.net', 0)                   // until unmuted
 await client.unmuteChat('919634847671@s.whatsapp.net')
 ```
 
 ### Mark a Chat Read / Unread
 
+This is the chat's own unread badge. To send read receipts (blue ticks) for
+particular messages, use `markRead()` instead.
+
 ```js
-await client.markChatRead('919634847671@s.whatsapp.net')   // sends IQ to server
-client.markChatUnread('919634847671@s.whatsapp.net')       // local state only
+await client.markChatRead('919634847671@s.whatsapp.net')
+await client.markChatUnread('919634847671@s.whatsapp.net')
 ```
 
 ### Pin / Unpin a Chat
 
 ```js
-client.pinChat('919634847671@s.whatsapp.net')
-client.unpinChat('919634847671@s.whatsapp.net')
+await client.pinChat('919634847671@s.whatsapp.net')
+await client.unpinChat('919634847671@s.whatsapp.net')
 ```
 
 ### Star / Unstar a Message
 
+The third argument says whether the message being starred is one you sent. It is
+part of how the star is filed, so getting it wrong stars a different message.
+
 ```js
-client.starMessage('MSGID123', '919634847671@s.whatsapp.net')
-client.unstarMessage('MSGID123', '919634847671@s.whatsapp.net')
+await client.starMessage('MSGID123', '919634847671@s.whatsapp.net', true)   // yours
+await client.unstarMessage('MSGID123', '919634847671@s.whatsapp.net', false) // theirs
+```
+
+<a id="app-state-sync"></a>
+
+### Reading Changes Made Elsewhere
+
+The traffic runs both ways. When you pin a chat on your phone, mute a group from
+another linked device, or rename a contact, that change is waiting in app state
+for this session to pick up.
+
+`syncAppState()` fetches it. It is called for you whenever the server says
+something has moved — so with a listener attached you generally never need to
+call it by hand.
+
+```js
+client.on('chat_pinned',     (u) => u.remote && console.log('pinned elsewhere:', u.jid))
+client.on('chat_archived',   (u) => u.remote && console.log('archived elsewhere:', u.jid))
+client.on('chat_muted',      (u) => u.remote && console.log('muted elsewhere:', u.jid, u.until))
+client.on('chat_read',       (u) => u.remote && console.log('read elsewhere:', u.jid))
+client.on('message_starred', (u) => u.remote && console.log('starred elsewhere:', u.msgId))
+client.on('contact_update',  (u) => console.log('contact renamed:', u.jid, u.name))
+client.on('push_name_update',(u) => console.log('your display name is now', u.name))
+```
+
+`remote: true` marks a change as somebody else's doing. Your own calls emit the
+same events without it, so a listener can tell the two apart and avoid echoing a
+change back where it came from.
+
+To pull on demand:
+
+```js
+// everything
+const r = await client.syncAppState()
+console.log(r.applied, 'change(s)')
+
+// or just one part of it
+await client.syncAppState(['regular_low'])
+
+// re-read everything from scratch, discarding what we hold
+await client.syncAppState(null, { snapshot: true })
+```
+
+The result reports each collection separately:
+
+```js
+{
+  applied: 3,
+  collections: {
+    regular_low: { version: 41, applied: 3, skipped: 0, snapshot: false, macOk: true }
+  }
+}
+```
+
+The five collections are `critical_block`, `critical_unblock_low`,
+`regular_high`, `regular_low` and `regular`. Which one a setting lives in is
+WhatsApp's choice, not yours — the methods above already file each change where
+it belongs.
+
+**When it repairs itself.** Each collection carries a running hash that has to
+keep agreeing with the server's. If it stops — a patch went missing, or one
+could not be decrypted — the incremental history is no longer trustworthy, so
+that collection is thrown away and re-read whole. This happens on its own, once
+per sync, and shows up as `snapshot: true` in the result.
+
+**Events for anything not modelled here.** WhatsApp tracks more in app state than
+this library turns into methods. Rather than dropping those, they are emitted
+raw, so it is at least visible that something happened:
+
+```js
+client.on('app_state_mutation', ({ collection, index, action, removed }) => {
+  console.log('unhandled app state change', index)
+})
 ```
 
 ### Disappearing Messages
@@ -2919,6 +3030,9 @@ wa> /contact about 919634847671@s.whatsapp.net
 
 ### Chat Management Commands
 
+These all write to app state, so a change here reaches your phone and every
+other linked device. They wait for the server and report an error if it refuses.
+
 #### Mark Read / Unread
 
 ```sh
@@ -2955,10 +3069,51 @@ wa> /unarchive 919634847671@s.whatsapp.net
 
 #### Star / Unstar a Message (CLI)
 
+Add `me` when the message is one you sent — it is part of how the star is filed,
+so leaving it off on your own message stars the wrong thing.
+
 ```sh
-wa> /star   919634847671@s.whatsapp.net 3EB0ABCDEF123456
+wa> /star   919634847671@s.whatsapp.net 3EB0ABCDEF123456 me
 wa> /unstar 919634847671@s.whatsapp.net 3EB0ABCDEF123456
 ```
+
+<a id="cli-app-state"></a>
+
+#### Sync App State
+
+Pulls in pins, archives, mutes, stars and contact names changed on your phone or
+another linked device. This happens on its own whenever the server says
+something moved; the command is for pulling on demand.
+
+```sh
+wa> /appstate
+syncing app state...
+  ──────────────────────────────────────────────────
+  critical_block        v3   0 change(s)
+  critical_unblock_low  v18  2 change(s)
+  regular_high          v7   0 change(s)
+  regular_low           v41  3 change(s)
+  regular               v2   0 change(s)
+  total                 5 change(s) applied
+  ──────────────────────────────────────────────────
+
+# just one part of it
+wa> /appstate regular_low
+
+# throw away what we hold and re-read everything
+wa> /appstate --snapshot
+```
+
+Changes that arrive on their own are printed as they land:
+
+```sh
+  pinned  919634847671@s.whatsapp.net
+  muted  120363000000000000@g.us  until 2026-08-01T09:00:00.000Z
+  contact  12345678901@s.whatsapp.net  → Ion
+```
+
+If your phone has not yet shared a sync key with this session, the command says
+so — leave WhatsApp open on the phone for a moment and try again.
 
 #### CLI Disappearing Messages
 
@@ -3453,8 +3608,10 @@ wa> /quit
 | `/unpin <jid>` | Unpin a chat |
 | `/archive <jid>` | Archive a chat |
 | `/unarchive <jid>` | Unarchive a chat |
-| `/star <jid> <msgId>` | Star a message |
-| `/unstar <jid> <msgId>` | Unstar a message |
+| `/star <jid> <msgId> [me]` | Star a message (`me` if you sent it) |
+| `/unstar <jid> <msgId> [me]` | Unstar a message |
+| `/appstate [collection...]` | Pull pins/archives/mutes/stars from your phone |
+| `/appstate --snapshot` | Re-read all app state from scratch |
 | `/ephemeral <jid> <seconds>` | Set disappearing messages timer for a chat |
 | `/ephemeral-default <seconds>` | Set global default ephemeral timer for new chats |
 | `/block <jid>` | Block a contact |

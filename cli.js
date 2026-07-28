@@ -416,8 +416,10 @@ const HELP = `
     /unpin     <jid>                         unpin chat
     /archive   <jid>                         archive chat
     /unarchive <jid>                         unarchive chat
-    /star      <jid> <msgId>                 star a message
-    /unstar    <jid> <msgId>                 unstar a message
+    /star      <jid> <msgId> [me]            star a message ("me" if you sent it)
+    /unstar    <jid> <msgId> [me]            unstar a message
+    /appstate  [collection...]               pull pins/archives/mutes/stars from your phone
+    /appstate  --snapshot                    re-read all of it from scratch
     /ephemeral         <jid> <seconds>        set disappearing timer for chat
     /ephemeral-default <seconds>             set default timer for ALL new chats
     /block     <jid>                         block contact
@@ -564,6 +566,30 @@ function attachEvents(client) {
     if (u.subject)      kv('subject', u.subject);
     kv('time',         new Date(u.timestamp * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ''));
     out('');
+    _rl && (_rl.resume(), _rl.prompt(true));
+  });
+
+  // Changes made on the phone or another linked device. `remote` marks them as
+  // somebody else's doing — our own calls emit the same events without it.
+  const chatChange = (label) => (u) => {
+    if (!u || !u.remote) return;
+    _rl && _rl.pause();
+    out('  ' + label(u));
+    _rl && (_rl.resume(), _rl.prompt(true));
+  };
+  client.on('chat_pinned',    chatChange(u => (u.pinned ? 'pinned' : 'unpinned') + '  ' + u.jid));
+  client.on('chat_archived',  chatChange(u => (u.archived ? 'archived' : 'unarchived') + '  ' + u.jid));
+  client.on('chat_read',      chatChange(u => 'marked ' + (u.read ? 'read' : 'unread') + '  ' + u.jid));
+  client.on('chat_muted',     chatChange(u => (u.muted ? 'muted' : 'unmuted') + '  ' + u.jid +
+    (u.muted && u.until > 0 ? '  until ' + new Date(u.until).toISOString() : '')));
+  client.on('message_starred', chatChange(u =>
+    (u.starred ? 'starred' : 'unstarred') + '  ' + u.msgId + '  in ' + u.chatJid));
+  client.on('contact_update',  chatChange(u => 'contact  ' + u.jid + (u.name ? '  → ' + u.name : '')));
+  client.on('push_name_update', chatChange(u => 'your name is now  ' + u.name));
+
+  client.on('app_state_key_missing', (e) => {
+    _rl && _rl.pause();
+    out('  app state: waiting for a sync key from your phone (' + e.collection + ')');
     _rl && (_rl.resume(), _rl.prompt(true));
   });
 
@@ -1372,10 +1398,34 @@ async function handleLine(line) {
         out('marked read');
         break;
 
+      case '/appstate': {
+        requireConn();
+        const snapshot = p.includes('--snapshot');
+        const names    = p.slice(1).filter(a => a !== '--snapshot');
+        out('syncing app state' + (snapshot ? ' from scratch' : '') + '...');
+        const r = await _client.syncAppState(names.length ? names : null, { snapshot });
+        if (r.waitingForKeys) {
+          out('  your phone has not shared a sync key with this session yet —');
+          out('  open WhatsApp on the phone and leave it connected for a moment');
+          break;
+        }
+        hr();
+        for (const [name, info] of Object.entries(r.collections)) {
+          if (info.waitingForKey) { kv(name, 'waiting for key ' + info.waitingForKey); continue; }
+          kv(name, 'v' + info.version + '  ' + info.applied + ' change(s)' +
+            (info.snapshot ? '  (full re-read)' : '') +
+            (info.skipped ? '  ' + info.skipped + ' unreadable' : '') +
+            (info.macOk === false ? '  — partial' : ''));
+        }
+        kv('total', r.applied + ' change(s) applied');
+        hr();
+        break;
+      }
+
       case '/unread':
         requireConn();
         if (!p[1]) { fail('usage: /unread <jid>'); break; }
-        _client.markChatUnread(normalizeJid(p[1]));
+        await _client.markChatUnread(normalizeJid(p[1]));
         out('marked unread');
         break;
 
@@ -1399,45 +1449,45 @@ async function handleLine(line) {
       case '/pin':
         requireConn();
         if (!p[1]) { fail('usage: /pin <jid>'); break; }
-        _client.pinChat(normalizeJid(p[1]));
+        await _client.pinChat(normalizeJid(p[1]));
         out('pinned');
         break;
 
       case '/unpin':
         requireConn();
         if (!p[1]) { fail('usage: /unpin <jid>'); break; }
-        _client.unpinChat(normalizeJid(p[1]));
+        await _client.unpinChat(normalizeJid(p[1]));
         out('unpinned');
         break;
 
       case '/archive':
         requireConn();
         if (!p[1]) { fail('usage: /archive <jid>'); break; }
-        _client.archiveChat(normalizeJid(p[1]));
+        await _client.archiveChat(normalizeJid(p[1]));
         out('archived');
         break;
 
       case '/unarchive':
         requireConn();
         if (!p[1]) { fail('usage: /unarchive <jid>'); break; }
-        _client.unarchiveChat(normalizeJid(p[1]));
+        await _client.unarchiveChat(normalizeJid(p[1]));
         out('unarchived');
         break;
 
       case '/star': {
         requireConn();
-        const [, jR, msgId] = p;
-        if (!jR || !msgId) { fail('usage: /star <jid> <msgId>'); break; }
-        _client.starMessage(msgId, normalizeJid(jR));
+        const [, jR, msgId, mine] = p;
+        if (!jR || !msgId) { fail('usage: /star <jid> <msgId> [me]'); break; }
+        await _client.starMessage(msgId, normalizeJid(jR), mine === 'me');
         out('starred');
         break;
       }
 
       case '/unstar': {
         requireConn();
-        const [, jR, msgId] = p;
-        if (!jR || !msgId) { fail('usage: /unstar <jid> <msgId>'); break; }
-        _client.unstarMessage(msgId, normalizeJid(jR));
+        const [, jR, msgId, mine] = p;
+        if (!jR || !msgId) { fail('usage: /unstar <jid> <msgId> [me]'); break; }
+        await _client.unstarMessage(msgId, normalizeJid(jR), mine === 'me');
         out('unstarred');
         break;
       }

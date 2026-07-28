@@ -12,6 +12,9 @@ const { DeviceManager } = require('./lib/DeviceManager');
 const { encryptMedia, decryptMedia, uploadMedia, downloadMedia } = require('./lib/MediaService');
 const { MessageSender, makeJid, generateMessageId } = require('./lib/messages/MessageSender');
 const { GroupParticipantResult, GroupJoinRequest } = require('./lib/GroupParticipant');
+const { AppStateStore, COLLECTIONS: APP_STATE_COLLECTIONS } = require('./lib/appstate/AppStateStore');
+const AppStateSync = require('./lib/appstate/AppStateSync');
+const { PATCH_INTEGRITY: LT_HASH } = require('./lib/appstate/LTHash');
 const {
   makeCacheableSignalKeyStore,
   addTransactionCapability,
@@ -102,6 +105,11 @@ module.exports = {
   // Group results
   GroupParticipantResult,
   GroupJoinRequest,
+  // App state
+  AppStateStore,
+  AppStateSync,
+  APP_STATE_COLLECTIONS,
+  LT_HASH,
   // Auth utilities
   makeCacheableSignalKeyStore,
   addTransactionCapability,
