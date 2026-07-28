@@ -300,6 +300,13 @@ function participantLine(p) {
   return p.jid + pn + role;
 }
 
+// A chat setting either reached app state — and so every other device — or it
+// did not, and stayed here. Saying which costs one word and saves the user
+// wondering why their phone did not follow.
+function chatResult(label, synced) {
+  return label + (synced ? '' : '  (this session only — no app state key)');
+}
+
 function printParticipantResults(verb, results) {
   const okList  = results.filter(r => r.ok);
   const badList = results.filter(r => !r.ok);
@@ -1405,8 +1412,11 @@ async function handleLine(line) {
         out('syncing app state' + (snapshot ? ' from scratch' : '') + '...');
         const r = await _client.syncAppState(names.length ? names : null, { snapshot });
         if (r.waitingForKeys) {
-          out('  your phone has not shared a sync key with this session yet —');
-          out('  open WhatsApp on the phone and leave it connected for a moment');
+          out('  no app state key for this session.');
+          out('  On a linked (pairing-code) session the key comes from your phone —');
+          out('  open WhatsApp there and leave it connected for a moment.');
+          out('  On an SMS session this device IS the primary, so there is no app');
+          out('  state to read unless you have linked a companion to it.');
           break;
         }
         hr();
@@ -1425,8 +1435,7 @@ async function handleLine(line) {
       case '/unread':
         requireConn();
         if (!p[1]) { fail('usage: /unread <jid>'); break; }
-        await _client.markChatUnread(normalizeJid(p[1]));
-        out('marked unread');
+        out(chatResult('marked unread', await _client.markChatUnread(normalizeJid(p[1]))));
         break;
 
       case '/mute': {
@@ -1434,52 +1443,45 @@ async function handleLine(line) {
         const jid = normalizeJid(p[1]);
         if (!jid) { fail('usage: /mute <jid> [minutes]'); break; }
         const ms = p[2] ? parseInt(p[2], 10) * 60000 : 0;
-        await _client.muteChat(jid, ms);
-        out('muted  ' + jid);
+        out(chatResult('muted  ' + jid, await _client.muteChat(jid, ms)));
         break;
       }
 
       case '/unmute':
         requireConn();
         if (!p[1]) { fail('usage: /unmute <jid>'); break; }
-        await _client.unmuteChat(normalizeJid(p[1]));
-        out('unmuted');
+        out(chatResult('unmuted', await _client.unmuteChat(normalizeJid(p[1]))));
         break;
 
       case '/pin':
         requireConn();
         if (!p[1]) { fail('usage: /pin <jid>'); break; }
-        await _client.pinChat(normalizeJid(p[1]));
-        out('pinned');
+        out(chatResult('pinned', await _client.pinChat(normalizeJid(p[1]))));
         break;
 
       case '/unpin':
         requireConn();
         if (!p[1]) { fail('usage: /unpin <jid>'); break; }
-        await _client.unpinChat(normalizeJid(p[1]));
-        out('unpinned');
+        out(chatResult('unpinned', await _client.unpinChat(normalizeJid(p[1]))));
         break;
 
       case '/archive':
         requireConn();
         if (!p[1]) { fail('usage: /archive <jid>'); break; }
-        await _client.archiveChat(normalizeJid(p[1]));
-        out('archived');
+        out(chatResult('archived', await _client.archiveChat(normalizeJid(p[1]))));
         break;
 
       case '/unarchive':
         requireConn();
         if (!p[1]) { fail('usage: /unarchive <jid>'); break; }
-        await _client.unarchiveChat(normalizeJid(p[1]));
-        out('unarchived');
+        out(chatResult('unarchived', await _client.unarchiveChat(normalizeJid(p[1]))));
         break;
 
       case '/star': {
         requireConn();
         const [, jR, msgId, mine] = p;
         if (!jR || !msgId) { fail('usage: /star <jid> <msgId> [me]'); break; }
-        await _client.starMessage(msgId, normalizeJid(jR), mine === 'me');
-        out('starred');
+        out(chatResult('starred', await _client.starMessage(msgId, normalizeJid(jR), mine === 'me')));
         break;
       }
 
@@ -1487,8 +1489,7 @@ async function handleLine(line) {
         requireConn();
         const [, jR, msgId, mine] = p;
         if (!jR || !msgId) { fail('usage: /unstar <jid> <msgId> [me]'); break; }
-        await _client.unstarMessage(msgId, normalizeJid(jR), mine === 'me');
-        out('unstarred');
+        out(chatResult('unstarred', await _client.unstarMessage(msgId, normalizeJid(jR), mine === 'me')));
         break;
       }
 

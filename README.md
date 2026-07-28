@@ -1099,13 +1099,13 @@ connect()
 | `group_update` | `{ type, groupJid, actor, participants, subject, timestamp }` | Member added / removed / promoted / demoted, subject or settings changed |
 | `notification` | node object | Group or contact update notification |
 | `call` | `{ from }` | Incoming call event |
-| `chat_read` | `{ jid, read, remote? }` | Chat marked read (`read: true`) or unread (`read: false`) |
-| `chat_muted` | `{ jid, muted, until, remote? }` | Chat muted or unmuted; `until` is epoch ms (−1 = indefinite) |
-| `chat_pinned` | `{ jid, pinned, remote? }` | Chat pinned or unpinned |
+| `chat_read` | `{ jid, read, remote?, synced? }` | Chat marked read (`read: true`) or unread (`read: false`) |
+| `chat_muted` | `{ jid, muted, until, remote?, synced? }` | Chat muted or unmuted; `until` is epoch ms (−1 = indefinite) |
+| `chat_pinned` | `{ jid, pinned, remote?, synced? }` | Chat pinned or unpinned |
 | `blocklist` | `{ action, dhash, prevDhash, changes }` | Block list changed on another device; `changes` is `[{ jid, action }]` |
 | `privacy_settings` | `{ changes, settings }` | Privacy settings changed on another device |
-| `chat_archived` | `{ jid, archived, remote? }` | Chat archived or unarchived |
-| `message_starred` | `{ msgId, chatJid, starred, fromMe?, remote? }` | Message starred or unstarred |
+| `chat_archived` | `{ jid, archived, remote?, synced? }` | Chat archived or unarchived |
+| `message_starred` | `{ msgId, chatJid, starred, fromMe?, remote?, synced? }` | Message starred or unstarred |
 | `chat_removed` | `{ jid, kind, remote }` | A chat was cleared or deleted on another device |
 | `contact_update` | `{ jid, name, firstName, lid, username, removed, remote }` | A contact was renamed or removed elsewhere |
 | `push_name_update` | `{ name, remote }` | Your own display name changed on another device |
@@ -1114,8 +1114,9 @@ connect()
 | `app_state_key_missing` | `{ collection, keyId }` | App state cannot be read until your phone shares this key |
 
 `remote: true` on a chat event means the change was made on your phone or another
-linked device rather than by this session. Your own calls emit the same events
-without it.
+linked device rather than by this session. Your own calls carry `synced` instead,
+saying whether the change reached app state — see
+[Modifying Chats](#modifying-chats).
 | `stream_error` | `{ reason }` | Server sent a fatal stream error |
 | `decrypt_error` | `{ id, from, participant, err }` | Failed to decrypt an incoming message |
 | `session_refresh` | `{ node }` | Late re-authentication success; Signal session refreshed |
@@ -1828,15 +1829,37 @@ WhatsApp's own synchronised settings store — the same one your phone writes to
 so a change made here shows up on the phone and on every other linked device,
 and survives reinstalling.
 
-Each of these sends a patch and waits for the server to accept it. They are all
-`async`, they throw if the server refuses, and the local view only moves once the
-change is actually stored.
+Each of these is `async`, sends a patch, and waits for the server to accept it.
+The local view only moves once the change is actually stored, and they throw if
+the server refuses.
+
+They return a boolean: **whether the change reached app state**, and so whether
+other devices will see it.
+
+```js
+const synced = await client.pinChat('919634847671@s.whatsapp.net')
+if (!synced) console.log('pinned here, but your phone will not know')
+```
 
 > [!IMPORTANT]
-> App state is encrypted under a key your **primary device** shares with this
-> session. Until it has, these calls throw and `syncAppState()` reports
-> `waitingForKeys`. The key arrives on its own shortly after linking — open
-> WhatsApp on the phone and leave it connected for a moment.
+> **App state needs a key, and where that key comes from depends on how you
+> connected.**
+>
+> A **linked session** (pairing code) is a companion. Your phone shares an app
+> state key with it automatically, shortly after linking — so everything on this
+> page works, in both directions.
+>
+> An **SMS session** *is* the primary device. Nobody shares a key with it,
+> because it is the device that would create one. Unless you have linked a
+> companion to it, there is no app state to read or write.
+>
+> Check with `client.canSyncAppState()`.
+>
+> When there is no key, these calls **do not throw**. `muteChat`, `unmuteChat`
+> and `markChatRead` fall back to the request a primary device sends for itself,
+> which is what this library did before app state existed. `pinChat`,
+> `archiveChat` and `starMessage` have no such request, so they update this
+> session only. Either way the return value is `false`, which is how you tell.
 
 ### Archive / Unarchive a Chat
 
@@ -1890,7 +1913,8 @@ for this session to pick up.
 
 `syncAppState()` fetches it. It is called for you whenever the server says
 something has moved — so with a listener attached you generally never need to
-call it by hand.
+call it by hand. On an SMS session with no companions linked there is nothing to
+fetch, and it reports `waitingForKeys` instead.
 
 ```js
 client.on('chat_pinned',     (u) => u.remote && console.log('pinned elsewhere:', u.jid))
@@ -1903,8 +1927,8 @@ client.on('push_name_update',(u) => console.log('your display name is now', u.na
 ```
 
 `remote: true` marks a change as somebody else's doing. Your own calls emit the
-same events without it, so a listener can tell the two apart and avoid echoing a
-change back where it came from.
+same events without it — they carry `synced` instead — so a listener can tell the
+two apart and avoid echoing a change back where it came from.
 
 To pull on demand:
 
@@ -3030,8 +3054,18 @@ wa> /contact about 919634847671@s.whatsapp.net
 
 ### Chat Management Commands
 
-These all write to app state, so a change here reaches your phone and every
-other linked device. They wait for the server and report an error if it refuses.
+On a **linked** (pairing-code) session these write to app state, so a change here
+reaches your phone and every other linked device.
+
+On an **SMS** session this device is the primary and there is no app state key
+unless you have linked a companion to it. `/mute`, `/unmute` and `/read` still
+send the request a primary makes for itself; `/pin`, `/archive` and `/star`
+update this session only. The command says which happened:
+
+```sh
+wa> /pin 919634847671@s.whatsapp.net
+pinned  (this session only — no app state key)
+```
 
 #### Mark Read / Unread
 
