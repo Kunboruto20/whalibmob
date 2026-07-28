@@ -292,6 +292,14 @@ const PARTICIPANT_ERRORS = {
   500: 'server error'
 };
 
+// A participant, with the phone number behind their LID when the server told
+// us one — a bare LID says nothing about who the person is.
+function participantLine(p) {
+  const role = p.role && p.role !== 'member' ? '  [' + p.role + ']' : '';
+  const pn   = (p.phoneNumber && p.phoneNumber !== p.jid) ? '  (' + p.phoneNumber + ')' : '';
+  return p.jid + pn + role;
+}
+
 function printParticipantResults(verb, results) {
   const okList  = results.filter(r => r.ok);
   const badList = results.filter(r => !r.ok);
@@ -1581,10 +1589,7 @@ async function handleLine(line) {
           kv('created',     r.creation ? new Date(r.creation * 1000).toISOString() : '—');
           kv('description', r.description || '—');
           kv('participants', '(' + r.participants.length + ')');
-          for (const pt of r.participants) {
-            const role = pt.role !== 'member' ? '  [' + pt.role + ']' : '';
-            out('    ' + pt.jid + role);
-          }
+          for (const pt of r.participants) out('    ' + participantLine(pt));
           hr();
         }
         else if (sub === 'meta') {
@@ -1606,12 +1611,13 @@ async function handleLine(line) {
                                : r.memberAddMode === 'all_member_add' ? 'any member' : '—');
           if (r.isCommunity)   kv('community', 'yes');
           if (r.linkedParent)  kv('part of',   r.linkedParent);
+          // A suspended group answers every send with a refusal and nothing
+          // else, so it has to be said out loud rather than left to be guessed.
+          if (r.isSuspended)   kv('suspended',  'yes — this group has been taken down');
+          if (r.isIncognito)   kv('incognito',  'yes — phone numbers are hidden');
           kv('size',          String(r.size));
           kv('participants', '(' + r.participants.length + ')');
-          for (const p of r.participants) {
-            const role = p.role !== 'member' ? '  [' + p.role + ']' : '';
-            out('    ' + p.jid + role);
-          }
+          for (const p of r.participants) out('    ' + participantLine(p));
           hr();
         }
         else if (sub === 'participants') {
@@ -1620,10 +1626,7 @@ async function handleLine(line) {
           const r = await _client.getGroupMetadata(gj);
           if (!r) { out('  no data'); break; }
           out('  ' + r.subject + '  (' + r.participants.length + ' participants)');
-          for (const pt of r.participants) {
-            const role = pt.role !== 'member' ? '  [' + pt.role + ']' : '';
-            out('    ' + pt.jid + role);
-          }
+          for (const pt of r.participants) out('    ' + participantLine(pt));
         }
         else if (sub === 'photo') {
           const gj   = asGroupJid(p[2]);
@@ -1746,10 +1749,7 @@ async function handleLine(line) {
           kv('admins only send', g.onlyAdminsSend ? 'yes' : 'no');
           kv('admins only edit', g.onlyAdminsEdit ? 'yes' : 'no');
           kv('participants', '(' + g.participants.length + ')');
-          for (const pt of g.participants) {
-            const role = pt.role !== 'member' ? '  [' + pt.role + ']' : '';
-            out('    ' + pt.jid + role);
-          }
+          for (const pt of g.participants) out('    ' + participantLine(pt));
         }
         hr();
         break;

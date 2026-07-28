@@ -121,7 +121,7 @@ npm install -g whalibmob
     - [Personal Invitations (CLI)](#cli-personal-invitations)
     - [Group Settings](#group-settings)
   - [Community Commands](#community-commands-cli)
-  - [Newsletter / Channel Commands](#newsletter-channel-commands)
+  - [Newsletter / Channel Commands](#newsletter--channel-commands)
   - [Business Profile Command](#business-profile-command-cli)
   - [Registration Commands (in-shell)](#registration-commands-in-shell)
   - [Connection Commands (in-shell)](#connection-commands-in-shell)
@@ -3201,10 +3201,21 @@ wa> /group meta 120363000000000000@g.us
   who can add           admins only
   size                  3
   participants          (3)
-    919634847671@s.whatsapp.net  [admin]
-    12345678901@s.whatsapp.net
+    112713111982325@lid  (919634847671@s.whatsapp.net)  [admin]
+    229063524376784@lid  (12345678901@s.whatsapp.net)
     98765432109@s.whatsapp.net
 ```
+
+A participant addressed by LID is shown with the phone number behind it when
+the server sends one. Two more lines appear only when they apply:
+
+```sh
+  suspended             yes — this group has been taken down
+  incognito             yes — phone numbers are hidden
+```
+
+A suspended group answers every send with a refusal and nothing else, so it is
+worth checking here before hunting for the cause elsewhere.
 
 #### List All Groups
 
@@ -3224,9 +3235,9 @@ Lists all participants of a group with their roles:
 
 ```sh
 wa> /group participants 120363000000000000@g.us
-  participants (3)
-    919634847671@s.whatsapp.net  [admin]
-    12345678901@s.whatsapp.net
+  My Group  (3 participants)
+    112713111982325@lid  (919634847671@s.whatsapp.net)  [admin]
+    229063524376784@lid  (12345678901@s.whatsapp.net)
     98765432109@s.whatsapp.net
 ```
 
