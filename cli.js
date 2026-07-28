@@ -1482,7 +1482,31 @@ async function handleLine(line) {
         requireConn();
         const watch = !p.includes('--once');
         out('checking account restriction...');
-        const st = await _client.fetchReachoutTimelock();
+        let st;
+        try {
+          st = await _client.fetchReachoutTimelock();
+        } catch (e) {
+          fail(e.message);
+          if (e.mexFormat) {
+            out('');
+            out('  The query itself worked — your server encodes this answer in a binary');
+            out('  format this library cannot read yet, so the countdown cannot be polled.');
+            out('');
+            out('  You will still be told about a restriction: the server announces one when');
+            out('  it starts and when it lifts, and those announcements do arrive readable.');
+            out('  Leave the session connected and watch for:');
+            out('    ACCOUNT RESTRICTED — <reason>, HH:MM:SS remaining');
+            out('');
+            out('  The payload above is worth keeping. Run this again while the account IS');
+            out('  restricted: the two payloads differ only where the answer differs, which');
+            out('  is what makes this format readable without its schema.');
+          } else {
+            out('');
+            out('  If the reply is sketched above, paste that line when reporting this —');
+            out('  it is the server\'s actual answer. Run with --debug for the raw stanza.');
+          }
+          break;
+        }
         hr();
         if (!st.active) {
           kv('status', 'not restricted — you can start new chats');
