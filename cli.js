@@ -1516,19 +1516,19 @@ async function handleLine(line) {
           st = await _client.fetchReachoutTimelock();
         } catch (e) {
           fail(e.message);
-          if (e.mexFormat) {
+          if (e.mexDecoded !== undefined) {
             out('');
-            out('  The query itself worked — your server encodes this answer in a binary');
-            out('  format this library cannot read yet, so the countdown cannot be polled.');
+            out('  The reply was read successfully — it simply contains no restriction');
+            out('  data. This query returns nothing usable for your account.');
             out('');
             out('  You will still be told about a restriction: the server announces one when');
-            out('  it starts and when it lifts, and those announcements do arrive readable.');
+            out('  it starts and when it lifts, and those announcements carry the countdown.');
             out('  Leave the session connected and watch for:');
             out('    ACCOUNT RESTRICTED — <reason>, HH:MM:SS remaining');
+          } else if (e.mexFormat) {
             out('');
-            out('  The payload above is worth keeping. Run this again while the account IS');
-            out('  restricted: the two payloads differ only where the answer differs, which');
-            out('  is what makes this format readable without its schema.');
+            out('  The query worked, but the reply is in an encoding that could not be');
+            out('  decoded. Paste the bytes above when reporting this.');
           } else {
             out('');
             out('  If the reply is sketched above, paste that line when reporting this —');

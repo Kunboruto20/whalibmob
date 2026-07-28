@@ -1449,24 +1449,26 @@ client.on('account_restriction', (r) => {
 > client-side shortens it; the only thing that helps is not sending more
 > unanswered first messages while it is on.
 
-> [!WARNING]
-> **Some servers answer this query in Argo, not JSON.** Argo is Meta's binary
-> GraphQL encoding, and this library cannot read it. When that happens
-> `fetchReachoutTimelock()` throws with `err.mexFormat === 'argo'` and the raw
-> bytes on `err.mexPayload`.
+> [!NOTE]
+> **This transport answers in one of two encodings**, and the reply says which:
+> JSON, or Argo — Meta's compact binary encoding for GraphQL. Both are read.
+> WhatsApp sends Argo with its self-describing flag set, so it carries its own
+> field names and decodes without the GraphQL schema the query was written
+> against.
 >
-> Do not add a `format` attribute to the query in the hope of getting JSON — it
+> Do not add a `format` attribute to the query in the hope of steering this — it
 > was tried against a live server, which responded by dropping the stanza
-> entirely. An answer in a format you cannot read still beats no answer.
+> entirely and answering nothing.
 >
-> It never guesses. Reporting "not restricted" from an answer nobody decoded
-> would have you send more messages and make the restriction longer, so an
-> unreadable reply is an error rather than an all-clear.
+> Some accounts get an answer with no restriction data in it at all — a bare
+> `false` rather than a result. That throws, with the decoded value on
+> `err.mexDecoded`, rather than being reported as "not restricted": an
+> all-clear invented from an answer that never said so would have you send more
+> messages and lengthen the very restriction you were asking about.
 >
-> The `account_restriction` event is unaffected: the server *announces* a
-> restriction starting and lifting, and those announcements arrive as readable
-> JSON on a different route. Keep a listener attached and you will still be
-> told, with the countdown, without ever calling the query.
+> The `account_restriction` event does not depend on any of this. The server
+> *announces* a restriction starting and lifting, and those announcements carry
+> the countdown. Keep a listener attached and you are told either way.
 
 ### What Is Automatic vs What You Need to Do
 
@@ -3284,19 +3286,19 @@ wa> /restriction --demo
 `--demo 90` uses ninety seconds instead of the default five hours, which is
 short enough to watch it reach zero and stop on its own.
 
-If your server encodes this answer in Argo, the command says so rather than
-guessing — and points you at the announcements, which stay readable:
+Some accounts get a reply that decodes cleanly but holds no restriction data.
+The command says that, rather than reading it as an all-clear:
 
 ```sh
 wa> /restriction
 checking account restriction...
-error: mex query 23983697327930364: the server answered in "argo" rather than JSON, which this library cannot read (10 bytes: 0402300c000002010303)
+error: mex query 23983697327930364: the server answered false rather than a result — this query returns no data for this account
 
-  The query itself worked — your server encodes this answer in a binary
-  format this library cannot read yet, so the countdown cannot be polled.
+  The reply was read successfully — it simply contains no restriction
+  data. This query returns nothing usable for your account.
 
   You will still be told about a restriction: the server announces one when
-  it starts and when it lifts, and those announcements do arrive readable.
+  it starts and when it lifts, and those announcements carry the countdown.
 ```
 
 An account that is fine says so and returns immediately:
