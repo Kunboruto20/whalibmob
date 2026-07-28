@@ -600,6 +600,13 @@ function attachEvents(client) {
     _rl && (_rl.resume(), _rl.prompt(true));
   });
 
+  client.on('app_state_keys', (e) => {
+    _rl && _rl.pause();
+    out('  app state: received ' + e.keys.length + ' sync key(s) from your phone —' +
+        ' pins, archives, mutes and stars will sync from now on');
+    _rl && (_rl.resume(), _rl.prompt(true));
+  });
+
   client.on('decrypt_error', (e) => {
     _rl && _rl.pause();
     out('  DECRYPT_ERROR  from ' + e.from + '  id ' + e.id + '  : ' + (e.err && e.err.message));
