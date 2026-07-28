@@ -3266,6 +3266,24 @@ For the numbers without the countdown:
 wa> /restriction --once
 ```
 
+To check the display without waiting to be restricted, `--demo` counts down a
+made-up restriction. Nothing is sent, nothing is asked of the server, and
+nothing is left behind when it ends:
+
+```sh
+wa> /restriction --demo
+  ──────────────────────────────────────────────────
+  status                RESTRICTED  (demo — not real)
+  reason                too many people you messaged blocked or reported you
+  remaining             05:00:00
+  ──────────────────────────────────────────────────
+  press any key to stop watching
+  restricted — 04:59:57 remaining
+```
+
+`--demo 90` uses ninety seconds instead of the default five hours, which is
+short enough to watch it reach zero and stop on its own.
+
 If your server encodes this answer in Argo, the command says so rather than
 guessing — and points you at the announcements, which stay readable:
 
@@ -3798,6 +3816,7 @@ wa> /quit
 | `/appstate --snapshot` | Re-read all app state from scratch |
 | `/restriction` | Account restriction status with a live countdown |
 | `/restriction --once` | Restriction status without the countdown |
+| `/restriction --demo [seconds]` | Fake countdown, to check the display |
 | `/limit` | Alias for `/restriction` |
 | `/ephemeral <jid> <seconds>` | Set disappearing messages timer for a chat |
 | `/ephemeral-default <seconds>` | Set global default ephemeral timer for new chats |

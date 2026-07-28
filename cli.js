@@ -478,6 +478,7 @@ const HELP = `
     /appstate  --snapshot                    re-read all of it from scratch
     /restriction                             account restriction + live countdown
     /restriction --once                      just the numbers, no countdown
+    /restriction --demo [seconds]            fake countdown to check the display
     /ephemeral         <jid> <seconds>        set disappearing timer for chat
     /ephemeral-default <seconds>             set default timer for ALL new chats
     /block     <jid>                         block contact
@@ -1479,6 +1480,34 @@ async function handleLine(line) {
 
       case '/restriction':
       case '/limit': {
+        // --demo feeds a made-up restriction into this session and counts it
+        // down, so the display can be checked without waiting to be restricted.
+        // Nothing is sent and nothing is asked of the server.
+        const demoAt = p.indexOf('--demo');
+        if (demoAt !== -1) {
+          const secs = parseInt(p[demoAt + 1], 10) || 5 * 3600;
+          const { parseTimelockPayload } = require('./lib/ReachoutTimelock');
+          if (!_client) { fail('/restriction --demo needs a client; use /connect first'); break; }
+          const fake = parseTimelockPayload({
+            is_active: true,
+            time_enforcement_ends: String(Math.floor(Date.now() / 1000) + secs),
+            enforcement_type: 'BIZ_QUALITY'
+          });
+          const shown = _client._setReachoutTimelock(fake, 'demo');
+          hr();
+          kv('status',    'RESTRICTED  (demo — not real)');
+          kv('reason',    shown.reason);
+          kv('remaining', shown.remaining);
+          hr();
+          _rl && _rl.pause();
+          await countdown(_client, shown);
+          _rl && _rl.resume();
+          // Leave nothing behind that a later check could mistake for real.
+          _client._reachoutTimelock = null;
+          out('  demo over — nothing was recorded');
+          break;
+        }
+
         requireConn();
         const watch = !p.includes('--once');
         out('checking account restriction...');
