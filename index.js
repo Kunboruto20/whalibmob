@@ -14,6 +14,7 @@ const { MessageSender, makeJid, generateMessageId } = require('./lib/messages/Me
 const { GroupParticipantResult, GroupJoinRequest } = require('./lib/GroupParticipant');
 const { AppStateStore, COLLECTIONS: APP_STATE_COLLECTIONS } = require('./lib/appstate/AppStateStore');
 const ReachoutTimelock = require('./lib/ReachoutTimelock');
+const { decodeArgo, tryDecodeArgo } = require('./lib/argo/ArgoDecoder');
 const AppStateSync = require('./lib/appstate/AppStateSync');
 const { PATCH_INTEGRITY: LT_HASH } = require('./lib/appstate/LTHash');
 const {
@@ -113,6 +114,9 @@ module.exports = {
   LT_HASH,
   // Account restriction
   ReachoutTimelock,
+  // Argo (the binary encoding the GraphQL transport may answer in)
+  decodeArgo,
+  tryDecodeArgo,
   // Auth utilities
   makeCacheableSignalKeyStore,
   addTransactionCapability,
