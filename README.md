@@ -1112,6 +1112,7 @@ connect()
 | `app_state_sync` | `{ collections, applied }` | An app-state sync finished; see [Reading Changes Made Elsewhere](#app-state-sync) |
 | `app_state_mutation` | `{ collection, index, action, removed }` | An app-state change this library does not model |
 | `app_state_key_missing` | `{ collection, keyId }` | App state cannot be read until your phone shares this key |
+| `app_state_keys` | `{ keys }` | Your phone shared app-state sync keys; a sync starts automatically |
 
 `remote: true` on a chat event means the change was made on your phone or another
 linked device rather than by this session. Your own calls carry `synced` instead,
