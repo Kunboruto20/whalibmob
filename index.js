@@ -13,6 +13,7 @@ const { encryptMedia, decryptMedia, uploadMedia, downloadMedia } = require('./li
 const { MessageSender, makeJid, generateMessageId } = require('./lib/messages/MessageSender');
 const { GroupParticipantResult, GroupJoinRequest } = require('./lib/GroupParticipant');
 const { AppStateStore, COLLECTIONS: APP_STATE_COLLECTIONS } = require('./lib/appstate/AppStateStore');
+const ReachoutTimelock = require('./lib/ReachoutTimelock');
 const AppStateSync = require('./lib/appstate/AppStateSync');
 const { PATCH_INTEGRITY: LT_HASH } = require('./lib/appstate/LTHash');
 const {
@@ -110,6 +111,8 @@ module.exports = {
   AppStateSync,
   APP_STATE_COLLECTIONS,
   LT_HASH,
+  // Account restriction
+  ReachoutTimelock,
   // Auth utilities
   makeCacheableSignalKeyStore,
   addTransactionCapability,

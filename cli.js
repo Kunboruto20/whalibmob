@@ -303,6 +303,55 @@ function participantLine(p) {
 // A chat setting either reached app state — and so every other device — or it
 // did not, and stayed here. Saying which costs one word and saves the user
 // wondering why their phone did not follow.
+// A live HH:MM:SS countdown, redrawn in place once a second.
+//
+// The restriction's end is a fixed moment, so every tick recomputes from it
+// rather than decrementing a counter — a tick that arrives late, or a laptop
+// that slept, then shows the truth instead of drifting further behind.
+//
+// Returns a promise that settles when the time runs out or the user stops it.
+function countdown(client, initial) {
+  return new Promise((resolve) => {
+    const tty = process.stdout.isTTY;
+    let done  = false;
+
+    const finish = (why) => {
+      if (done) return;
+      done = true;
+      clearInterval(timer);
+      process.stdin.removeListener('data', onKey);
+      if (tty) process.stdout.write('\n');
+      resolve(why);
+    };
+
+    const draw = () => {
+      const s = client.getReachoutTimelock();
+      if (!s.active) { 
+        if (tty) process.stdout.write('\r\x1b[2K');
+        out('  the restriction has been lifted — you can start new chats again');
+        return finish('lifted');
+      }
+      const line = '  restricted — ' + s.remaining + ' remaining' +
+        (s.expiryUnknown ? '  (server did not give an end time; re-checking)' : '');
+      if (tty) process.stdout.write('\r\x1b[2K' + line);
+      else     out(line);
+    };
+
+    // Any keypress stops the countdown; the restriction is unaffected either
+    // way, so there is nothing to confirm.
+    const onKey = () => finish('stopped');
+    if (tty && process.stdin.isTTY) {
+      process.stdin.resume();
+      process.stdin.once('data', onKey);
+    }
+
+    if (tty) out('  press any key to stop watching');
+    void initial;
+    draw();
+    const timer = setInterval(draw, 1000);
+  });
+}
+
 function chatResult(label, synced) {
   return label + (synced ? '' : '  (this session only — no app state key)');
 }
@@ -427,6 +476,8 @@ const HELP = `
     /unstar    <jid> <msgId> [me]            unstar a message
     /appstate  [collection...]               pull pins/archives/mutes/stars from your phone
     /appstate  --snapshot                    re-read all of it from scratch
+    /restriction                             account restriction + live countdown
+    /restriction --once                      just the numbers, no countdown
     /ephemeral         <jid> <seconds>        set disappearing timer for chat
     /ephemeral-default <seconds>             set default timer for ALL new chats
     /block     <jid>                         block contact
@@ -597,6 +648,20 @@ function attachEvents(client) {
   client.on('app_state_key_missing', (e) => {
     _rl && _rl.pause();
     out('  app state: waiting for a sync key from your phone (' + e.collection + ')');
+    _rl && (_rl.resume(), _rl.prompt(true));
+  });
+
+  // The server announces a restriction starting and being lifted, so a session
+  // that is just sitting there still finds out.
+  client.on('account_restriction', (r) => {
+    if (r.source !== 'notification') return;
+    _rl && _rl.pause();
+    if (r.active) {
+      out('  ACCOUNT RESTRICTED — ' + r.reason + ', ' + r.remaining + ' remaining');
+      out('  run /restriction to watch the countdown');
+    } else {
+      out('  account restriction lifted — you can start new chats again');
+    }
     _rl && (_rl.resume(), _rl.prompt(true));
   });
 
@@ -1411,6 +1476,36 @@ async function handleLine(line) {
         await _client.markChatRead(normalizeJid(p[1]));
         out('marked read');
         break;
+
+      case '/restriction':
+      case '/limit': {
+        requireConn();
+        const watch = !p.includes('--once');
+        out('checking account restriction...');
+        const st = await _client.fetchReachoutTimelock();
+        hr();
+        if (!st.active) {
+          kv('status', 'not restricted — you can start new chats');
+          hr();
+          break;
+        }
+        kv('status',    'RESTRICTED');
+        kv('reason',    st.reason);
+        kv('type',      st.enforcementType);
+        kv('ends at',   st.endsAtDate ? st.endsAtDate.toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : 'unknown');
+        kv('remaining', st.remaining);
+        hr();
+        out('  New chats with people you have never messaged are refused with');
+        out('  error 463 until this expires. Existing conversations keep working,');
+        out('  and sending more only makes the restriction longer.');
+        out('');
+        if (watch) {
+          _rl && _rl.pause();
+          await countdown(_client, st);
+          _rl && _rl.resume();
+        }
+        break;
+      }
 
       case '/appstate': {
         requireConn();
