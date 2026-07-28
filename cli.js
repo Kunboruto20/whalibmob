@@ -1496,6 +1496,10 @@ async function handleLine(line) {
             out('  it starts and when it lifts, and those announcements do arrive readable.');
             out('  Leave the session connected and watch for:');
             out('    ACCOUNT RESTRICTED — <reason>, HH:MM:SS remaining');
+            out('');
+            out('  The payload above is worth keeping. Run this again while the account IS');
+            out('  restricted: the two payloads differ only where the answer differs, which');
+            out('  is what makes this format readable without its schema.');
           } else {
             out('');
             out('  If the reply is sketched above, paste that line when reporting this —');
