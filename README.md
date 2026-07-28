@@ -2234,6 +2234,7 @@ console.log(meta.subject, meta.participants.length + ' members')
   description:     'Group description here',
   descriptionId:   'DESC1',       // echoed back as `prev` on the next edit
   descriptionBy:   '919634847671@s.whatsapp.net',
+  descriptionByPn: '919634847671@s.whatsapp.net',
   descriptionTime: 1705315950,
   ephemeral:       86400,         // 0 when disappearing messages are off
   onlyAdminsSend:  false,
@@ -2242,7 +2243,18 @@ console.log(meta.subject, meta.participants.length + ' members')
   memberAddMode:   'admin_add',   // 'admin_add' | 'all_member_add' | null
   isCommunity:         false,
   isCommunityAnnounce: false,
+  defaultMembershipApprovalMode: null,   // communities only
   linkedParent:    null,          // the community this group belongs to
+  isIncognito:     false,         // members' phone numbers hidden from each other
+  isSuspended:     false,         // the group has been taken down
+  notify:          'My Group',
+  creatorPn:       '919634847671@s.whatsapp.net',
+  creatorUsername: null,
+  creatorCountry:  'IN',
+  subjectByPn:     '919634847671@s.whatsapp.net',
+  subjectByUsername: null,
+  participantVersion: 'PV1',      // bumped when the member list changes
+  announceVersion:    'AV1',      // bumped when the announce flag changes
   addressingMode:  'lid',         // 'lid' | 'pn'
   participants: [
     {
@@ -2252,7 +2264,8 @@ console.log(meta.subject, meta.participants.length + ' members')
       isSuperAdmin: false,
       phoneNumber:  '919634847671@s.whatsapp.net',
       lid:          '112713111982325@lid',
-      displayName:  null
+      displayName:  null,
+      username:     null
     }
   ]
 }
