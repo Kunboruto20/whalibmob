@@ -97,6 +97,7 @@ npm install -g whalibmob
     - [Pin / Unpin](#pin--unpin)
     - [Archive / Unarchive](#archive--unarchive)
     - [Star / Unstar a Message](#star--unstar-a-message-cli)
+    - [Sync App State (CLI)](#cli-app-state)
     - [Disappearing Messages](#cli-disappearing-messages)
     - [Default Disappearing Timer](#default-disappearing-timer)
     - [Block / Unblock](#block--unblock)
@@ -118,9 +119,10 @@ npm install -g whalibmob
     - [List Group Participants](#list-group-participants)
     - [Pending Join Requests](#pending-join-requests)
     - [Approve / Reject Join Requests](#approve--reject-join-requests)
+    - [Personal Invitations (CLI)](#cli-personal-invitations)
     - [Group Settings](#group-settings)
   - [Community Commands](#community-commands-cli)
-  - [Newsletter / Channel Commands](#newsletter-channel-commands)
+  - [Newsletter / Channel Commands](#newsletter--channel-commands)
   - [Business Profile Command](#business-profile-command-cli)
   - [Registration Commands (in-shell)](#registration-commands-in-shell)
   - [Connection Commands (in-shell)](#connection-commands-in-shell)
@@ -201,6 +203,7 @@ npm install -g whalibmob
     - [Mark a Chat Read / Unread](#mark-a-chat-read--unread)
     - [Pin / Unpin a Chat](#pin--unpin-a-chat)
     - [Star / Unstar a Message](#star--unstar-a-message)
+    - [Reading Changes Made Elsewhere](#app-state-sync)
     - [Disappearing Messages](#disappearing-messages)
   - [User Queries](#user-queries)
     - [Check If a Number Has WhatsApp](#check-if-a-number-has-whatsapp)
@@ -244,6 +247,7 @@ npm install -g whalibmob
     - [Query Metadata](#query-metadata)
     - [Get Request Join List](#get-request-join-list)
     - [Approve / Reject Request Join](#approve--reject-request-join)
+    - [Personal Invitations](#personal-invitations)
     - [Toggle Ephemeral in Group](#toggle-ephemeral-in-group)
 - [WhatsApp IDs](#whatsapp-ids)
 - [Transport](#transport)
@@ -549,6 +553,8 @@ History arrives in chunks over the first minute or so after linking, largest fir
 | `<phone>.web.signal.json` | Signal sessions and pre-keys for the linked device |
 | `<phone>.web.sk.json` | group SenderKeys |
 | `<phone>.web.tctoken.json` | privacy tokens |
+| `<phone>.web.appState.json` | app-state version and hash per collection |
+| `<phone>.appStateKeys.json` | app-state sync keys shared by the phone |
 | `<phone>.web.history.json` | synced chats, contacts, push names, LID↔PN mappings |
 | `<phone>.web.messages.json` | flat map of message id → message metadata |
 
@@ -988,7 +994,7 @@ try {
 
 ### `initAuthCreds`
 
-Creates a fresh credential store for the given phone number. Functionally equivalent to `createNewStore` but also initialises the Baileys-compatible extra fields that the library expects for account sync: `nextPreKeyId`, `firstUnuploadedPreKeyId`, `accountSyncCounter`, `accountSettings`, and `advSecretKey`.
+Creates a fresh credential store for the given phone number. Functionally equivalent to `createNewStore` but also initialises the extra fields the library expects for account sync: `nextPreKeyId`, `firstUnuploadedPreKeyId`, `accountSyncCounter`, `accountSettings`, and `advSecretKey`.
 
 ```js
 const { initAuthCreds, saveStore } = require('whalibmob')
@@ -1093,13 +1099,24 @@ connect()
 | `group_update` | `{ type, groupJid, actor, participants, subject, timestamp }` | Member added / removed / promoted / demoted, subject or settings changed |
 | `notification` | node object | Group or contact update notification |
 | `call` | `{ from }` | Incoming call event |
-| `chat_read` | `{ jid, read }` | Chat marked read (`read: true`) or unread (`read: false`) |
-| `chat_muted` | `{ jid, muted, until }` | Chat muted or unmuted; `until` is epoch ms (−1 = indefinite) |
-| `chat_pinned` | `{ jid, pinned }` | Chat pinned or unpinned |
+| `chat_read` | `{ jid, read, remote?, synced? }` | Chat marked read (`read: true`) or unread (`read: false`) |
+| `chat_muted` | `{ jid, muted, until, remote?, synced? }` | Chat muted or unmuted; `until` is epoch ms (−1 = indefinite) |
+| `chat_pinned` | `{ jid, pinned, remote?, synced? }` | Chat pinned or unpinned |
 | `blocklist` | `{ action, dhash, prevDhash, changes }` | Block list changed on another device; `changes` is `[{ jid, action }]` |
 | `privacy_settings` | `{ changes, settings }` | Privacy settings changed on another device |
-| `chat_archived` | `{ jid, archived }` | Chat archived or unarchived |
-| `message_starred` | `{ msgId, chatJid, starred }` | Message starred or unstarred |
+| `chat_archived` | `{ jid, archived, remote?, synced? }` | Chat archived or unarchived |
+| `message_starred` | `{ msgId, chatJid, starred, fromMe?, remote?, synced? }` | Message starred or unstarred |
+| `chat_removed` | `{ jid, kind, remote }` | A chat was cleared or deleted on another device |
+| `contact_update` | `{ jid, name, firstName, lid, username, removed, remote }` | A contact was renamed or removed elsewhere |
+| `push_name_update` | `{ name, remote }` | Your own display name changed on another device |
+| `app_state_sync` | `{ collections, applied }` | An app-state sync finished; see [Reading Changes Made Elsewhere](#app-state-sync) |
+| `app_state_mutation` | `{ collection, index, action, removed }` | An app-state change this library does not model |
+| `app_state_key_missing` | `{ collection, keyId }` | App state cannot be read until your phone shares this key |
+
+`remote: true` on a chat event means the change was made on your phone or another
+linked device rather than by this session. Your own calls carry `synced` instead,
+saying whether the change reached app state — see
+[Modifying Chats](#modifying-chats).
 | `stream_error` | `{ reason }` | Server sent a fatal stream error |
 | `decrypt_error` | `{ id, from, participant, err }` | Failed to decrypt an incoming message |
 | `session_refresh` | `{ node }` | Late re-authentication success; Signal session refreshed |
@@ -1160,6 +1177,10 @@ The `decoded` object shape per message type:
 
 // Contact (vCard)
 { type: 'contact', displayName: string, vcard: string }
+
+// Personal invitation into a group — see Personal Invitations
+{ type: 'groupInvite', groupJid: string, inviteCode: string, inviteExpiration: number,
+  groupName: string, jpegThumbnail: Buffer|null, caption: string, isCommunity: boolean }
 
 // Protocol (revoke, ephemeral, etc.)
 { type: 'protocol', subtype: string }
@@ -1269,7 +1290,8 @@ The library automatically writes these files to `sessionDir` per account. You do
 |---|---|
 | `<phone>.history.json` | Chats, contacts, push names, LID↔PN mappings, tcTokens |
 | `<phone>.messages.json` | Flat map of `msgId → message metadata` |
-| `<phone>.appStateKeys.json` | App-state sync keys (used for app-state patch decryption) |
+| `<phone>.appStateKeys.json` | App-state sync keys, shared by your primary device |
+| `<phone>.appState.json` | Per-collection app-state version, hash and index map |
 | `<phone>.tctoken.json` | Trusted-contact token store (tcToken per contact JID) |
 
 ### Reading the History Store
@@ -1380,6 +1402,9 @@ Token storage uses the **LID JID** of the contact (e.g. `112345678901234@lid`) a
 | Persist chats / contacts / push names | ✅ | Written to `<phone>.history.json` |
 | Persist message metadata | ✅ | Written to `<phone>.messages.json` |
 | Persist app-state sync keys | ✅ | Written to `<phone>.appStateKeys.json` |
+| Sync app state when the server says it changed | ✅ | Pins, archives, mutes, stars, contact names |
+| Verify app-state MACs and LT hash | ✅ | A collection that drifts is re-read from a snapshot |
+| Persist app-state versions across restarts | ✅ | Written to `<phone>.appState.json` |
 | Seed tcTokens into memory on connect | ✅ | Prevents error 463 on first send after reconnect |
 | Attach tcToken to every outbound DM | ✅ | |
 | Issue fresh tcTokens after each send | ✅ | Once per 7-day bucket per contact |
@@ -1422,115 +1447,64 @@ await client.init('919634847671')
 
 ## Receiving Media
 
-When a media message arrives, `msg.decoded` contains a CDN `url` and a `mediaKey`.
-The actual file is stored encrypted on WhatsApp's CDN and must be downloaded and decrypted.
-
-**Decryption uses two steps:**
-1. HKDF-SHA256 expands `mediaKey` into IV, cipher key, and MAC key.
-2. AES-256-CBC decrypts the ciphertext; a 10-byte HMAC-SHA256 MAC is verified first.
+When a media message arrives, `msg.decoded` carries the CDN location and the
+`mediaKey` the file is encrypted under. `client.downloadMedia()` fetches it and
+hands back the plaintext bytes:
 
 ```js
-const crypto = require('crypto')
-const https  = require('https')
-const http   = require('http')
-const fs     = require('fs')
-const path   = require('path')
+const fs = require('fs')
 
-// HKDF info strings per media type
-const MEDIA_HKDF_INFO = {
-  image:    'WhatsApp Image Keys',
-  video:    'WhatsApp Video Keys',
-  audio:    'WhatsApp Audio Keys',
-  voice:    'WhatsApp Audio Keys',
-  document: 'WhatsApp Document Keys',
-  sticker:  'WhatsApp Image Keys',
-}
+const EXT = { image: '.jpg', video: '.mp4', audio: '.ogg', voice: '.ogg',
+              sticker: '.webp', document: '' }
 
-function deriveMediaKeys(mediaKey, mediaType) {
-  const info     = Buffer.from(MEDIA_HKDF_INFO[mediaType] || 'WhatsApp Image Keys', 'utf8')
-  const expanded = Buffer.from(crypto.hkdfSync('sha256', mediaKey, Buffer.alloc(0), info, 112))
-  return {
-    iv:        expanded.slice(0,  16),
-    cipherKey: expanded.slice(16, 48),
-    macKey:    expanded.slice(48, 80),
-  }
-}
-
-function decryptMedia(encrypted, mediaKey, mediaType) {
-  const { iv, cipherKey, macKey } = deriveMediaKeys(mediaKey, mediaType)
-  const ciphertext = encrypted.slice(0, -10)
-  const fileMac    = encrypted.slice(-10)
-
-  // Verify MAC
-  const hmac     = crypto.createHmac('sha256', macKey)
-  hmac.update(iv)
-  hmac.update(ciphertext)
-  const computed = hmac.digest().slice(0, 10)
-  if (!computed.equals(fileMac)) throw new Error('MAC mismatch — corrupt file or wrong key')
-
-  // Decrypt
-  const decipher = crypto.createDecipheriv('aes-256-cbc', cipherKey, iv)
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()])
-}
-
-function downloadBuffer(url) {
-  return new Promise((resolve, reject) => {
-    const lib = url.startsWith('https') ? https : http
-    const req = lib.get(url, { headers: { 'User-Agent': 'WhatsApp/2.26.7.75 A' } }, res => {
-      if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)) }
-      const chunks = []
-      res.on('data',  c => chunks.push(c))
-      res.on('end',   () => resolve(Buffer.concat(chunks)))
-      res.on('error', reject)
-    })
-    req.on('error', reject)
-    req.setTimeout(30000, () => { req.destroy(); reject(new Error('timeout')) })
-  })
-}
-
-async function downloadAndDecrypt(msgId, mediaType, url, mediaKey, opts) {
-  const extensions = { image: '.jpg', video: '.mp4', audio: '.ogg', voice: '.ogg',
-                       document: '', sticker: '.webp' }
-  let ext = extensions[mediaType] || ''
-  if (mediaType === 'document' && opts && opts.fileName) ext = path.extname(opts.fileName) || '.bin'
-
-  const encrypted = await downloadBuffer(url)
-  const decrypted = decryptMedia(encrypted, mediaKey, mediaType)
-
-  const outPath = path.join('./media', msgId + ext)
-  fs.mkdirSync('./media', { recursive: true })
-  fs.writeFileSync(outPath, decrypted)
-  return outPath
-}
-```
-
-**Using it in the `message` event:**
-
-```js
-const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'voice', 'document', 'sticker'])
-
-client.on('message', async msg => {
+client.on('message', async (msg) => {
   const d = msg.decoded
-  if (!d) return
+  if (!d || !d.mediaKey) return
 
-  // Resolve the real phone JID (works even with LID from-fields)
-  const spn       = msg.node && msg.node.attrs && msg.node.attrs.sender_pn
-  const senderJid = spn ? (spn.user + '@s.whatsapp.net') : msg.from
-
-  if (d.type === 'text') {
-    console.log('text from', senderJid, ':', d.text)
-  }
-
-  if (MEDIA_TYPES.has(d.type) && d.url && d.mediaKey) {
-    try {
-      const filePath = await downloadAndDecrypt(msg.id, d.type, d.url, d.mediaKey, { fileName: d.fileName })
-      console.log('saved', d.type, 'to', filePath)
-    } catch (e) {
-      console.error('media download failed:', e.message)
-    }
+  try {
+    const bytes = await client.downloadMedia(d)
+    const name  = d.fileName || (msg.id + (EXT[d.type] || ''))
+    fs.writeFileSync(name, bytes)
+    console.log('saved', d.type, 'to', name)
+  } catch (e) {
+    console.error('media download failed:', e.message)
   }
 })
 ```
+
+It works the same in both modes, and that is the point: the CDN applies a
+browser check on the way **down** as well as on the way up, so a companion has to
+identify itself as one here too. Doing this by hand means knowing that, and
+knowing which HKDF key name each media type derives from — a voice note derives
+from the PTT keys and a GIF from the video ones, not from their own. Get either
+wrong and the download is refused or the decryption yields garbage.
+
+The whole message object is accepted as well as its `decoded` half, so
+`client.downloadMedia(msg)` does the same thing.
+
+**Verifying the file**
+
+Pass `{ verify: true }` to check the download against the message's
+`fileEncSha256` before decrypting it. The MAC already proves the plaintext was
+not tampered with; this catches a truncated or substituted download earlier, and
+names that failure separately from a decryption one.
+
+```js
+const bytes = await client.downloadMedia(d, { verify: true })
+```
+
+**What happens underneath**
+
+1. The encrypted blob is fetched from `url`, or from `directPath` when the
+   message carries no absolute URL.
+2. HKDF-SHA256 expands `mediaKey` into an IV, a cipher key and a MAC key, using
+   the info string for that media type.
+3. The trailing 10-byte HMAC-SHA256 is verified, then AES-256-CBC decrypts the
+   rest.
+
+`downloadMedia` throws with the reason rather than returning empty: a message
+with no media, no CDN location, an unsupported type, or a file that does not
+match the message all say so.
 
 ## Sending Messages
 
@@ -1850,40 +1824,156 @@ client.setChatPresence('919634847671@s.whatsapp.net', 'paused')      // stopped
 
 ## Modifying Chats
 
+Pinning, archiving, muting, marking read and starring are **app state**. That is
+WhatsApp's own synchronised settings store — the same one your phone writes to —
+so a change made here shows up on the phone and on every other linked device,
+and survives reinstalling.
+
+Each of these is `async`, sends a patch, and waits for the server to accept it.
+The local view only moves once the change is actually stored, and they throw if
+the server refuses.
+
+They return a boolean: **whether the change reached app state**, and so whether
+other devices will see it.
+
+```js
+const synced = await client.pinChat('919634847671@s.whatsapp.net')
+if (!synced) console.log('pinned here, but your phone will not know')
+```
+
+> [!IMPORTANT]
+> **App state needs a key, and where that key comes from depends on how you
+> connected.**
+>
+> A **linked session** (pairing code) is a companion. Your phone shares an app
+> state key with it automatically, shortly after linking — so everything on this
+> page works, in both directions.
+>
+> An **SMS session** *is* the primary device. Nobody shares a key with it,
+> because it is the device that would create one. Unless you have linked a
+> companion to it, there is no app state to read or write.
+>
+> Check with `client.canSyncAppState()`.
+>
+> When there is no key, these calls **do not throw**. `muteChat`, `unmuteChat`
+> and `markChatRead` fall back to the request a primary device sends for itself,
+> which is what this library did before app state existed. `pinChat`,
+> `archiveChat` and `starMessage` have no such request, so they update this
+> session only. Either way the return value is `false`, which is how you tell.
+
 ### Archive / Unarchive a Chat
 
 ```js
-client.archiveChat('919634847671@s.whatsapp.net')
-client.unarchiveChat('919634847671@s.whatsapp.net')
+await client.archiveChat('919634847671@s.whatsapp.net')
+await client.unarchiveChat('919634847671@s.whatsapp.net')
 ```
 
 ### Mute / Unmute a Chat
 
 ```js
-await client.muteChat('919634847671@s.whatsapp.net', 8 * 60 * 60 * 1000)  // mute for 8 hours (ms)
-await client.muteChat('919634847671@s.whatsapp.net', 0)                    // mute indefinitely
+await client.muteChat('919634847671@s.whatsapp.net', 8 * 60 * 60 * 1000)  // 8 hours
+await client.muteChat('919634847671@s.whatsapp.net', 0)                   // until unmuted
 await client.unmuteChat('919634847671@s.whatsapp.net')
 ```
 
 ### Mark a Chat Read / Unread
 
+This is the chat's own unread badge. To send read receipts (blue ticks) for
+particular messages, use `markRead()` instead.
+
 ```js
-await client.markChatRead('919634847671@s.whatsapp.net')   // sends IQ to server
-client.markChatUnread('919634847671@s.whatsapp.net')       // local state only
+await client.markChatRead('919634847671@s.whatsapp.net')
+await client.markChatUnread('919634847671@s.whatsapp.net')
 ```
 
 ### Pin / Unpin a Chat
 
 ```js
-client.pinChat('919634847671@s.whatsapp.net')
-client.unpinChat('919634847671@s.whatsapp.net')
+await client.pinChat('919634847671@s.whatsapp.net')
+await client.unpinChat('919634847671@s.whatsapp.net')
 ```
 
 ### Star / Unstar a Message
 
+The third argument says whether the message being starred is one you sent. It is
+part of how the star is filed, so getting it wrong stars a different message.
+
 ```js
-client.starMessage('MSGID123', '919634847671@s.whatsapp.net')
-client.unstarMessage('MSGID123', '919634847671@s.whatsapp.net')
+await client.starMessage('MSGID123', '919634847671@s.whatsapp.net', true)   // yours
+await client.unstarMessage('MSGID123', '919634847671@s.whatsapp.net', false) // theirs
+```
+
+<a id="app-state-sync"></a>
+
+### Reading Changes Made Elsewhere
+
+The traffic runs both ways. When you pin a chat on your phone, mute a group from
+another linked device, or rename a contact, that change is waiting in app state
+for this session to pick up.
+
+`syncAppState()` fetches it. It is called for you whenever the server says
+something has moved — so with a listener attached you generally never need to
+call it by hand. On an SMS session with no companions linked there is nothing to
+fetch, and it reports `waitingForKeys` instead.
+
+```js
+client.on('chat_pinned',     (u) => u.remote && console.log('pinned elsewhere:', u.jid))
+client.on('chat_archived',   (u) => u.remote && console.log('archived elsewhere:', u.jid))
+client.on('chat_muted',      (u) => u.remote && console.log('muted elsewhere:', u.jid, u.until))
+client.on('chat_read',       (u) => u.remote && console.log('read elsewhere:', u.jid))
+client.on('message_starred', (u) => u.remote && console.log('starred elsewhere:', u.msgId))
+client.on('contact_update',  (u) => console.log('contact renamed:', u.jid, u.name))
+client.on('push_name_update',(u) => console.log('your display name is now', u.name))
+```
+
+`remote: true` marks a change as somebody else's doing. Your own calls emit the
+same events without it — they carry `synced` instead — so a listener can tell the
+two apart and avoid echoing a change back where it came from.
+
+To pull on demand:
+
+```js
+// everything
+const r = await client.syncAppState()
+console.log(r.applied, 'change(s)')
+
+// or just one part of it
+await client.syncAppState(['regular_low'])
+
+// re-read everything from scratch, discarding what we hold
+await client.syncAppState(null, { snapshot: true })
+```
+
+The result reports each collection separately:
+
+```js
+{
+  applied: 3,
+  collections: {
+    regular_low: { version: 41, applied: 3, skipped: 0, snapshot: false, macOk: true }
+  }
+}
+```
+
+The five collections are `critical_block`, `critical_unblock_low`,
+`regular_high`, `regular_low` and `regular`. Which one a setting lives in is
+WhatsApp's choice, not yours — the methods above already file each change where
+it belongs.
+
+**When it repairs itself.** Each collection carries a running hash that has to
+keep agreeing with the server's. If it stops — a patch went missing, or one
+could not be decrypted — the incremental history is no longer trustworthy, so
+that collection is thrown away and re-read whole. This happens on its own, once
+per sync, and shows up as `snapshot: true` in the result.
+
+**Events for anything not modelled here.** WhatsApp tracks more in app state than
+this library turns into methods. Rather than dropping those, they are emitted
+raw, so it is at least visible that something happened:
+
+```js
+client.on('app_state_mutation', ({ collection, index, action, removed }) => {
+  console.log('unhandled app state change', index)
+})
 ```
 
 ### Disappearing Messages
@@ -1974,8 +2064,16 @@ const fs = require('fs')
 await client.changeProfilePicture(fs.readFileSync('./avatar.jpg'))
 
 // change a group's picture (you must be admin)
-await client.changeGroupPicture('120363000000000000@g.us', fs.readFileSync('./group.jpg'))
+// returns the new picture id, or 'remove' when the picture was taken down
+const picId = await client.changeGroupPicture('120363000000000000@g.us',
+  fs.readFileSync('./group.jpg'))
+
+// pass null to remove the current picture
+await client.changeGroupPicture('120363000000000000@g.us', null)
 ```
+
+`changeGroupPicture` throws when the server refuses — `406` for an image that is
+not a JPEG it will take, `403` when you are not an admin of that group.
 
 ## Privacy
 
@@ -2063,14 +2161,54 @@ console.log('members', group.participants.map(p => p.jid))
 
 ### Add / Remove or Demote / Promote
 
+Each of these returns one result per participant — the ones that went through
+and the ones that did not. The server decides every participant separately, so a
+call that half worked tells you which half and why.
+
 ```js
 const groupJid = '120363000000000000@g.us'
 
-await client.addGroupParticipants(groupJid,     ['919634847671@s.whatsapp.net'])
+const results = await client.addGroupParticipants(groupJid, [
+  '919634847671@s.whatsapp.net',
+  '12345678901@s.whatsapp.net'
+])
+
+for (const r of results) {
+  if (r.ok) console.log('added', r.jid)
+  else      console.log('failed', r.jid, r.status, r.needsInvite ? '(invite instead)' : '')
+}
+
 await client.removeGroupParticipants(groupJid,  ['919634847671@s.whatsapp.net'])
 await client.promoteGroupParticipants(groupJid, ['919634847671@s.whatsapp.net'])
 await client.demoteGroupParticipants(groupJid,  ['919634847671@s.whatsapp.net'])
 ```
+
+Each result looks like this:
+
+```js
+{
+  jid:         '919634847671@s.whatsapp.net',
+  status:      '403',        // '200' when the action went through
+  error:       403,          // null on success
+  ok:          false,        // getter: error == null
+  admin:       null,         // 'admin' | 'superadmin' | null
+  phoneNumber: '919634847671@s.whatsapp.net',
+  lid:         '112713111982325@lid',   // when the server told us one
+  displayName: null,
+  // Only on a refused add: the code a personal invitation is built from.
+  addRequest:  { code: 'AbCdEfGh', expiration: 1790000000 },
+  needsInvite: true          // getter: true when addRequest holds a code
+}
+```
+
+The common error codes are `403` (their privacy settings do not allow it),
+`404` (not on WhatsApp), `408` (not a member), `409` (already a member) and
+`401` (you are not allowed to do this).
+
+> [!TIP]
+> A result object stringifies to its JID, so `results.join(', ')` and
+> `String(results[0])` read exactly as they did when these methods returned a
+> plain list of JID strings.
 
 ### Change Subject
 
@@ -2165,33 +2303,169 @@ for (const g of groups) {
 
 ```js
 const meta = await client.getGroupMetadata('120363000000000000@g.us')
-// returns: { jid, subject, creation, creator, subjectTime, subjectBy,
-//            description, ephemeral, onlyAdminsSend, onlyAdminsEdit, participants[] }
 console.log(meta.subject, meta.participants.length + ' members')
 ```
+
+```js
+{
+  jid:             '120363000000000000@g.us',
+  subject:         'My Group',
+  size:            57,            // the server's own count
+  creation:        1705315800,
+  creator:         '919634847671@s.whatsapp.net',
+  subjectTime:     1705315900,
+  subjectBy:       '919634847671@s.whatsapp.net',
+  description:     'Group description here',
+  descriptionId:   'DESC1',       // echoed back as `prev` on the next edit
+  descriptionBy:   '919634847671@s.whatsapp.net',
+  descriptionByPn: '919634847671@s.whatsapp.net',
+  descriptionTime: 1705315950,
+  ephemeral:       86400,         // 0 when disappearing messages are off
+  onlyAdminsSend:  false,
+  onlyAdminsEdit:  false,
+  joinApprovalMode: true,         // new members need an admin's approval
+  memberAddMode:   'admin_add',   // 'admin_add' | 'all_member_add' | null
+  isCommunity:         false,
+  isCommunityAnnounce: false,
+  defaultMembershipApprovalMode: null,   // communities only
+  linkedParent:    null,          // the community this group belongs to
+  isIncognito:     false,         // members' phone numbers hidden from each other
+  isSuspended:     false,         // the group has been taken down
+  notify:          'My Group',
+  creatorPn:       '919634847671@s.whatsapp.net',
+  creatorUsername: null,
+  creatorCountry:  'IN',
+  subjectByPn:     '919634847671@s.whatsapp.net',
+  subjectByUsername: null,
+  participantVersion: 'PV1',      // bumped when the member list changes
+  announceVersion:    'AV1',      // bumped when the announce flag changes
+  addressingMode:  'lid',         // 'lid' | 'pn'
+  participants: [
+    {
+      jid:          '112713111982325@lid',
+      role:         'admin',      // 'admin' | 'superadmin' | 'member'
+      isAdmin:      true,
+      isSuperAdmin: false,
+      phoneNumber:  '919634847671@s.whatsapp.net',
+      lid:          '112713111982325@lid',
+      displayName:  null,
+      username:     null
+    }
+  ]
+}
+```
+
+Both addresses are filled in on every participant whichever way round the server
+named them, so you never have to resolve a LID by hand to know who somebody is.
 
 ### Get Request Join List
 
 ```js
 const pending = await client.queryGroupPendingParticipants('120363000000000000@g.us')
-console.log(pending)
+
+for (const r of pending) {
+  console.log(r.jid, 'asked at', new Date(r.requestedAt * 1000).toISOString())
+}
 ```
+
+Each entry is `{ jid, requestedAt }` — `requestedAt` is unix seconds, or `0` when
+the server did not say. Like the participant results, an entry stringifies to its
+JID.
 
 ### Approve / Reject Request Join
 
-The second parameter is a boolean: `true` to approve, `false` to reject.
+The second parameter is a boolean: `true` to approve, `false` to reject. The
+return value is the same list of per-participant results the add/remove calls
+give you.
 
 ```js
 // approve join requests
-await client.approveGroupParticipants('120363000000000000@g.us', true, [
+const done = await client.approveGroupParticipants('120363000000000000@g.us', true, [
   '919634847671@s.whatsapp.net'
 ])
+console.log(done.filter(r => !r.ok))   // whoever could not be let in, and why
 
 // reject join requests
 await client.approveGroupParticipants('120363000000000000@g.us', false, [
   '919634847671@s.whatsapp.net'
 ])
 ```
+
+### Personal Invitations
+
+An invite link is public — anyone holding it can join. A personal invitation is
+the other kind: minted for one named person, and the only way into a group for
+somebody whose privacy settings stop them from being added outright.
+
+The whole flow starts with a refused add. When the server turns a participant
+away for that reason it hands back a code, which travels to them as a message
+they can tap.
+
+```js
+const groupJid = '120363000000000000@g.us'
+
+// add whoever can be added, and invite whoever cannot — in one call
+const results = await client.addGroupParticipantsOrInvite(groupJid, [
+  '919634847671@s.whatsapp.net',
+  '12345678901@s.whatsapp.net'
+])
+
+for (const r of results) {
+  if (r.ok)              console.log('added', r.jid)
+  else if (r.invited)    console.log('invited', r.jid)
+  else                   console.log('failed', r.jid, r.status, r.inviteError || '')
+}
+```
+
+Or drive it yourself, if you want to decide who gets an invitation:
+
+```js
+const results = await client.addGroupParticipants(groupJid, [
+  '919634847671@s.whatsapp.net'
+])
+
+for (const r of results.filter(x => x.needsInvite)) {
+  await client.sendGroupInvite(r.jid, groupJid,
+    r.addRequest.code, r.addRequest.expiration,
+    { caption: 'Come join us' })
+}
+```
+
+`sendGroupInvite(to, groupJid, code, expiration, opts)` accepts
+`{ groupName, caption, jpegThumbnail, isCommunity, id, contextInfo }`. The group
+name is filled in from the group's own metadata when you do not supply one.
+
+On the receiving side, an invitation arrives as an ordinary `message` event whose
+`decoded.type` is `'groupInvite'`:
+
+```js
+client.on('message', async (msg) => {
+  const d = msg.decoded
+  if (!d || d.type !== 'groupInvite') return
+
+  // look before you leap — this does not join anything
+  const info = await client.queryGroupInviteMessageInfo(
+    d.groupJid, msg.participant || msg.from, d.inviteCode, d.inviteExpiration)
+  console.log(info.subject, info.size + ' members')
+
+  // and accept it
+  const jid = await client.acceptGroupInviteMessage(
+    d.groupJid, msg.participant || msg.from, d.inviteCode, d.inviteExpiration)
+  console.log('joined', jid)
+})
+```
+
+A decoded invitation carries `{ groupJid, inviteCode, inviteExpiration,
+groupName, jpegThumbnail, caption, isCommunity }`.
+
+To withdraw an invitation you sent before it is used:
+
+```js
+await client.revokeGroupInviteForParticipant(groupJid, '919634847671@s.whatsapp.net')
+```
+
+An expired or already-spent invitation throws rather than resolving to nothing,
+so the two cases are easy to tell apart.
 
 ### Toggle Ephemeral in Group
 
@@ -2780,6 +3054,19 @@ wa> /contact about 919634847671@s.whatsapp.net
 
 ### Chat Management Commands
 
+On a **linked** (pairing-code) session these write to app state, so a change here
+reaches your phone and every other linked device.
+
+On an **SMS** session this device is the primary and there is no app state key
+unless you have linked a companion to it. `/mute`, `/unmute` and `/read` still
+send the request a primary makes for itself; `/pin`, `/archive` and `/star`
+update this session only. The command says which happened:
+
+```sh
+wa> /pin 919634847671@s.whatsapp.net
+pinned  (this session only — no app state key)
+```
+
 #### Mark Read / Unread
 
 ```sh
@@ -2816,10 +3103,51 @@ wa> /unarchive 919634847671@s.whatsapp.net
 
 #### Star / Unstar a Message (CLI)
 
+Add `me` when the message is one you sent — it is part of how the star is filed,
+so leaving it off on your own message stars the wrong thing.
+
 ```sh
-wa> /star   919634847671@s.whatsapp.net 3EB0ABCDEF123456
+wa> /star   919634847671@s.whatsapp.net 3EB0ABCDEF123456 me
 wa> /unstar 919634847671@s.whatsapp.net 3EB0ABCDEF123456
 ```
+
+<a id="cli-app-state"></a>
+
+#### Sync App State
+
+Pulls in pins, archives, mutes, stars and contact names changed on your phone or
+another linked device. This happens on its own whenever the server says
+something moved; the command is for pulling on demand.
+
+```sh
+wa> /appstate
+syncing app state...
+  ──────────────────────────────────────────────────
+  critical_block        v3   0 change(s)
+  critical_unblock_low  v18  2 change(s)
+  regular_high          v7   0 change(s)
+  regular_low           v41  3 change(s)
+  regular               v2   0 change(s)
+  total                 5 change(s) applied
+  ──────────────────────────────────────────────────
+
+# just one part of it
+wa> /appstate regular_low
+
+# throw away what we hold and re-read everything
+wa> /appstate --snapshot
+```
+
+Changes that arrive on their own are printed as they land:
+
+```sh
+  pinned  919634847671@s.whatsapp.net
+  muted  120363000000000000@g.us  until 2026-08-01T09:00:00.000Z
+  contact  12345678901@s.whatsapp.net  → Ion
+```
+
+If your phone has not yet shared a sync key with this session, the command says
+so — leave WhatsApp open on the phone for a moment and try again.
 
 #### CLI Disappearing Messages
 
@@ -2900,13 +3228,17 @@ left  120363000000000000@g.us
 
 ```sh
 # add participants
-wa> /group add 120363000000000000@g.us 919634847671@s.whatsapp.net
+wa> /group add 120363000000000000@g.us 919634847671@s.whatsapp.net 12345678901@s.whatsapp.net
+  added  919634847671@s.whatsapp.net
+  failed  12345678901@s.whatsapp.net  — their privacy settings do not allow it (403)  · can be invited instead
 
 # remove participants
 wa> /group remove 120363000000000000@g.us 919634847671@s.whatsapp.net
+  removed  919634847671@s.whatsapp.net
 ```
 
-Multiple participants can be listed, separated by spaces.
+Multiple participants can be listed, separated by spaces. Every participant is
+reported on its own line, because the server decides each one separately.
 
 #### Promote / Demote Admins
 
@@ -2938,7 +3270,7 @@ Reads the image from disk and sets it as the group's profile picture. You must b
 
 ```sh
 wa> /group photo 120363000000000000@g.us ./group-logo.jpg
-group picture updated
+group picture updated  id=1705315800
 ```
 
 #### Get Invite Link
@@ -2995,16 +3327,33 @@ wa> /group invite-info "https://chat.whatsapp.com/AbCdEfGhIjKlMnOpQrStUv"
 
 ```sh
 wa> /group meta 120363000000000000@g.us
-  jid              120363000000000000@g.us
-  subject          My Group
-  description      Group description here
-  creator          919634847671@s.whatsapp.net
-  created          2024-01-15 10:30:00
-  participants     3
-  onlyAdminsSend   false
-  onlyAdminsEdit   true
-  ephemeral        0
+  jid                   120363000000000000@g.us
+  subject               My Group
+  creator               919634847671@s.whatsapp.net
+  created               2024-01-15T10:30:00.000Z
+  description           Group description here
+  ephemeral             off
+  only admins send      no
+  only admins edit      yes
+  join approval         required
+  who can add           admins only
+  size                  3
+  participants          (3)
+    112713111982325@lid  (919634847671@s.whatsapp.net)  [admin]
+    229063524376784@lid  (12345678901@s.whatsapp.net)
+    98765432109@s.whatsapp.net
 ```
+
+A participant addressed by LID is shown with the phone number behind it when
+the server sends one. Two more lines appear only when they apply:
+
+```sh
+  suspended             yes — this group has been taken down
+  incognito             yes — phone numbers are hidden
+```
+
+A suspended group answers every send with a refusal and nothing else, so it is
+worth checking here before hunting for the cause elsewhere.
 
 #### List All Groups
 
@@ -3024,9 +3373,9 @@ Lists all participants of a group with their roles:
 
 ```sh
 wa> /group participants 120363000000000000@g.us
-  participants (3)
-    919634847671@s.whatsapp.net  [admin]
-    12345678901@s.whatsapp.net
+  My Group  (3 participants)
+    112713111982325@lid  (919634847671@s.whatsapp.net)  [admin]
+    229063524376784@lid  (12345678901@s.whatsapp.net)
     98765432109@s.whatsapp.net
 ```
 
@@ -3037,8 +3386,8 @@ Lists users who have requested to join a group (only visible when `approve_parti
 ```sh
 wa> /group pending 120363000000000000@g.us
   pending (2)
-    919634847671@s.whatsapp.net
-    12345678901@s.whatsapp.net
+    919634847671@s.whatsapp.net   2026-07-20T09:12:00.000Z
+    12345678901@s.whatsapp.net    2026-07-21T14:03:20.000Z
 ```
 
 #### Approve / Reject Join Requests
@@ -3046,14 +3395,52 @@ wa> /group pending 120363000000000000@g.us
 ```sh
 # approve one or more pending members
 wa> /group approve 120363000000000000@g.us 919634847671@s.whatsapp.net
-approved  919634847671@s.whatsapp.net
+  approved  919634847671@s.whatsapp.net
 
 # reject one or more pending members
 wa> /group reject 120363000000000000@g.us 919634847671@s.whatsapp.net
-rejected  919634847671@s.whatsapp.net
+  rejected  919634847671@s.whatsapp.net
 ```
 
-Multiple JIDs can be listed, separated by spaces.
+Multiple JIDs can be listed, separated by spaces. Anyone the server would not let
+through is listed separately with the reason.
+
+<a id="cli-personal-invitations"></a>
+
+#### Personal Invitations
+
+For someone whose privacy settings do not let them be added to a group directly,
+`add-invite` adds whoever it can and sends the rest a personal invitation:
+
+```sh
+wa> /group add-invite 120363000000000000@g.us 919634847671@s.whatsapp.net 12345678901@s.whatsapp.net
+  added  919634847671@s.whatsapp.net
+  failed  12345678901@s.whatsapp.net  — their privacy settings do not allow it (403)  · can be invited instead  · invitation sent
+```
+
+An invitation that arrives for you shows the command that accepts it:
+
+```sh
+  message from      919634847671@s.whatsapp.net
+  id                3EB0A1B2C3D4
+  type              group invitation  My Group
+  accept with       /group accept-invite 120363000000000000@g.us 919634847671@s.whatsapp.net AbCdEfGh 1790000000
+```
+
+```sh
+# look at the group without joining it
+wa> /group preview-invite 120363000000000000@g.us 919634847671@s.whatsapp.net AbCdEfGh 1790000000
+
+# join
+wa> /group accept-invite 120363000000000000@g.us 919634847671@s.whatsapp.net AbCdEfGh 1790000000
+joined 120363000000000000@g.us
+
+# send one by hand
+wa> /group send-invite 120363000000000000@g.us 12345678901@s.whatsapp.net AbCdEfGh 1790000000
+
+# take one back before it is used
+wa> /group revoke-invite 120363000000000000@g.us 12345678901@s.whatsapp.net
+```
 
 #### Group Settings
 
@@ -3255,8 +3642,10 @@ wa> /quit
 | `/unpin <jid>` | Unpin a chat |
 | `/archive <jid>` | Archive a chat |
 | `/unarchive <jid>` | Unarchive a chat |
-| `/star <jid> <msgId>` | Star a message |
-| `/unstar <jid> <msgId>` | Unstar a message |
+| `/star <jid> <msgId> [me]` | Star a message (`me` if you sent it) |
+| `/unstar <jid> <msgId> [me]` | Unstar a message |
+| `/appstate [collection...]` | Pull pins/archives/mutes/stars from your phone |
+| `/appstate --snapshot` | Re-read all app state from scratch |
 | `/ephemeral <jid> <seconds>` | Set disappearing messages timer for a chat |
 | `/ephemeral-default <seconds>` | Set global default ephemeral timer for new chats |
 | `/block <jid>` | Block a contact |

@@ -280,6 +280,47 @@ function kv(label, value) {
 
 function hr() { out('  ' + '─'.repeat(56)); }
 
+// Why a group action did or did not go through, per participant. The server
+// decides each one separately, so a run that half worked has to say which half.
+const PARTICIPANT_ERRORS = {
+  400: 'bad request',
+  401: 'not authorised',
+  403: 'their privacy settings do not allow it',
+  404: 'not on WhatsApp',
+  408: 'not a member',
+  409: 'already a member',
+  500: 'server error'
+};
+
+// A participant, with the phone number behind their LID when the server told
+// us one — a bare LID says nothing about who the person is.
+function participantLine(p) {
+  const role = p.role && p.role !== 'member' ? '  [' + p.role + ']' : '';
+  const pn   = (p.phoneNumber && p.phoneNumber !== p.jid) ? '  (' + p.phoneNumber + ')' : '';
+  return p.jid + pn + role;
+}
+
+// A chat setting either reached app state — and so every other device — or it
+// did not, and stayed here. Saying which costs one word and saves the user
+// wondering why their phone did not follow.
+function chatResult(label, synced) {
+  return label + (synced ? '' : '  (this session only — no app state key)');
+}
+
+function printParticipantResults(verb, results) {
+  const okList  = results.filter(r => r.ok);
+  const badList = results.filter(r => !r.ok);
+  if (okList.length) out('  ' + verb + '  ' + okList.map(String).join(', '));
+  for (const r of badList) {
+    const why = PARTICIPANT_ERRORS[r.error] || 'error ' + r.error;
+    out('  failed  ' + r.jid + '  — ' + why + ' (' + r.status + ')' +
+        (r.needsInvite ? '  · can be invited instead' : '') +
+        (r.invited === true  ? '  · invitation sent' : '') +
+        (r.invited === false ? '  · invitation failed: ' + r.inviteError : ''));
+  }
+  if (!okList.length && !badList.length) out('  the server answered about nobody');
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 function defaultSessionDir() {
@@ -382,8 +423,10 @@ const HELP = `
     /unpin     <jid>                         unpin chat
     /archive   <jid>                         archive chat
     /unarchive <jid>                         unarchive chat
-    /star      <jid> <msgId>                 star a message
-    /unstar    <jid> <msgId>                 unstar a message
+    /star      <jid> <msgId> [me]            star a message ("me" if you sent it)
+    /unstar    <jid> <msgId> [me]            unstar a message
+    /appstate  [collection...]               pull pins/archives/mutes/stars from your phone
+    /appstate  --snapshot                    re-read all of it from scratch
     /ephemeral         <jid> <seconds>        set disappearing timer for chat
     /ephemeral-default <seconds>             set default timer for ALL new chats
     /block     <jid>                         block contact
@@ -394,6 +437,7 @@ const HELP = `
     /group create  <name> <jid...>           create group
     /group leave   <jid>                     leave group
     /group add     <jid> <member...>         add participants
+    /group add-invite <jid> <member...>      add, and invite whoever cannot be added
     /group remove  <jid> <member...>         remove participants
     /group promote <jid> <member...>         promote to admin
     /group demote  <jid> <member...>         demote from admin
@@ -409,6 +453,13 @@ const HELP = `
     /group pending      <jid>                 list pending join requests
     /group approve      <jid> <member...>     approve pending join requests
     /group reject       <jid> <member...>     reject pending join requests
+    /group send-invite  <jid> <member> <code> <expiration>
+                                              send a personal invitation
+    /group accept-invite <jid> <inviter> <code> [expiration]
+                                              accept a personal invitation
+    /group preview-invite <jid> <inviter> <code> [expiration]
+                                              preview a group from a personal invitation
+    /group revoke-invite <jid> <member>       withdraw a personal invitation
     /group settings     <jid> <setting> <policy>
                                                settings: edit_group_info send_messages
                                                          add_participants approve_participants
@@ -497,6 +548,11 @@ function attachEvents(client) {
         case 'contact':
           kv('type', 'contact  name: ' + d.displayName);
           break;
+        case 'groupInvite':
+          kv('type', 'group invitation  ' + (d.groupName || d.groupJid));
+          kv('accept with', '/group accept-invite ' + d.groupJid + ' ' +
+             (msg.participant || msg.from) + ' ' + d.inviteCode + ' ' + d.inviteExpiration);
+          break;
         default:
           kv('type', d.type);
       }
@@ -517,6 +573,30 @@ function attachEvents(client) {
     if (u.subject)      kv('subject', u.subject);
     kv('time',         new Date(u.timestamp * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ''));
     out('');
+    _rl && (_rl.resume(), _rl.prompt(true));
+  });
+
+  // Changes made on the phone or another linked device. `remote` marks them as
+  // somebody else's doing — our own calls emit the same events without it.
+  const chatChange = (label) => (u) => {
+    if (!u || !u.remote) return;
+    _rl && _rl.pause();
+    out('  ' + label(u));
+    _rl && (_rl.resume(), _rl.prompt(true));
+  };
+  client.on('chat_pinned',    chatChange(u => (u.pinned ? 'pinned' : 'unpinned') + '  ' + u.jid));
+  client.on('chat_archived',  chatChange(u => (u.archived ? 'archived' : 'unarchived') + '  ' + u.jid));
+  client.on('chat_read',      chatChange(u => 'marked ' + (u.read ? 'read' : 'unread') + '  ' + u.jid));
+  client.on('chat_muted',     chatChange(u => (u.muted ? 'muted' : 'unmuted') + '  ' + u.jid +
+    (u.muted && u.until > 0 ? '  until ' + new Date(u.until).toISOString() : '')));
+  client.on('message_starred', chatChange(u =>
+    (u.starred ? 'starred' : 'unstarred') + '  ' + u.msgId + '  in ' + u.chatJid));
+  client.on('contact_update',  chatChange(u => 'contact  ' + u.jid + (u.name ? '  → ' + u.name : '')));
+  client.on('push_name_update', chatChange(u => 'your name is now  ' + u.name));
+
+  client.on('app_state_key_missing', (e) => {
+    _rl && _rl.pause();
+    out('  app state: waiting for a sync key from your phone (' + e.collection + ')');
     _rl && (_rl.resume(), _rl.prompt(true));
   });
 
@@ -1325,11 +1405,37 @@ async function handleLine(line) {
         out('marked read');
         break;
 
+      case '/appstate': {
+        requireConn();
+        const snapshot = p.includes('--snapshot');
+        const names    = p.slice(1).filter(a => a !== '--snapshot');
+        out('syncing app state' + (snapshot ? ' from scratch' : '') + '...');
+        const r = await _client.syncAppState(names.length ? names : null, { snapshot });
+        if (r.waitingForKeys) {
+          out('  no app state key for this session.');
+          out('  On a linked (pairing-code) session the key comes from your phone —');
+          out('  open WhatsApp there and leave it connected for a moment.');
+          out('  On an SMS session this device IS the primary, so there is no app');
+          out('  state to read unless you have linked a companion to it.');
+          break;
+        }
+        hr();
+        for (const [name, info] of Object.entries(r.collections)) {
+          if (info.waitingForKey) { kv(name, 'waiting for key ' + info.waitingForKey); continue; }
+          kv(name, 'v' + info.version + '  ' + info.applied + ' change(s)' +
+            (info.snapshot ? '  (full re-read)' : '') +
+            (info.skipped ? '  ' + info.skipped + ' unreadable' : '') +
+            (info.macOk === false ? '  — partial' : ''));
+        }
+        kv('total', r.applied + ' change(s) applied');
+        hr();
+        break;
+      }
+
       case '/unread':
         requireConn();
         if (!p[1]) { fail('usage: /unread <jid>'); break; }
-        _client.markChatUnread(normalizeJid(p[1]));
-        out('marked unread');
+        out(chatResult('marked unread', await _client.markChatUnread(normalizeJid(p[1]))));
         break;
 
       case '/mute': {
@@ -1337,61 +1443,53 @@ async function handleLine(line) {
         const jid = normalizeJid(p[1]);
         if (!jid) { fail('usage: /mute <jid> [minutes]'); break; }
         const ms = p[2] ? parseInt(p[2], 10) * 60000 : 0;
-        await _client.muteChat(jid, ms);
-        out('muted  ' + jid);
+        out(chatResult('muted  ' + jid, await _client.muteChat(jid, ms)));
         break;
       }
 
       case '/unmute':
         requireConn();
         if (!p[1]) { fail('usage: /unmute <jid>'); break; }
-        await _client.unmuteChat(normalizeJid(p[1]));
-        out('unmuted');
+        out(chatResult('unmuted', await _client.unmuteChat(normalizeJid(p[1]))));
         break;
 
       case '/pin':
         requireConn();
         if (!p[1]) { fail('usage: /pin <jid>'); break; }
-        _client.pinChat(normalizeJid(p[1]));
-        out('pinned');
+        out(chatResult('pinned', await _client.pinChat(normalizeJid(p[1]))));
         break;
 
       case '/unpin':
         requireConn();
         if (!p[1]) { fail('usage: /unpin <jid>'); break; }
-        _client.unpinChat(normalizeJid(p[1]));
-        out('unpinned');
+        out(chatResult('unpinned', await _client.unpinChat(normalizeJid(p[1]))));
         break;
 
       case '/archive':
         requireConn();
         if (!p[1]) { fail('usage: /archive <jid>'); break; }
-        _client.archiveChat(normalizeJid(p[1]));
-        out('archived');
+        out(chatResult('archived', await _client.archiveChat(normalizeJid(p[1]))));
         break;
 
       case '/unarchive':
         requireConn();
         if (!p[1]) { fail('usage: /unarchive <jid>'); break; }
-        _client.unarchiveChat(normalizeJid(p[1]));
-        out('unarchived');
+        out(chatResult('unarchived', await _client.unarchiveChat(normalizeJid(p[1]))));
         break;
 
       case '/star': {
         requireConn();
-        const [, jR, msgId] = p;
-        if (!jR || !msgId) { fail('usage: /star <jid> <msgId>'); break; }
-        _client.starMessage(msgId, normalizeJid(jR));
-        out('starred');
+        const [, jR, msgId, mine] = p;
+        if (!jR || !msgId) { fail('usage: /star <jid> <msgId> [me]'); break; }
+        out(chatResult('starred', await _client.starMessage(msgId, normalizeJid(jR), mine === 'me')));
         break;
       }
 
       case '/unstar': {
         requireConn();
-        const [, jR, msgId] = p;
-        if (!jR || !msgId) { fail('usage: /unstar <jid> <msgId>'); break; }
-        _client.unstarMessage(msgId, normalizeJid(jR));
-        out('unstarred');
+        const [, jR, msgId, mine] = p;
+        if (!jR || !msgId) { fail('usage: /unstar <jid> <msgId> [me]'); break; }
+        out(chatResult('unstarred', await _client.unstarMessage(msgId, normalizeJid(jR), mine === 'me')));
         break;
       }
 
@@ -1476,29 +1574,25 @@ async function handleLine(line) {
           const gj  = asGroupJid(p[2]);
           const jids = p.slice(3).map(normalizeJid);
           if (!gj || !jids.length) { fail('usage: /group add <jid> <member...>'); break; }
-          await _client.addGroupParticipants(gj, jids);
-          out('added  ' + jids.join(', '));
+          printParticipantResults('added', await _client.addGroupParticipants(gj, jids));
         }
         else if (sub === 'remove') {
           const gj  = asGroupJid(p[2]);
           const jids = p.slice(3).map(normalizeJid);
           if (!gj || !jids.length) { fail('usage: /group remove <jid> <member...>'); break; }
-          await _client.removeGroupParticipants(gj, jids);
-          out('removed  ' + jids.join(', '));
+          printParticipantResults('removed', await _client.removeGroupParticipants(gj, jids));
         }
         else if (sub === 'promote') {
           const gj  = asGroupJid(p[2]);
           const jids = p.slice(3).map(normalizeJid);
           if (!gj || !jids.length) { fail('usage: /group promote <jid> <member...>'); break; }
-          await _client.promoteGroupParticipants(gj, jids);
-          out('promoted');
+          printParticipantResults('promoted', await _client.promoteGroupParticipants(gj, jids));
         }
         else if (sub === 'demote') {
           const gj  = asGroupJid(p[2]);
           const jids = p.slice(3).map(normalizeJid);
           if (!gj || !jids.length) { fail('usage: /group demote <jid> <member...>'); break; }
-          await _client.demoteGroupParticipants(gj, jids);
-          out('demoted');
+          printParticipantResults('demoted', await _client.demoteGroupParticipants(gj, jids));
         }
         else if (sub === 'subject') {
           const gj   = asGroupJid(p[2]);
@@ -1546,10 +1640,7 @@ async function handleLine(line) {
           kv('created',     r.creation ? new Date(r.creation * 1000).toISOString() : '—');
           kv('description', r.description || '—');
           kv('participants', '(' + r.participants.length + ')');
-          for (const pt of r.participants) {
-            const role = pt.role !== 'member' ? '  [' + pt.role + ']' : '';
-            out('    ' + pt.jid + role);
-          }
+          for (const pt of r.participants) out('    ' + participantLine(pt));
           hr();
         }
         else if (sub === 'meta') {
@@ -1566,11 +1657,18 @@ async function handleLine(line) {
           kv('ephemeral',   r.ephemeral ? r.ephemeral + 's' : 'off');
           kv('only admins send', r.onlyAdminsSend ? 'yes' : 'no');
           kv('only admins edit', r.onlyAdminsEdit ? 'yes' : 'no');
+          kv('join approval',    r.joinApprovalMode ? 'required' : 'not required');
+          kv('who can add',      r.memberAddMode === 'admin_add' ? 'admins only'
+                               : r.memberAddMode === 'all_member_add' ? 'any member' : '—');
+          if (r.isCommunity)   kv('community', 'yes');
+          if (r.linkedParent)  kv('part of',   r.linkedParent);
+          // A suspended group answers every send with a refusal and nothing
+          // else, so it has to be said out loud rather than left to be guessed.
+          if (r.isSuspended)   kv('suspended',  'yes — this group has been taken down');
+          if (r.isIncognito)   kv('incognito',  'yes — phone numbers are hidden');
+          kv('size',          String(r.size));
           kv('participants', '(' + r.participants.length + ')');
-          for (const p of r.participants) {
-            const role = p.role !== 'member' ? '  [' + p.role + ']' : '';
-            out('    ' + p.jid + role);
-          }
+          for (const p of r.participants) out('    ' + participantLine(p));
           hr();
         }
         else if (sub === 'participants') {
@@ -1579,10 +1677,7 @@ async function handleLine(line) {
           const r = await _client.getGroupMetadata(gj);
           if (!r) { out('  no data'); break; }
           out('  ' + r.subject + '  (' + r.participants.length + ' participants)');
-          for (const pt of r.participants) {
-            const role = pt.role !== 'member' ? '  [' + pt.role + ']' : '';
-            out('    ' + pt.jid + role);
-          }
+          for (const pt of r.participants) out('    ' + participantLine(pt));
         }
         else if (sub === 'photo') {
           const gj   = asGroupJid(p[2]);
@@ -1590,8 +1685,8 @@ async function handleLine(line) {
           if (!gj || !file) { fail('usage: /group photo <jid> <file>'); break; }
           if (!fs.existsSync(file)) { fail('file not found: ' + file); break; }
           const buf = fs.readFileSync(file);
-          await _client.changeGroupPicture(gj, buf);
-          out('group picture updated');
+          const picId = await _client.changeGroupPicture(gj, buf);
+          out('group picture updated' + (picId ? '  id=' + picId : ''));
         }
         else if (sub === 'pending') {
           const gj = asGroupJid(p[2]);
@@ -1599,21 +1694,75 @@ async function handleLine(line) {
           const list = await _client.queryGroupPendingParticipants(gj);
           if (!list || !list.length) { out('  no pending requests'); break; }
           out('  pending (' + list.length + ')');
-          list.forEach(j => out('    ' + j));
+          list.forEach(r => out('    ' + r.jid +
+            (r.requestedAt ? '   ' + new Date(r.requestedAt * 1000).toISOString() : '')));
         }
         else if (sub === 'approve') {
           const gj   = asGroupJid(p[2]);
           const jids = p.slice(3).map(normalizeJid);
           if (!gj || !jids.length) { fail('usage: /group approve <jid> <member...>'); break; }
-          const ok = await _client.approveGroupParticipants(gj, true, jids);
-          out('approved  ' + (ok.length ? ok.join(', ') : jids.join(', ')));
+          printParticipantResults('approved',
+            await _client.approveGroupParticipants(gj, true, jids));
         }
         else if (sub === 'reject') {
           const gj   = asGroupJid(p[2]);
           const jids = p.slice(3).map(normalizeJid);
           if (!gj || !jids.length) { fail('usage: /group reject <jid> <member...>'); break; }
-          const ok = await _client.approveGroupParticipants(gj, false, jids);
-          out('rejected  ' + (ok.length ? ok.join(', ') : jids.join(', ')));
+          printParticipantResults('rejected',
+            await _client.approveGroupParticipants(gj, false, jids));
+        }
+        else if (sub === 'add-invite') {
+          const gj   = asGroupJid(p[2]);
+          const jids = p.slice(3).map(normalizeJid);
+          if (!gj || !jids.length) { fail('usage: /group add-invite <jid> <member...>'); break; }
+          printParticipantResults('added', await _client.addGroupParticipantsOrInvite(gj, jids));
+        }
+        else if (sub === 'send-invite') {
+          const gj     = asGroupJid(p[2]);
+          const member = normalizeJid(p[3]);
+          const code   = p[4];
+          const exp    = parseInt(p[5], 10) || 0;
+          if (!gj || !member || !code) {
+            fail('usage: /group send-invite <jid> <member> <code> <expiration>');
+            break;
+          }
+          const r = await _client.sendGroupInvite(member, gj, code, exp);
+          out('invitation sent to ' + member + '  id=' + (r && r.id));
+        }
+        else if (sub === 'accept-invite') {
+          const gj      = asGroupJid(p[2]);
+          const inviter = normalizeJid(p[3]);
+          const code    = p[4];
+          const exp     = parseInt(p[5], 10) || 0;
+          if (!gj || !inviter || !code) {
+            fail('usage: /group accept-invite <jid> <inviter> <code> [expiration]');
+            break;
+          }
+          out('joined ' + await _client.acceptGroupInviteMessage(gj, inviter, code, exp));
+        }
+        else if (sub === 'preview-invite') {
+          const gj      = asGroupJid(p[2]);
+          const inviter = normalizeJid(p[3]);
+          const code    = p[4];
+          const exp     = parseInt(p[5], 10) || 0;
+          if (!gj || !inviter || !code) {
+            fail('usage: /group preview-invite <jid> <inviter> <code> [expiration]');
+            break;
+          }
+          const r = await _client.queryGroupInviteMessageInfo(gj, inviter, code, exp);
+          hr();
+          kv('jid',          r.jid);
+          kv('subject',      r.subject);
+          kv('participants', String(r.size));
+          kv('description',  r.description || '—');
+          hr();
+        }
+        else if (sub === 'revoke-invite') {
+          const gj     = asGroupJid(p[2]);
+          const member = normalizeJid(p[3]);
+          if (!gj || !member) { fail('usage: /group revoke-invite <jid> <member>'); break; }
+          await _client.revokeGroupInviteForParticipant(gj, member);
+          out('invitation to ' + member + ' withdrawn');
         }
         else if (sub === 'settings') {
           const gj      = asGroupJid(p[2]);
@@ -1651,10 +1800,7 @@ async function handleLine(line) {
           kv('admins only send', g.onlyAdminsSend ? 'yes' : 'no');
           kv('admins only edit', g.onlyAdminsEdit ? 'yes' : 'no');
           kv('participants', '(' + g.participants.length + ')');
-          for (const pt of g.participants) {
-            const role = pt.role !== 'member' ? '  [' + pt.role + ']' : '';
-            out('    ' + pt.jid + role);
-          }
+          for (const pt of g.participants) out('    ' + participantLine(pt));
         }
         hr();
         break;
@@ -2210,6 +2356,11 @@ async function main() {
           case 'reaction': kv('type',    'reaction  emoji: ' + d.emoji); break;
           case 'location': kv('type',    'location  lat: ' + d.latitude + '  lon: ' + d.longitude + (d.name ? '  name: ' + d.name : '')); break;
           case 'contact':  kv('type',    'contact  name: ' + d.displayName); break;
+          case 'groupInvite':
+            kv('type', 'group invitation  ' + (d.groupName || d.groupJid));
+            kv('accept with', '/group accept-invite ' + d.groupJid + ' ' +
+               (msg.participant || msg.from) + ' ' + d.inviteCode + ' ' + d.inviteExpiration);
+            break;
           default:         kv('type',    d.type);
         }
       }
