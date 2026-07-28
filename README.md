@@ -1449,6 +1449,21 @@ client.on('account_restriction', (r) => {
 > client-side shortens it; the only thing that helps is not sending more
 > unanswered first messages while it is on.
 
+> [!WARNING]
+> **Some servers answer this query in Argo, not JSON.** Argo is Meta's binary
+> GraphQL encoding, and this library cannot read it. When that happens
+> `fetchReachoutTimelock()` throws with `err.mexFormat === 'argo'` and the raw
+> bytes on `err.mexPayload`.
+>
+> It never guesses. Reporting "not restricted" from an answer nobody decoded
+> would have you send more messages and make the restriction longer, so an
+> unreadable reply is an error rather than an all-clear.
+>
+> The `account_restriction` event is unaffected: the server *announces* a
+> restriction starting and lifting, and those announcements arrive as readable
+> JSON on a different route. Keep a listener attached and you will still be
+> told, with the countdown, without ever calling the query.
+
 ### What Is Automatic vs What You Need to Do
 
 **Everything in the "Automatic" column requires zero code from you.**
@@ -3245,6 +3260,21 @@ For the numbers without the countdown:
 
 ```sh
 wa> /restriction --once
+```
+
+If your server encodes this answer in Argo, the command says so rather than
+guessing — and points you at the announcements, which stay readable:
+
+```sh
+wa> /restriction
+checking account restriction...
+error: mex query 23983697327930364: the server answered in "argo" rather than JSON, which this library cannot read (10 bytes: 0402300c000002010303)
+
+  The query itself worked — your server encodes this answer in a binary
+  format this library cannot read yet, so the countdown cannot be polled.
+
+  You will still be told about a restriction: the server announces one when
+  it starts and when it lifts, and those announcements do arrive readable.
 ```
 
 An account that is fine says so and returns immediately:
