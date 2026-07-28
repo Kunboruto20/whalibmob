@@ -11,6 +11,7 @@ const { SenderKeyStore, SenderKeyCrypto } = require('./lib/signal/SenderKey');
 const { DeviceManager } = require('./lib/DeviceManager');
 const { encryptMedia, decryptMedia, uploadMedia, downloadMedia } = require('./lib/MediaService');
 const { MessageSender, makeJid, generateMessageId } = require('./lib/messages/MessageSender');
+const { GroupParticipantResult, GroupJoinRequest } = require('./lib/GroupParticipant');
 const {
   makeCacheableSignalKeyStore,
   addTransactionCapability,
@@ -98,7 +99,10 @@ module.exports = {
   MessageSender,
   makeJid,
   generateMessageId,
-  // Auth utilities (mirrors Baileys' auth-utils)
+  // Group results
+  GroupParticipantResult,
+  GroupJoinRequest,
+  // Auth utilities
   makeCacheableSignalKeyStore,
   addTransactionCapability,
   assertMeId,

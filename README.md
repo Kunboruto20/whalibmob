@@ -118,6 +118,7 @@ npm install -g whalibmob
     - [List Group Participants](#list-group-participants)
     - [Pending Join Requests](#pending-join-requests)
     - [Approve / Reject Join Requests](#approve--reject-join-requests)
+    - [Personal Invitations (CLI)](#cli-personal-invitations)
     - [Group Settings](#group-settings)
   - [Community Commands](#community-commands-cli)
   - [Newsletter / Channel Commands](#newsletter-channel-commands)
@@ -244,6 +245,7 @@ npm install -g whalibmob
     - [Query Metadata](#query-metadata)
     - [Get Request Join List](#get-request-join-list)
     - [Approve / Reject Request Join](#approve--reject-request-join)
+    - [Personal Invitations](#personal-invitations)
     - [Toggle Ephemeral in Group](#toggle-ephemeral-in-group)
 - [WhatsApp IDs](#whatsapp-ids)
 - [Transport](#transport)
@@ -988,7 +990,7 @@ try {
 
 ### `initAuthCreds`
 
-Creates a fresh credential store for the given phone number. Functionally equivalent to `createNewStore` but also initialises the Baileys-compatible extra fields that the library expects for account sync: `nextPreKeyId`, `firstUnuploadedPreKeyId`, `accountSyncCounter`, `accountSettings`, and `advSecretKey`.
+Creates a fresh credential store for the given phone number. Functionally equivalent to `createNewStore` but also initialises the extra fields the library expects for account sync: `nextPreKeyId`, `firstUnuploadedPreKeyId`, `accountSyncCounter`, `accountSettings`, and `advSecretKey`.
 
 ```js
 const { initAuthCreds, saveStore } = require('whalibmob')
@@ -1160,6 +1162,10 @@ The `decoded` object shape per message type:
 
 // Contact (vCard)
 { type: 'contact', displayName: string, vcard: string }
+
+// Personal invitation into a group — see Personal Invitations
+{ type: 'groupInvite', groupJid: string, inviteCode: string, inviteExpiration: number,
+  groupName: string, jpegThumbnail: Buffer|null, caption: string, isCommunity: boolean }
 
 // Protocol (revoke, ephemeral, etc.)
 { type: 'protocol', subtype: string }
@@ -1974,8 +1980,16 @@ const fs = require('fs')
 await client.changeProfilePicture(fs.readFileSync('./avatar.jpg'))
 
 // change a group's picture (you must be admin)
-await client.changeGroupPicture('120363000000000000@g.us', fs.readFileSync('./group.jpg'))
+// returns the new picture id, or 'remove' when the picture was taken down
+const picId = await client.changeGroupPicture('120363000000000000@g.us',
+  fs.readFileSync('./group.jpg'))
+
+// pass null to remove the current picture
+await client.changeGroupPicture('120363000000000000@g.us', null)
 ```
+
+`changeGroupPicture` throws when the server refuses — `406` for an image that is
+not a JPEG it will take, `403` when you are not an admin of that group.
 
 ## Privacy
 
@@ -2063,14 +2077,54 @@ console.log('members', group.participants.map(p => p.jid))
 
 ### Add / Remove or Demote / Promote
 
+Each of these returns one result per participant — the ones that went through
+and the ones that did not. The server decides every participant separately, so a
+call that half worked tells you which half and why.
+
 ```js
 const groupJid = '120363000000000000@g.us'
 
-await client.addGroupParticipants(groupJid,     ['919634847671@s.whatsapp.net'])
+const results = await client.addGroupParticipants(groupJid, [
+  '919634847671@s.whatsapp.net',
+  '12345678901@s.whatsapp.net'
+])
+
+for (const r of results) {
+  if (r.ok) console.log('added', r.jid)
+  else      console.log('failed', r.jid, r.status, r.needsInvite ? '(invite instead)' : '')
+}
+
 await client.removeGroupParticipants(groupJid,  ['919634847671@s.whatsapp.net'])
 await client.promoteGroupParticipants(groupJid, ['919634847671@s.whatsapp.net'])
 await client.demoteGroupParticipants(groupJid,  ['919634847671@s.whatsapp.net'])
 ```
+
+Each result looks like this:
+
+```js
+{
+  jid:         '919634847671@s.whatsapp.net',
+  status:      '403',        // '200' when the action went through
+  error:       403,          // null on success
+  ok:          false,        // getter: error == null
+  admin:       null,         // 'admin' | 'superadmin' | null
+  phoneNumber: '919634847671@s.whatsapp.net',
+  lid:         '112713111982325@lid',   // when the server told us one
+  displayName: null,
+  // Only on a refused add: the code a personal invitation is built from.
+  addRequest:  { code: 'AbCdEfGh', expiration: 1790000000 },
+  needsInvite: true          // getter: true when addRequest holds a code
+}
+```
+
+The common error codes are `403` (their privacy settings do not allow it),
+`404` (not on WhatsApp), `408` (not a member), `409` (already a member) and
+`401` (you are not allowed to do this).
+
+> [!TIP]
+> A result object stringifies to its JID, so `results.join(', ')` and
+> `String(results[0])` read exactly as they did when these methods returned a
+> plain list of JID strings.
 
 ### Change Subject
 
@@ -2165,33 +2219,156 @@ for (const g of groups) {
 
 ```js
 const meta = await client.getGroupMetadata('120363000000000000@g.us')
-// returns: { jid, subject, creation, creator, subjectTime, subjectBy,
-//            description, ephemeral, onlyAdminsSend, onlyAdminsEdit, participants[] }
 console.log(meta.subject, meta.participants.length + ' members')
 ```
+
+```js
+{
+  jid:             '120363000000000000@g.us',
+  subject:         'My Group',
+  size:            57,            // the server's own count
+  creation:        1705315800,
+  creator:         '919634847671@s.whatsapp.net',
+  subjectTime:     1705315900,
+  subjectBy:       '919634847671@s.whatsapp.net',
+  description:     'Group description here',
+  descriptionId:   'DESC1',       // echoed back as `prev` on the next edit
+  descriptionBy:   '919634847671@s.whatsapp.net',
+  descriptionTime: 1705315950,
+  ephemeral:       86400,         // 0 when disappearing messages are off
+  onlyAdminsSend:  false,
+  onlyAdminsEdit:  false,
+  joinApprovalMode: true,         // new members need an admin's approval
+  memberAddMode:   'admin_add',   // 'admin_add' | 'all_member_add' | null
+  isCommunity:         false,
+  isCommunityAnnounce: false,
+  linkedParent:    null,          // the community this group belongs to
+  addressingMode:  'lid',         // 'lid' | 'pn'
+  participants: [
+    {
+      jid:          '112713111982325@lid',
+      role:         'admin',      // 'admin' | 'superadmin' | 'member'
+      isAdmin:      true,
+      isSuperAdmin: false,
+      phoneNumber:  '919634847671@s.whatsapp.net',
+      lid:          '112713111982325@lid',
+      displayName:  null
+    }
+  ]
+}
+```
+
+Both addresses are filled in on every participant whichever way round the server
+named them, so you never have to resolve a LID by hand to know who somebody is.
 
 ### Get Request Join List
 
 ```js
 const pending = await client.queryGroupPendingParticipants('120363000000000000@g.us')
-console.log(pending)
+
+for (const r of pending) {
+  console.log(r.jid, 'asked at', new Date(r.requestedAt * 1000).toISOString())
+}
 ```
+
+Each entry is `{ jid, requestedAt }` — `requestedAt` is unix seconds, or `0` when
+the server did not say. Like the participant results, an entry stringifies to its
+JID.
 
 ### Approve / Reject Request Join
 
-The second parameter is a boolean: `true` to approve, `false` to reject.
+The second parameter is a boolean: `true` to approve, `false` to reject. The
+return value is the same list of per-participant results the add/remove calls
+give you.
 
 ```js
 // approve join requests
-await client.approveGroupParticipants('120363000000000000@g.us', true, [
+const done = await client.approveGroupParticipants('120363000000000000@g.us', true, [
   '919634847671@s.whatsapp.net'
 ])
+console.log(done.filter(r => !r.ok))   // whoever could not be let in, and why
 
 // reject join requests
 await client.approveGroupParticipants('120363000000000000@g.us', false, [
   '919634847671@s.whatsapp.net'
 ])
 ```
+
+### Personal Invitations
+
+An invite link is public — anyone holding it can join. A personal invitation is
+the other kind: minted for one named person, and the only way into a group for
+somebody whose privacy settings stop them from being added outright.
+
+The whole flow starts with a refused add. When the server turns a participant
+away for that reason it hands back a code, which travels to them as a message
+they can tap.
+
+```js
+const groupJid = '120363000000000000@g.us'
+
+// add whoever can be added, and invite whoever cannot — in one call
+const results = await client.addGroupParticipantsOrInvite(groupJid, [
+  '919634847671@s.whatsapp.net',
+  '12345678901@s.whatsapp.net'
+])
+
+for (const r of results) {
+  if (r.ok)              console.log('added', r.jid)
+  else if (r.invited)    console.log('invited', r.jid)
+  else                   console.log('failed', r.jid, r.status, r.inviteError || '')
+}
+```
+
+Or drive it yourself, if you want to decide who gets an invitation:
+
+```js
+const results = await client.addGroupParticipants(groupJid, [
+  '919634847671@s.whatsapp.net'
+])
+
+for (const r of results.filter(x => x.needsInvite)) {
+  await client.sendGroupInvite(r.jid, groupJid,
+    r.addRequest.code, r.addRequest.expiration,
+    { caption: 'Come join us' })
+}
+```
+
+`sendGroupInvite(to, groupJid, code, expiration, opts)` accepts
+`{ groupName, caption, jpegThumbnail, isCommunity, id, contextInfo }`. The group
+name is filled in from the group's own metadata when you do not supply one.
+
+On the receiving side, an invitation arrives as an ordinary `message` event whose
+`decoded.type` is `'groupInvite'`:
+
+```js
+client.on('message', async (msg) => {
+  const d = msg.decoded
+  if (!d || d.type !== 'groupInvite') return
+
+  // look before you leap — this does not join anything
+  const info = await client.queryGroupInviteMessageInfo(
+    d.groupJid, msg.participant || msg.from, d.inviteCode, d.inviteExpiration)
+  console.log(info.subject, info.size + ' members')
+
+  // and accept it
+  const jid = await client.acceptGroupInviteMessage(
+    d.groupJid, msg.participant || msg.from, d.inviteCode, d.inviteExpiration)
+  console.log('joined', jid)
+})
+```
+
+A decoded invitation carries `{ groupJid, inviteCode, inviteExpiration,
+groupName, jpegThumbnail, caption, isCommunity }`.
+
+To withdraw an invitation you sent before it is used:
+
+```js
+await client.revokeGroupInviteForParticipant(groupJid, '919634847671@s.whatsapp.net')
+```
+
+An expired or already-spent invitation throws rather than resolving to nothing,
+so the two cases are easy to tell apart.
 
 ### Toggle Ephemeral in Group
 
@@ -2900,13 +3077,17 @@ left  120363000000000000@g.us
 
 ```sh
 # add participants
-wa> /group add 120363000000000000@g.us 919634847671@s.whatsapp.net
+wa> /group add 120363000000000000@g.us 919634847671@s.whatsapp.net 12345678901@s.whatsapp.net
+  added  919634847671@s.whatsapp.net
+  failed  12345678901@s.whatsapp.net  — their privacy settings do not allow it (403)  · can be invited instead
 
 # remove participants
 wa> /group remove 120363000000000000@g.us 919634847671@s.whatsapp.net
+  removed  919634847671@s.whatsapp.net
 ```
 
-Multiple participants can be listed, separated by spaces.
+Multiple participants can be listed, separated by spaces. Every participant is
+reported on its own line, because the server decides each one separately.
 
 #### Promote / Demote Admins
 
@@ -2938,7 +3119,7 @@ Reads the image from disk and sets it as the group's profile picture. You must b
 
 ```sh
 wa> /group photo 120363000000000000@g.us ./group-logo.jpg
-group picture updated
+group picture updated  id=1705315800
 ```
 
 #### Get Invite Link
@@ -2995,15 +3176,21 @@ wa> /group invite-info "https://chat.whatsapp.com/AbCdEfGhIjKlMnOpQrStUv"
 
 ```sh
 wa> /group meta 120363000000000000@g.us
-  jid              120363000000000000@g.us
-  subject          My Group
-  description      Group description here
-  creator          919634847671@s.whatsapp.net
-  created          2024-01-15 10:30:00
-  participants     3
-  onlyAdminsSend   false
-  onlyAdminsEdit   true
-  ephemeral        0
+  jid                   120363000000000000@g.us
+  subject               My Group
+  creator               919634847671@s.whatsapp.net
+  created               2024-01-15T10:30:00.000Z
+  description           Group description here
+  ephemeral             off
+  only admins send      no
+  only admins edit      yes
+  join approval         required
+  who can add           admins only
+  size                  3
+  participants          (3)
+    919634847671@s.whatsapp.net  [admin]
+    12345678901@s.whatsapp.net
+    98765432109@s.whatsapp.net
 ```
 
 #### List All Groups
@@ -3037,8 +3224,8 @@ Lists users who have requested to join a group (only visible when `approve_parti
 ```sh
 wa> /group pending 120363000000000000@g.us
   pending (2)
-    919634847671@s.whatsapp.net
-    12345678901@s.whatsapp.net
+    919634847671@s.whatsapp.net   2026-07-20T09:12:00.000Z
+    12345678901@s.whatsapp.net    2026-07-21T14:03:20.000Z
 ```
 
 #### Approve / Reject Join Requests
@@ -3046,14 +3233,52 @@ wa> /group pending 120363000000000000@g.us
 ```sh
 # approve one or more pending members
 wa> /group approve 120363000000000000@g.us 919634847671@s.whatsapp.net
-approved  919634847671@s.whatsapp.net
+  approved  919634847671@s.whatsapp.net
 
 # reject one or more pending members
 wa> /group reject 120363000000000000@g.us 919634847671@s.whatsapp.net
-rejected  919634847671@s.whatsapp.net
+  rejected  919634847671@s.whatsapp.net
 ```
 
-Multiple JIDs can be listed, separated by spaces.
+Multiple JIDs can be listed, separated by spaces. Anyone the server would not let
+through is listed separately with the reason.
+
+<a id="cli-personal-invitations"></a>
+
+#### Personal Invitations
+
+For someone whose privacy settings do not let them be added to a group directly,
+`add-invite` adds whoever it can and sends the rest a personal invitation:
+
+```sh
+wa> /group add-invite 120363000000000000@g.us 919634847671@s.whatsapp.net 12345678901@s.whatsapp.net
+  added  919634847671@s.whatsapp.net
+  failed  12345678901@s.whatsapp.net  — their privacy settings do not allow it (403)  · can be invited instead  · invitation sent
+```
+
+An invitation that arrives for you shows the command that accepts it:
+
+```sh
+  message from      919634847671@s.whatsapp.net
+  id                3EB0A1B2C3D4
+  type              group invitation  My Group
+  accept with       /group accept-invite 120363000000000000@g.us 919634847671@s.whatsapp.net AbCdEfGh 1790000000
+```
+
+```sh
+# look at the group without joining it
+wa> /group preview-invite 120363000000000000@g.us 919634847671@s.whatsapp.net AbCdEfGh 1790000000
+
+# join
+wa> /group accept-invite 120363000000000000@g.us 919634847671@s.whatsapp.net AbCdEfGh 1790000000
+joined 120363000000000000@g.us
+
+# send one by hand
+wa> /group send-invite 120363000000000000@g.us 12345678901@s.whatsapp.net AbCdEfGh 1790000000
+
+# take one back before it is used
+wa> /group revoke-invite 120363000000000000@g.us 12345678901@s.whatsapp.net
+```
 
 #### Group Settings
 
