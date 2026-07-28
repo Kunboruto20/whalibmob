@@ -1,8 +1,8 @@
 {
   "name": "whalibmob",
-  "version": "5.10.0",
+  "version": "5.10.1",
   "description": "WhatsApp library for interaction with WhatsApp Mobile API no web",
-  "author": "Kunboruto50",
+  "author": "Kunboruto20",
   "main": "index.js",
   "bin": {
     "wa": "./cli.js"
