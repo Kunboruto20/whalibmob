@@ -1428,115 +1428,64 @@ await client.init('919634847671')
 
 ## Receiving Media
 
-When a media message arrives, `msg.decoded` contains a CDN `url` and a `mediaKey`.
-The actual file is stored encrypted on WhatsApp's CDN and must be downloaded and decrypted.
-
-**Decryption uses two steps:**
-1. HKDF-SHA256 expands `mediaKey` into IV, cipher key, and MAC key.
-2. AES-256-CBC decrypts the ciphertext; a 10-byte HMAC-SHA256 MAC is verified first.
+When a media message arrives, `msg.decoded` carries the CDN location and the
+`mediaKey` the file is encrypted under. `client.downloadMedia()` fetches it and
+hands back the plaintext bytes:
 
 ```js
-const crypto = require('crypto')
-const https  = require('https')
-const http   = require('http')
-const fs     = require('fs')
-const path   = require('path')
+const fs = require('fs')
 
-// HKDF info strings per media type
-const MEDIA_HKDF_INFO = {
-  image:    'WhatsApp Image Keys',
-  video:    'WhatsApp Video Keys',
-  audio:    'WhatsApp Audio Keys',
-  voice:    'WhatsApp Audio Keys',
-  document: 'WhatsApp Document Keys',
-  sticker:  'WhatsApp Image Keys',
-}
+const EXT = { image: '.jpg', video: '.mp4', audio: '.ogg', voice: '.ogg',
+              sticker: '.webp', document: '' }
 
-function deriveMediaKeys(mediaKey, mediaType) {
-  const info     = Buffer.from(MEDIA_HKDF_INFO[mediaType] || 'WhatsApp Image Keys', 'utf8')
-  const expanded = Buffer.from(crypto.hkdfSync('sha256', mediaKey, Buffer.alloc(0), info, 112))
-  return {
-    iv:        expanded.slice(0,  16),
-    cipherKey: expanded.slice(16, 48),
-    macKey:    expanded.slice(48, 80),
-  }
-}
-
-function decryptMedia(encrypted, mediaKey, mediaType) {
-  const { iv, cipherKey, macKey } = deriveMediaKeys(mediaKey, mediaType)
-  const ciphertext = encrypted.slice(0, -10)
-  const fileMac    = encrypted.slice(-10)
-
-  // Verify MAC
-  const hmac     = crypto.createHmac('sha256', macKey)
-  hmac.update(iv)
-  hmac.update(ciphertext)
-  const computed = hmac.digest().slice(0, 10)
-  if (!computed.equals(fileMac)) throw new Error('MAC mismatch — corrupt file or wrong key')
-
-  // Decrypt
-  const decipher = crypto.createDecipheriv('aes-256-cbc', cipherKey, iv)
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()])
-}
-
-function downloadBuffer(url) {
-  return new Promise((resolve, reject) => {
-    const lib = url.startsWith('https') ? https : http
-    const req = lib.get(url, { headers: { 'User-Agent': 'WhatsApp/2.26.7.75 A' } }, res => {
-      if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)) }
-      const chunks = []
-      res.on('data',  c => chunks.push(c))
-      res.on('end',   () => resolve(Buffer.concat(chunks)))
-      res.on('error', reject)
-    })
-    req.on('error', reject)
-    req.setTimeout(30000, () => { req.destroy(); reject(new Error('timeout')) })
-  })
-}
-
-async function downloadAndDecrypt(msgId, mediaType, url, mediaKey, opts) {
-  const extensions = { image: '.jpg', video: '.mp4', audio: '.ogg', voice: '.ogg',
-                       document: '', sticker: '.webp' }
-  let ext = extensions[mediaType] || ''
-  if (mediaType === 'document' && opts && opts.fileName) ext = path.extname(opts.fileName) || '.bin'
-
-  const encrypted = await downloadBuffer(url)
-  const decrypted = decryptMedia(encrypted, mediaKey, mediaType)
-
-  const outPath = path.join('./media', msgId + ext)
-  fs.mkdirSync('./media', { recursive: true })
-  fs.writeFileSync(outPath, decrypted)
-  return outPath
-}
-```
-
-**Using it in the `message` event:**
-
-```js
-const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'voice', 'document', 'sticker'])
-
-client.on('message', async msg => {
+client.on('message', async (msg) => {
   const d = msg.decoded
-  if (!d) return
+  if (!d || !d.mediaKey) return
 
-  // Resolve the real phone JID (works even with LID from-fields)
-  const spn       = msg.node && msg.node.attrs && msg.node.attrs.sender_pn
-  const senderJid = spn ? (spn.user + '@s.whatsapp.net') : msg.from
-
-  if (d.type === 'text') {
-    console.log('text from', senderJid, ':', d.text)
-  }
-
-  if (MEDIA_TYPES.has(d.type) && d.url && d.mediaKey) {
-    try {
-      const filePath = await downloadAndDecrypt(msg.id, d.type, d.url, d.mediaKey, { fileName: d.fileName })
-      console.log('saved', d.type, 'to', filePath)
-    } catch (e) {
-      console.error('media download failed:', e.message)
-    }
+  try {
+    const bytes = await client.downloadMedia(d)
+    const name  = d.fileName || (msg.id + (EXT[d.type] || ''))
+    fs.writeFileSync(name, bytes)
+    console.log('saved', d.type, 'to', name)
+  } catch (e) {
+    console.error('media download failed:', e.message)
   }
 })
 ```
+
+It works the same in both modes, and that is the point: the CDN applies a
+browser check on the way **down** as well as on the way up, so a companion has to
+identify itself as one here too. Doing this by hand means knowing that, and
+knowing which HKDF key name each media type derives from — a voice note derives
+from the PTT keys and a GIF from the video ones, not from their own. Get either
+wrong and the download is refused or the decryption yields garbage.
+
+The whole message object is accepted as well as its `decoded` half, so
+`client.downloadMedia(msg)` does the same thing.
+
+**Verifying the file**
+
+Pass `{ verify: true }` to check the download against the message's
+`fileEncSha256` before decrypting it. The MAC already proves the plaintext was
+not tampered with; this catches a truncated or substituted download earlier, and
+names that failure separately from a decryption one.
+
+```js
+const bytes = await client.downloadMedia(d, { verify: true })
+```
+
+**What happens underneath**
+
+1. The encrypted blob is fetched from `url`, or from `directPath` when the
+   message carries no absolute URL.
+2. HKDF-SHA256 expands `mediaKey` into an IV, a cipher key and a MAC key, using
+   the info string for that media type.
+3. The trailing 10-byte HMAC-SHA256 is verified, then AES-256-CBC decrypts the
+   rest.
+
+`downloadMedia` throws with the reason rather than returning empty: a message
+with no media, no CDN location, an unsupported type, or a file that does not
+match the message all say so.
 
 ## Sending Messages
 
