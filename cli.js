@@ -1482,7 +1482,16 @@ async function handleLine(line) {
         requireConn();
         const watch = !p.includes('--once');
         out('checking account restriction...');
-        const st = await _client.fetchReachoutTimelock();
+        let st;
+        try {
+          st = await _client.fetchReachoutTimelock();
+        } catch (e) {
+          fail(e.message);
+          out('');
+          out('  If the reply is sketched above, paste that line when reporting this —');
+          out('  it is the server\'s actual answer. Run with --debug for the raw stanza.');
+          break;
+        }
         hr();
         if (!st.active) {
           kv('status', 'not restricted — you can start new chats');
