@@ -98,6 +98,7 @@ npm install -g whalibmob
     - [Archive / Unarchive](#archive--unarchive)
     - [Star / Unstar a Message](#star--unstar-a-message-cli)
     - [Sync App State (CLI)](#cli-app-state)
+    - [Account Restriction Countdown](#cli-restriction)
     - [Disappearing Messages](#cli-disappearing-messages)
     - [Default Disappearing Timer](#default-disappearing-timer)
     - [Block / Unblock](#block--unblock)
@@ -169,6 +170,7 @@ npm install -g whalibmob
     - [Persistent Files Written to Disk](#persistent-files-written-to-disk)
     - [Reading the History Store](#reading-the-history-store)
     - [tcToken — Error 463 Defense](#tctoken--error-463-defense)
+    - [When 463 Means the Account Is Restricted](#account-restriction)
     - [What Is Automatic vs What You Need to Do](#what-is-automatic-vs-what-you-need-to-do)
   - [Receiving Media](#receiving-media)
   - [Sending Messages](#sending-messages)
@@ -1113,6 +1115,8 @@ connect()
 | `app_state_mutation` | `{ collection, index, action, removed }` | An app-state change this library does not model |
 | `app_state_key_missing` | `{ collection, keyId }` | App state cannot be read until your phone shares this key |
 | `app_state_keys` | `{ keys }` | Your phone shared app-state sync keys; a sync starts automatically |
+| `account_restriction` | `{ active, remaining, remainingMs, endsAtDate, enforcementType, reason, source }` | The account was restricted or the restriction was lifted — see [When 463 Means the Account Is Restricted](#account-restriction) |
+| `mex_notification` | `{ opName, data }` | A server push over `w:mex` this library does not model |
 
 `remote: true` on a chat event means the change was made on your phone or another
 linked device rather than by this session. Your own calls carry `synced` instead,
@@ -1390,6 +1394,61 @@ whalibmob implements the full lifecycle to prevent this:
 
 Token storage uses the **LID JID** of the contact (e.g. `112345678901234@lid`) as the key — never the phone-number JID — matching WhatsApp's internal convention.
 
+<a id="account-restriction"></a>
+
+### When 463 Means the Account Is Restricted
+
+A `463` has two causes that look identical on the wire, and telling them apart matters because only one of them is worth retrying.
+
+- **No privacy token for that one contact.** The library issues one and re-sends. This is the common case and it resolves itself.
+- **The account is restricted.** WhatsApp has decided you are starting too many chats with people who never reply, and refuses *all* new conversations until the restriction expires. Existing chats keep working, which is why the account otherwise looks healthy. No retry helps — and sending more counts as further reach-outs, which makes it longer.
+
+The expiry is never pushed to a client that has not asked. `fetchReachoutTimelock()` is the only way to learn it:
+
+```js
+const r = await client.fetchReachoutTimelock()
+
+if (r.active) {
+  console.log('restricted:', r.reason)
+  console.log('ends at:   ', r.endsAtDate.toISOString())
+  console.log('remaining: ', r.remaining)      // '04:59:20'
+} else {
+  console.log('not restricted')
+}
+```
+
+```js
+{
+  active:          true,
+  remaining:       '04:59:20',   // HH:MM:SS, hours not wrapped at 24
+  remainingMs:     17960000,
+  endsAt:          1800018000000,
+  endsAtDate:      Date,
+  enforcementType: 'BIZ_QUALITY',
+  reason:          'too many people you messaged blocked or reported you',
+  expiryUnknown:   false,        // true when the server withheld the end time
+  checkedAt:       1800000040000
+}
+```
+
+`getReachoutTimelock()` returns the same shape from what was last learned, without asking again — the countdown is recomputed on every call, so it is what a once-a-second display reads.
+
+**You rarely need to call either.** A send refused with 463 triggers a check on its own (rate-limited to once a minute), and the server pushes an update both when a restriction starts and when it is lifted:
+
+```js
+client.on('account_restriction', (r) => {
+  if (r.active) console.log('restricted for', r.remaining, '—', r.reason)
+  else          console.log('restriction lifted')
+})
+```
+
+`r.source` is `'notification'` when the server announced it and `'query'` when we asked.
+
+> [!NOTE]
+> A first restriction is usually around five hours. Repeats get longer. Nothing
+> client-side shortens it; the only thing that helps is not sending more
+> unanswered first messages while it is on.
+
 ### What Is Automatic vs What You Need to Do
 
 **Everything in the "Automatic" column requires zero code from you.**
@@ -1412,6 +1471,8 @@ Token storage uses the **LID JID** of the contact (e.g. `112345678901234@lid`) a
 | Handle incoming `privacy_token` notifications | ✅ | |
 | Re-issue tcToken after peer identity change | ✅ | |
 | Recover from error 463 with automatic retry | ✅ | |
+| Check for an account restriction after a 463 | ✅ | Rate-limited to once a minute |
+| Track restriction start / lift pushed by the server | ✅ | Raised as `account_restriction` |
 | Populate in-memory LID↔PN maps | ✅ | |
 | Listen to `history_sync` event | 🔵 Optional | Only if your app needs to react to history data |
 | Read `<phone>.history.json` | 🔵 Optional | Only if your app needs chat/contact data at rest |
@@ -3150,6 +3211,60 @@ Changes that arrive on their own are printed as they land:
 If your phone has not yet shared a sync key with this session, the command says
 so — leave WhatsApp open on the phone for a moment and try again.
 
+<a id="cli-restriction"></a>
+
+#### Account Restriction Countdown
+
+When WhatsApp restricts an account, new chats are refused with error 463 until
+it expires — usually about five hours the first time. `/restriction` asks the
+server how long is left and then counts it down, once a second, in place:
+
+```sh
+wa> /restriction
+checking account restriction...
+  ──────────────────────────────────────────────────
+  status                RESTRICTED
+  reason                too many people you messaged blocked or reported you
+  type                  BIZ_QUALITY
+  ends at               2026-07-28 19:41:12 UTC
+  remaining             04:59:22
+  ──────────────────────────────────────────────────
+  New chats with people you have never messaged are refused with
+  error 463 until this expires. Existing conversations keep working,
+  and sending more only makes the restriction longer.
+
+  press any key to stop watching
+  restricted — 04:59:20 remaining
+```
+
+The last line rewrites itself every second — `04:59:20`, `04:59:19`, … — and
+stops on its own the moment the restriction lifts. Any key ends the watch; the
+restriction is unaffected either way. `/limit` is the same command.
+
+For the numbers without the countdown:
+
+```sh
+wa> /restriction --once
+```
+
+An account that is fine says so and returns immediately:
+
+```sh
+wa> /restriction
+checking account restriction...
+  ──────────────────────────────────────────────────
+  status                not restricted — you can start new chats
+  ──────────────────────────────────────────────────
+```
+
+You do not have to run it to find out. A refused send checks by itself, and the
+shell prints the change as it happens:
+
+```sh
+  ACCOUNT RESTRICTED — too many people you messaged blocked or reported you, 04:59:58 remaining
+  run /restriction to watch the countdown
+```
+
 #### CLI Disappearing Messages
 
 | Duration | Seconds |
@@ -3647,6 +3762,9 @@ wa> /quit
 | `/unstar <jid> <msgId> [me]` | Unstar a message |
 | `/appstate [collection...]` | Pull pins/archives/mutes/stars from your phone |
 | `/appstate --snapshot` | Re-read all app state from scratch |
+| `/restriction` | Account restriction status with a live countdown |
+| `/restriction --once` | Restriction status without the countdown |
+| `/limit` | Alias for `/restriction` |
 | `/ephemeral <jid> <seconds>` | Set disappearing messages timer for a chat |
 | `/ephemeral-default <seconds>` | Set global default ephemeral timer for new chats |
 | `/block <jid>` | Block a contact |
