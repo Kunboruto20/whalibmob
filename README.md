@@ -154,6 +154,7 @@ npm install -g whalibmob
     - [Knowing Which Mode You Are In](#knowing-which-mode-you-are-in)
     - [Two Sessions on One Number](#two-sessions-on-one-number)
   - [The Number WhatsApp Files Your Account Under](#the-number-whatsapp-files-your-account-under)
+  - [When Registration Is Refused for Consent](#when-registration-is-refused-for-consent)
   - [Routing Registration Through a Proxy](#routing-registration-through-a-proxy)
   - [Saving & Restoring Sessions](#saving--restoring-sessions)
   - [Signal Store Utilities](#signal-store-utilities)
@@ -305,6 +306,30 @@ if (result.status === 'ok') {
   console.log('registered')
 }
 ```
+
+**When the code is not the end of it.** The server can answer a submitted code with a CAPTCHA, or with a demand for the account's two-step verification PIN. Neither is something the library can work out on its own, so both come back to you through optional handlers:
+
+```js
+const result = await verifyCode(store, '123456', {
+  // image and audio are Buffers, or null when that variant was not sent.
+  // Return the answer, or null to give up.
+  async solveCaptcha({ image, audio }) {
+    fs.writeFileSync('captcha.png', image)
+    return await askTheUser()
+  },
+
+  // The six-digit PIN set on the phone under
+  // Settings → Account → Two-step verification.
+  async twoFactorPin() {
+    return await askTheUser()
+  }
+})
+```
+
+Both are optional and both keep working when omitted — you get an error naming what was asked for instead of a silent failure, with the CAPTCHA blobs attached as `err.captcha`. A wrong CAPTCHA answer is replied to with another one, so `solveCaptcha` may be called several times. The CLI prompts for both, writing the image to a temp file first.
+
+> [!NOTE]
+> Registration reports the screens it passes through to WhatsApp's `/client_log`, the way the phone clients do — a client that registers in total silence does something no real installation does. It is fire-and-forget and every failure is swallowed, so it can never take a registration down. Set `WA_FUNNEL_LOG=0` to send none of it.
 
 ### Device Attestation with Frida (optional)
 
@@ -862,6 +887,27 @@ if (probe.mismatch) {
 
 > [!NOTE]
 > The check costs nothing when things work — it runs only after a login has already been refused.
+
+## When Registration Is Refused for Consent
+
+Some numbers come back from `/register` like this:
+
+```json
+{ "login": "557176034186", "pending": "app_store_age", "reason": "consent", "status": "fail" }
+```
+
+The code was not refused and the account was found — WhatsApp is asking for an age signal that only a real app-store install carries, and will not finish without it. Brazilian numbers are where this turns up in practice.
+
+The first thing to try is the Android device profile. The iOS registration request carries six fields and none of them says anything about consent, terms or age; the Android one carries `tos_version`, `education_screen_displayed` and `clicked_education_link`.
+
+```sh
+WA_OS=android wa registration --code 5571976034186
+```
+
+If that is refused too, the number has to go through the real app once, on a phone, before it can be registered here.
+
+> [!NOTE]
+> The `login` field in that reply is worth reading. Brazilian mobiles gained a ninth digit that WhatsApp never adopted, so `+5571976034186` is filed as `+557176034186`. whalibmob adopts the server's form automatically on a successful registration and saves the session under it — the digit difference is not itself the failure.
 
 ## Routing Registration Through a Proxy
 
