@@ -2149,7 +2149,7 @@ Both methods accept a **Buffer** (use `fs.readFileSync` to load a file).
 ```js
 const fs = require('fs')
 
-// change your own profile picture
+// change your own profile picture — any image, any shape, any size
 // returns the new picture id, or 'remove' when it was taken down
 const picId = await client.changeProfilePicture(fs.readFileSync('./avatar.jpg'))
 
@@ -2165,8 +2165,25 @@ const picId = await client.changeGroupPicture('120363000000000000@g.us',
 await client.changeGroupPicture('120363000000000000@g.us', null)
 ```
 
-`changeGroupPicture` throws when the server refuses — `406` for an image that is
-not a JPEG it will take, `403` when you are not an admin of that group.
+`changeGroupPicture` throws when the server refuses — `406` for an image it will
+not take, `403` when you are not an admin of that group.
+
+**Both calls re-encode the image before sending it.** WhatsApp wants a square
+640×640 JPEG, and a picture that is not one is *dropped without an answer*
+rather than refused — so an unprepared file fails as a timeout that looks like a
+network fault. The image is cropped square, scaled and written out as a fresh
+JPEG, which also strips EXIF and any progressive encoding the file was carrying.
+
+This needs `jimp` (an optional dependency) or `sharp`. Without either, the file
+is sent as it is and an already-correct picture still works.
+
+```js
+// skip the re-encode if you have prepared the image yourself
+await client.changeProfilePicture(buf, { raw: true })
+
+// or choose the size
+await client.changeProfilePicture(buf, { size: 640, quality: 50 })
+```
 
 ## Privacy
 
