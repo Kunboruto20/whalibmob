@@ -1007,7 +1007,9 @@ try {
 
 ### `initAuthCreds`
 
-Creates a fresh credential store for the given phone number. Functionally equivalent to `createNewStore` but also initialises the extra fields the library expects for account sync: `nextPreKeyId`, `firstUnuploadedPreKeyId`, `accountSyncCounter`, `accountSettings`, and `advSecretKey`.
+Creates a fresh credential store for the given phone number — the key pairs, registration ID and device identifiers a number needs before it can even ask for an SMS code. This is what `/reg code` calls.
+
+It returns everything `createNewStore` does, plus a few fields kept for application code that expects them: `nextPreKeyId`, `firstUnuploadedPreKeyId`, `accountSyncCounter`, `accountSettings`, `processedHistoryMessages` and `advSecretKey`. Those extras live on the object only — `saveStore` does not write them, so they are not there again after a reload. Nothing in the library reads them; treat them as a convenience, not as state.
 
 ```js
 const { initAuthCreds, saveStore } = require('whalibmob')
@@ -1024,10 +1026,35 @@ const store = initAuthCreds(phone)
 saveStore(store, sessFile)
 ```
 
-This is the function used internally by the CLI for all new session creation. Prefer it over `createNewStore` for forward compatibility.
+This is the function the CLI uses for every new SMS session. Prefer it over `createNewStore` for forward compatibility.
 
 > [!NOTE]
-> `initAuthCreds` and `createNewStore` produce equivalent stores for all current library operations. The additional fields from `initAuthCreds` are there for future-proofing and interoperability.
+> `initAuthCreds` and `createNewStore` produce equivalent stores for every current library operation, and identical files on disk. Use `createNewWebStore` instead when the device will be linked as a companion rather than registered by SMS — that one adds the pairing fields, and its own serialiser persists them.
+
+The file it writes has exactly these 16 keys:
+
+```json
+{
+  "phoneNumber": "40712345678",
+  "noiseKeyPair":    { "private": "…", "public": "…" },
+  "identityKeyPair": { "private": "…", "public": "…" },
+  "signedPreKey":    { "id": 3649616, "private": "…", "public": "…", "signature": "…" },
+  "registrationId": 2183,
+  "fdid": "2f701f8b-d693-4728-…",
+  "deviceId": "CBIyyJRAokOdYoTYEjTbng==",
+  "identityId": "SE8Q785oful7dGdBgNpwjg==",
+  "advertisingId": "5c97eea9-783f-4fcc-…",
+  "backupToken": "…",
+  "registered": true,
+  "codePending": false,
+  "name": "Boss",
+  "version": "2.26.9.75",
+  "device": { "os": "ios", "platform": 1, "model": "iPhone 15 Pro", "…": "…" },
+  "advIdentity": "…"
+}
+```
+
+`registered` and `codePending` are the two that move: both `false` when the store is created, `codePending` flips to `true` once a code has been requested, and `verifyCode` sets `registered` to `true` and `codePending` back to `false`. `advIdentity` stays `null` until the server sends the signed device identity in `<success>`.
 
 ### Recommended Stacking Pattern
 
