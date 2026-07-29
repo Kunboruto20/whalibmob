@@ -833,6 +833,49 @@ function askLoginMethod(phone) {
   });
 }
 
+// Handlers for the two things a registration can stop and ask for.
+//
+// The server can answer a submitted code with a captcha, or with a demand for
+// the account's two-step PIN. Neither is something the library can work out, so
+// both come back to whoever is driving it — here, the person at the terminal.
+function registrationPrompts() {
+  const prompt = (question) => new Promise((resolve) => {
+    if (!process.stdin.isTTY) return resolve(null);
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => { rl.close(); resolve(String(answer).trim()); });
+  });
+
+  return {
+    async solveCaptcha({ image, audio }) {
+      out('');
+      hr();
+      out('  WhatsApp is asking for a CAPTCHA before it will finish this registration.');
+      // Written out rather than described: it is a picture, and there is
+      // nothing useful to say about it in a terminal.
+      for (const [what, buf, ext] of [['image', image, 'png'], ['audio', audio, 'mp3']]) {
+        if (!buf || !buf.length) continue;
+        const file = path.join(os.tmpdir(), 'whalibmob-captcha-' + Date.now() + '.' + ext);
+        try {
+          fs.writeFileSync(file, buf);
+          out('  ' + what + ' saved to  ' + file + '  (' + buf.length + ' bytes)');
+        } catch (e) {
+          out('  could not save the ' + what + ': ' + e.message);
+        }
+      }
+      hr();
+      const answer = await prompt('  what does it say?  ');
+      return answer || null;
+    },
+
+    async twoFactorPin() {
+      out('');
+      out('  this number has two-step verification switched on');
+      const pin = await prompt('  six-digit PIN:  ');
+      return pin || null;
+    }
+  };
+}
+
 // Link as a companion device.
 //
 // Connect first, then ask for the code: the request rides on the encrypted
@@ -2021,7 +2064,7 @@ async function handleLine(line) {
           const file  = path.join(_sessDir, `${ph}.json`);
           const store = loadStore(file) || initAuthCreds(ph);
           out('verifying...');
-          const r = await verifyCode(store, code);
+          const r = await verifyCode(store, code, registrationPrompts());
           if (r && (r.status === 'ok' || r.status === 'sent' || r.status === 'verified')) {
             if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
             const finalStore = r.store || store;
@@ -2419,7 +2462,7 @@ async function main() {
       const store = loadStore(file) || initAuthCreds(ph);
       out('verifying code for +' + ph + '...');
       try {
-        const r = await verifyCode(store, code);
+        const r = await verifyCode(store, code, registrationPrompts());
         if (r && (r.status === 'ok' || r.status === 'sent' || r.status === 'verified')) {
           if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
           const finalStore = r.store || store;

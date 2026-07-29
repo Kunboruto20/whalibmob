@@ -307,6 +307,30 @@ if (result.status === 'ok') {
 }
 ```
 
+**When the code is not the end of it.** The server can answer a submitted code with a CAPTCHA, or with a demand for the account's two-step verification PIN. Neither is something the library can work out on its own, so both come back to you through optional handlers:
+
+```js
+const result = await verifyCode(store, '123456', {
+  // image and audio are Buffers, or null when that variant was not sent.
+  // Return the answer, or null to give up.
+  async solveCaptcha({ image, audio }) {
+    fs.writeFileSync('captcha.png', image)
+    return await askTheUser()
+  },
+
+  // The six-digit PIN set on the phone under
+  // Settings → Account → Two-step verification.
+  async twoFactorPin() {
+    return await askTheUser()
+  }
+})
+```
+
+Both are optional and both keep working when omitted — you get an error naming what was asked for instead of a silent failure, with the CAPTCHA blobs attached as `err.captcha`. A wrong CAPTCHA answer is replied to with another one, so `solveCaptcha` may be called several times. The CLI prompts for both, writing the image to a temp file first.
+
+> [!NOTE]
+> Registration reports the screens it passes through to WhatsApp's `/client_log`, the way the phone clients do — a client that registers in total silence does something no real installation does. It is fire-and-forget and every failure is swallowed, so it can never take a registration down. Set `WA_FUNNEL_LOG=0` to send none of it.
+
 ### Device Attestation with Frida (optional)
 
 WhatsApp's registration servers score every `/code` and `/register` request on how
