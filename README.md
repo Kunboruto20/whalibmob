@@ -1460,11 +1460,17 @@ client.on('account_restriction', (r) => {
 > was tried against a live server, which responded by dropping the stanza
 > entirely and answering nothing.
 >
-> Some accounts get an answer with no restriction data in it at all — a bare
-> `false` rather than a result. That throws, with the decoded value on
-> `err.mexDecoded`, rather than being reported as "not restricted": an
-> all-clear invented from an answer that never said so would have you send more
-> messages and lengthen the very restriction you were asking about.
+> Some servers answer tersely — a bare `false` or `true` rather than the object
+> with the expiry in it. `false` is taken as "no restriction", because it is a
+> definite answer rather than a missing one. `true` sets `active` with
+> `expiryUnknown: true`, since it says there is a restriction but not when it
+> ends; the countdown then comes from the announcement.
+>
+> An answer that is neither — `null`, or anything that says nothing either way —
+> throws with the decoded value on `err.mexDecoded`, rather than being reported
+> as "not restricted". An all-clear invented from an answer that never gave one
+> would have you send more messages and lengthen the very restriction you were
+> asking about.
 >
 > The `account_restriction` event does not depend on any of this. The server
 > *announces* a restriction starting and lifting, and those announcements carry
@@ -2144,7 +2150,11 @@ Both methods accept a **Buffer** (use `fs.readFileSync` to load a file).
 const fs = require('fs')
 
 // change your own profile picture
-await client.changeProfilePicture(fs.readFileSync('./avatar.jpg'))
+// returns the new picture id, or 'remove' when it was taken down
+const picId = await client.changeProfilePicture(fs.readFileSync('./avatar.jpg'))
+
+// pass null to remove it
+await client.changeProfilePicture(null)
 
 // change a group's picture (you must be admin)
 // returns the new picture id, or 'remove' when the picture was taken down
@@ -2198,6 +2208,32 @@ await client.changePrivacySetting('read_receipts',    'none')
 await client.changePrivacySetting('groups_add',       'contacts')
 await client.changePrivacySetting('call_add',         'known')
 ```
+
+**Each setting takes its own values**, and they are not interchangeable:
+
+| setting | accepts |
+|---|---|
+| `last_seen`, `profile_picture`, `status`, `groups_add` | `all` · `contacts` · `contact_blacklist` · `none` |
+| `read_receipts` | `all` · `none` |
+| `online` | `all` · `match_last_seen` |
+| `call_add` | `all` · `known` |
+| `messages` | `all` · `contacts` |
+| `defense` | `on_standard` · `off` |
+| `stickers` | `contacts` · `contact_allowlist` · `none` |
+
+Friendlier words are translated: `on`, `off`, `everyone`, `nobody`,
+`my_contacts`, `contacts_except`, `contact_whitelist`. `on` becomes `all` — or
+`on_standard` for `defense`, which spells its on-state differently.
+
+```js
+await client.changePrivacySetting('read_receipts', 'on')    // sent as 'all'
+await client.changePrivacySetting('read_receipts', 'off')   // sent as 'none'
+```
+
+A value the setting does not take throws before anything is sent. This matters
+more than it looks: the server does not refuse an unknown value, it drops the
+stanza and never answers, so the mistake would otherwise surface as a timeout
+that looks like a network problem.
 
 ### Read Privacy Settings
 
@@ -3286,20 +3322,6 @@ wa> /restriction --demo
 `--demo 90` uses ninety seconds instead of the default five hours, which is
 short enough to watch it reach zero and stop on its own.
 
-Some accounts get a reply that decodes cleanly but holds no restriction data.
-The command says that, rather than reading it as an all-clear:
-
-```sh
-wa> /restriction
-checking account restriction...
-error: mex query 23983697327930364: the server answered false rather than a result — this query returns no data for this account
-
-  The reply was read successfully — it simply contains no restriction
-  data. This query returns nothing usable for your account.
-
-  You will still be told about a restriction: the server announces one when
-  it starts and when it lifts, and those announcements carry the countdown.
-```
 
 An account that is fine says so and returns immediately:
 
