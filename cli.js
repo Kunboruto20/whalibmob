@@ -447,7 +447,7 @@ const HELP = `
   Profile
     /name    <text>                          change display name
     /about   <text>                          change own bio / about text
-    /photo   <file>                          change own profile picture (JPEG)
+    /photo   <file>|remove                   change or remove own profile picture (JPEG)
     /privacy [<type> <value>]                show or change privacy settings
                                                types:  last_seen profile_picture status
                                                        online read_receipts groups_add
@@ -1387,6 +1387,9 @@ async function handleLine(line) {
           out('  types:  last_seen  profile_picture  status  online  read_receipts');
           out('          groups_add  call_add  messages  defense  stickers');
           out('  values: all  contacts  contact_blacklist  contact_allowlist  none');
+          out('          not every setting takes every value — read_receipts is');
+          out('          all/none, online is all/match_last_seen. on and off are');
+          out('          accepted and translated.');
           out('          match_last_seen  known  on_standard  off');
           break;
         }
@@ -1398,11 +1401,12 @@ async function handleLine(line) {
       case '/photo': {
         requireConn();
         const file = p[1];
-        if (!file) { fail('usage: /photo <file>'); break; }
-        if (!fs.existsSync(file)) { fail('file not found: ' + file); break; }
-        const buf = fs.readFileSync(file);
-        await _client.changeProfilePicture(buf);
-        out('profile picture updated');
+        if (!file) { fail('usage: /photo <file>   (or /photo remove)'); break; }
+        if (file !== 'remove' && !fs.existsSync(file)) { fail('file not found: ' + file); break; }
+        const buf = file === 'remove' ? null : fs.readFileSync(file);
+        const picId = await _client.changeProfilePicture(buf);
+        out(picId === 'remove' ? 'profile picture removed'
+                               : 'profile picture updated' + (picId ? '  id=' + picId : ''));
         break;
       }
 
