@@ -1518,13 +1518,11 @@ async function handleLine(line) {
           fail(e.message);
           if (e.mexDecoded !== undefined) {
             out('');
-            out('  The reply was read successfully — it simply contains no restriction');
-            out('  data. This query returns nothing usable for your account.');
+            out('  The reply was read, but it says nothing about a restriction either');
+            out('  way — so it is not being reported as an all-clear.');
             out('');
-            out('  You will still be told about a restriction: the server announces one when');
-            out('  it starts and when it lifts, and those announcements carry the countdown.');
-            out('  Leave the session connected and watch for:');
-            out('    ACCOUNT RESTRICTED — <reason>, HH:MM:SS remaining');
+            out('  You will still be told if one starts: the server announces that, and');
+            out('  the announcement carries the countdown.');
           } else if (e.mexFormat) {
             out('');
             out('  The query worked, but the reply is in an encoding that could not be');
