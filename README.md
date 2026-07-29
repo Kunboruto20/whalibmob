@@ -928,55 +928,63 @@ const {
 
 ### `makeCacheableSignalKeyStore`
 
-Wraps a `SignalStore` with an in-memory NodeCache layer (5-minute TTL). All `get` calls for `sessions`, `preKeys`, `signedPreKeys`, and `identities` are served from cache on subsequent accesses. Writes invalidate the cache automatically.
+Wraps a `SignalStore` with an in-memory cache (5-minute TTL). Reads for sessions, pre-keys, signed pre-keys and identity keys are served from cache on subsequent accesses; `store*` calls write through to both, and `remove*` / `delete*` calls drop the entry.
+
+A lookup that finds nothing is **not** cached. Absence is the state most likely to change from underneath — a session about to be built, a pre-key about to be uploaded — so a remembered miss is the one that would hurt.
 
 `useClones` is set to `false` so that `SessionRecord` objects — which carry internal state and methods — are returned by reference and never deep-cloned.
 
-The wrapper also forwards `transaction()` and `isInTransaction()` calls to the underlying store when present, making it safe to stack with `addTransactionCapability`.
+Every method the underlying store has is forwarded, including `transaction()` and `isInTransaction()` when present, so the wrapper is a drop-in replacement and safe to stack with `addTransactionCapability`.
 
 ```js
-const { SignalStore } = require('whalibmob')
-const { makeCacheableSignalKeyStore } = require('whalibmob')
+const { SignalStore, makeCacheableSignalKeyStore } = require('whalibmob')
 
-const store  = new SignalStore(/* ... */)
+const store  = new SignalStore()
 const cached = makeCacheableSignalKeyStore(store)
 
 // reads hit cache after first access
-const session = await cached.getSession('919634847671@s.whatsapp.net:0')
+const session = await cached.loadSession('919634847671.0')
 ```
+
+Call `await cached.flushCache()` to drop everything — after a key rotation, or when another process may have written to the same session file.
 
 **When to use:** whenever your `SignalStore` is backed by a remote or disk-based store (database, Redis, file system) and you want to reduce repeated lookups for sessions that haven't changed between sends.
 
 ### `addTransactionCapability`
 
-Wraps a `SignalStore` with batched-write (transaction) semantics. During a transaction all writes are buffered in memory; they are flushed to the underlying store atomically when `commit()` is called at the end of the transaction.
+Wraps a `SignalStore` with batched-write (transaction) semantics. During a transaction all writes are buffered in memory and flushed to the underlying store in one shot when the callback returns — there is no `commit()` to call. Reads check the buffer first, so a transaction sees its own writes. If the callback throws, nothing is written at all and the error reaches the caller.
 
-Uses `AsyncLocalStorage` to propagate transaction context across async call chains, and a per-key-type `Mutex` with reference-counting to serialize concurrent writers safely.
+Uses `AsyncLocalStorage` to propagate transaction context across async call chains, and a `Mutex` with reference-counting per transaction key.
 
 ```js
-const { addTransactionCapability, makeCacheableSignalKeyStore } = require('whalibmob')
+const { SignalStore, addTransactionCapability, makeCacheableSignalKeyStore } = require('whalibmob')
 
 // recommended: cache first, then transactions on top
-const base        = new SignalStore(/* ... */)
-const cached      = makeCacheableSignalKeyStore(base)
-const txnStore    = addTransactionCapability(cached)
+const base     = new SignalStore()
+const cached   = makeCacheableSignalKeyStore(base)
+const txnStore = addTransactionCapability(cached)
 
 // inside a send flow
 await txnStore.transaction(async () => {
-  // all writes are buffered
-  await txnStore.setSession('919634847671@s.whatsapp.net:0', sessionRecord)
-  await txnStore.setPreKey(1, preKeyPair)
-  // commit is called automatically at the end of the transaction callback
-})
+  // all writes are buffered until this callback returns
+  await txnStore.storeSession('919634847671.0', sessionRecord)
+  await txnStore.storePreKey(1, preKeyPair)
+}, 'send')
 ```
 
-Stacking order matters: put `makeCacheableSignalKeyStore` below `addTransactionCapability` so that the cache always sees the committed state.
+The second argument is a scope: two transactions with different keys run concurrently, two with the same key run one after the other. It defaults to `'default'`. Any key is safe — the transaction locks are kept separate from the locks reads take, so no choice of key can make a transaction wait on itself.
+
+Nested `transaction()` calls reuse the enclosing context instead of opening a second one, so an inner transaction does not commit on its own.
+
+Stacking order matters: put `makeCacheableSignalKeyStore` below `addTransactionCapability`, so that a transaction which rolls back never reaches the cache. The other order works too — a failed transaction flushes the cache rather than leave it holding writes the store never took — but it throws away good entries to do it.
 
 **When to use:** for high-throughput servers that send to many recipients concurrently and need to batch Signal key writes into a single atomic flush per message.
 
 ### `assertMeId`
 
-Validates that a store object has a registered phone number and returns the canonical `@s.whatsapp.net` JID. Throws an `Error` if the store lacks a `phoneNumber` or has `registered !== true`.
+Returns the account's JID, or throws an `Error` describing what is missing.
+
+The JID the server assigned is preferred when the store has one (`store.me.id`, set once a connection completes) — it carries the device suffix, and rebuilding it from the phone number silently drops that. A store that has never connected falls back to `<phone>@s.whatsapp.net`, and throws if it lacks a `phoneNumber` or has `registered !== true`.
 
 ```js
 const { assertMeId } = require('whalibmob')
@@ -985,7 +993,8 @@ const store = loadStore(sessFile)
 
 try {
   const jid = assertMeId(store)
-  // jid === '919634847671@s.whatsapp.net'
+  // '919634847671:12@s.whatsapp.net' once connected,
+  // '919634847671@s.whatsapp.net' before that
   console.log('account JID:', jid)
 } catch (err) {
   console.error('store is not registered:', err.message)
@@ -1036,7 +1045,8 @@ const {
 let store = loadStore(sessFile) || initAuthCreds(phone)
 
 // 2. build the layered Signal key store
-const signalStore = new SignalStore(store)
+const signalStore = new SignalStore()
+signalStore.attachFile(sessFile)
 const cachedStore = makeCacheableSignalKeyStore(signalStore)
 const txnStore    = addTransactionCapability(cachedStore)
 
