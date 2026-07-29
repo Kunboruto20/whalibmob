@@ -2168,6 +2168,12 @@ await client.changeGroupPicture('120363000000000000@g.us', null)
 `changeGroupPicture` throws when the server refuses — `406` for an image it will
 not take, `403` when you are not an admin of that group.
 
+> [!NOTE]
+> The two are addressed differently, and it matters. A group picture names the
+> group in the IQ's `target`; your own picture names nobody — the server takes
+> that from the session. Your own JID in `target` is not an error the server
+> reports, it is a stanza it drops without answering.
+
 **Both calls re-encode the image before sending it.** WhatsApp wants a square
 640×640 JPEG, and a picture that is not one is *dropped without an answer*
 rather than refused — so an unprepared file fails as a timeout that looks like a
