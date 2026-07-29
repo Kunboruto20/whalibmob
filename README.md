@@ -984,7 +984,9 @@ Stacking order matters: put `makeCacheableSignalKeyStore` below `addTransactionC
 
 Returns the account's JID, or throws an `Error` describing what is missing.
 
-The JID the server assigned is preferred when the store has one (`store.me.id`, set once a connection completes) — it carries the device suffix, and rebuilding it from the phone number silently drops that. A store that has never connected falls back to `<phone>@s.whatsapp.net`, and throws if it lacks a `phoneNumber` or has `registered !== true`.
+Works with both kinds of store — the SMS store from `initAuthCreds` / `createNewStore`, and the companion store from `createNewWebStore`. Only the wording of the error differs, since the way out of "not registered yet" is SMS verification in one case and pairing in the other.
+
+Once registered, the JID the server assigned is preferred (`store.me.id`) — on a companion it carries the device suffix, and rebuilding it from the phone number drops that silently. Before registration it throws, including during the pairing window: requesting a pairing code writes a placeholder `me` with no suffix, and that is not treated as being linked.
 
 ```js
 const { assertMeId } = require('whalibmob')
