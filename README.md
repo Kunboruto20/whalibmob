@@ -1791,9 +1791,11 @@ Photos and videos are sent with an inline preview so they show up in the chat
 directly, rather than as a placeholder the recipient has to tap. The dimensions
 are read out of the file header with no dependency at all. The preview itself
 uses `jimp` (installed automatically as an optional dependency) or `sharp` if
-you have it; failing both, a photo that carries an EXIF thumbnail still gets
-one. Video previews need `ffmpeg` on PATH — on Termux, `pkg install ffmpeg`.
-Without any of these the media still sends, just without the preview.
+you have it; failing both, a photo that carries an EXIF thumbnail gets one for
+free, and anything else is scaled in process — JPEG, PNG, GIF and BMP all work
+with nothing installed. Video previews need `ffmpeg` on PATH — on Termux,
+`pkg install ffmpeg`. Without any of these the media still sends, just without
+the preview.
 
 ### Image Message
 
@@ -2180,8 +2182,25 @@ rather than refused — so an unprepared file fails as a timeout that looks like
 network fault. The image is cropped square, scaled and written out as a fresh
 JPEG, which also strips EXIF and any progressive encoding the file was carrying.
 
-This needs `jimp` (an optional dependency) or `sharp`. Without either, the file
-is sent as it is and an already-correct picture still works.
+**No image library is required.** JPEG, PNG, GIF and BMP are decoded, cropped
+and re-encoded in process, so a bare `npm install` on a phone or a container
+built without a compiler converts a picture just as well as a full desktop.
+Whatever is installed is preferred, and the fallbacks run in this order:
+
+| | Handles | Needs |
+|---|---|---|
+| `sharp` or `jimp` | everything, best quality | either installed |
+| built in | JPEG, PNG, GIF, BMP | nothing |
+| `ffmpeg` | WebP, HEIC, progressive JPEG | `ffmpeg` on PATH |
+| metadata strip | an already-square JPEG | nothing |
+
+The built-in converter also reads the EXIF orientation tag, so a photo taken in
+portrait is turned upright instead of arriving on its side, and flattens
+transparency onto white, since a JPEG has no alpha channel.
+
+Only an exotic format with nothing installed — a WebP or a HEIC on a machine
+with no `ffmpeg` — still fails, and the error says so rather than reporting a
+bare `406`.
 
 ```js
 // skip the re-encode if you have prepared the image yourself
@@ -3133,11 +3152,16 @@ about updated
 
 #### CLI Change Profile Picture
 
-Reads the image from disk and uploads it as your profile picture. Supported formats: JPEG, PNG.
+Reads the image from disk, crops it square, scales it to 640×640 and uploads it
+as your profile picture. JPEG, PNG, GIF and BMP need nothing installed; WebP and
+HEIC need `ffmpeg` or `jimp`.
 
 ```sh
 wa> /photo ./avatar.jpg
-profile picture updated
+profile picture updated  id=1753912045
+
+wa> /photo remove
+profile picture removed
 ```
 
 #### CLI Change Privacy Settings
