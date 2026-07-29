@@ -447,7 +447,7 @@ const HELP = `
   Profile
     /name    <text>                          change display name
     /about   <text>                          change own bio / about text
-    /photo   <file>|remove                   change or remove own profile picture (JPEG)
+    /photo   <file>|remove                   change or remove own profile picture (any image)
     /privacy [<type> <value>]                show or change privacy settings
                                                types:  last_seen profile_picture status
                                                        online read_receipts groups_add
