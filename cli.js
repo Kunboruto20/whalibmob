@@ -252,9 +252,26 @@ function enableWireTrace() {
     };
     req.on('response', (res) => {
       trace(`\n${C.http}${stamp()} ◀── HTTP ${res.statusCode} from ${host}${C.off}`);
-      let body = '';
-      res.on('data', d => { if (body.length < 8192) body += d.toString('utf8'); });
-      res.on('end', () => { if (body) trace(`  ${C.dim}${body}${C.off}`); });
+      // Registration answers in JSON, so the body was printed as text. An APK
+      // download answers in tens of megabytes of binary, and printing that as
+      // text emptied a terminal full of control characters. Keep a bounded head
+      // of it, decide from those bytes whether it is text at all, and say what
+      // it was rather than showing it when it is not.
+      const head = [];
+      let seen = 0, total = 0;
+      res.on('data', (d) => {
+        total += d.length;
+        if (seen < 4096) { head.push(d); seen += d.length; }
+      });
+      res.on('end', () => {
+        if (!total) return;
+        const buf = Buffer.concat(head).slice(0, 4096);
+        if (isPrintable(buf)) {
+          trace(`  ${C.dim}${buf.toString('utf8')}${total > buf.length ? ' …' : ''}${C.off}`);
+        } else {
+          trace(`  ${C.dim}[${total} bytes, binary]${C.off}`);
+        }
+      });
     });
     return req;
   };
