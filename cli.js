@@ -1411,7 +1411,26 @@ async function handleLine(line) {
         const text = p.slice(1).join(' ');
         if (!text) { fail('usage: /about <text>'); break; }
         await _client.changeAbout(text);
-        out('about updated');
+
+        // The server answers the set IQ before the new about has to be visible
+        // anywhere, so "result" is not the same as "changed" — this used to
+        // report success on the strength of that empty reply alone. Read it
+        // back and say what is actually stored.
+        let stored = null;
+        try { stored = await _client.queryOwnAbout(); } catch (_) {}
+        if (stored === text)  out('about updated');
+        else if (stored)      out('sent, but the server still reports: ' + stored);
+        else                  out('sent, and the server accepted it — it reports no about for this number yet');
+
+        // An about that is stored and still nowhere to be seen is a privacy
+        // setting rather than a failed write: on the wire the category that
+        // governs who may read it is "status".
+        try {
+          const priv = await _client.queryPrivacySettings({ force: true });
+          if (priv && priv.status && priv.status !== 'all') {
+            out('  about visibility is "' + priv.status + '" — /privacy status all shows it to everyone');
+          }
+        } catch (_) {}
         break;
       }
 
