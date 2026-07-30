@@ -2085,7 +2085,7 @@ async function handleLine(line) {
           }
           const methodLabel = method === 'email' ? ('email → ' + emailAddr) : method;
           out('requesting ' + methodLabel + ' code for +' + ph + '...');
-          const codeOpts = method === 'email' ? { email: emailAddr } : {};
+          const codeOpts = Object.assign(method === 'email' ? { email: emailAddr } : {}, { onProgress: out });
           const r = await requestSmsCode(store, method, codeOpts);
           store.codePending = true;
           saveStore(store, sessFile);
@@ -2100,7 +2100,7 @@ async function handleLine(line) {
           const file  = path.join(_sessDir, `${ph}.json`);
           const store = loadStore(file) || initAuthCreds(ph);
           out('verifying...');
-          const r = await verifyCode(store, code, registrationPrompts());
+          const r = await verifyCode(store, code, Object.assign(registrationPrompts(), { onProgress: out }));
           if (r && (r.status === 'ok' || r.status === 'sent' || r.status === 'verified')) {
             if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
             const finalStore = r.store || store;
@@ -2588,7 +2588,7 @@ async function main() {
       const methodLabel = method === 'email' ? ('email → ' + emailAddr) : method;
       out('requesting ' + methodLabel + ' code for +' + ph + '...');
       try {
-        const codeOpts = method === 'email' ? { email: emailAddr } : {};
+        const codeOpts = Object.assign(method === 'email' ? { email: emailAddr } : {}, { onProgress: out });
         const r = await requestSmsCode(store, method, codeOpts);
         store.codePending = true;
         saveStore(store, sessFile);
@@ -2614,7 +2614,7 @@ async function main() {
       const store = loadStore(file) || initAuthCreds(ph);
       out('verifying code for +' + ph + '...');
       try {
-        const r = await verifyCode(store, code, registrationPrompts());
+        const r = await verifyCode(store, code, Object.assign(registrationPrompts(), { onProgress: out }));
         if (r && (r.status === 'ok' || r.status === 'sent' || r.status === 'verified')) {
           if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
           const finalStore = r.store || store;
