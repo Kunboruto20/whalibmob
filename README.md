@@ -678,6 +678,11 @@ wa> /about Available 24/7 for support
 about updated
 ```
 
+`about updated` now means the about was read back from the server and matches
+what you typed. When the server accepts the stanza but still reports something
+else, it says so instead — and if the about is stored but hidden, it names the
+privacy setting that is hiding it.
+
 #### CLI Change Profile Picture
 
 Reads the image from disk, crops it square, scales it to 640×640 and uploads it
@@ -3402,6 +3407,9 @@ const results = await client.hasWhatsapp(['919634847671', '12345678901'])
 ```js
 const about = await client.queryAbout('919634847671@s.whatsapp.net')
 console.log(about)
+
+// your own, asked the same way
+console.log(await client.queryOwnAbout())
 ```
 
 ### Fetch Profile Picture
@@ -3435,6 +3443,22 @@ client.changeName('My Bot')
 
 ```js
 await client.changeAbout('Available 24/7')
+
+// what the server actually has now — the set IQ is answered before the new
+// text has to be visible anywhere, so this is the part worth reading
+const stored = await client.queryOwnAbout()
+```
+
+`changeAbout` throws when the server refuses the change or never answers; it
+used to hand back the reply unread, so a refusal looked exactly like a success.
+An about is limited to 139 characters — a longer one is dropped rather than
+refused, and that too is now a thrown error instead of silence.
+
+An about the server stores and nobody can see is a privacy setting rather than a
+failed write. The category that governs who may read it is `status`:
+
+```js
+await client.changePrivacySetting('status', 'all')
 ```
 
 ### Change Profile Picture
