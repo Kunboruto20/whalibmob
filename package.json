@@ -1,0 +1,57 @@
+{
+  "name": "whalibmob",
+  "version": "5.12.7",
+  "description": "WhatsApp library for interaction with WhatsApp Mobile API no web",
+  "author": "Kunboruto20",
+  "main": "index.js",
+  "bin": {
+    "wa": "./cli.js"
+  },
+  "files": [
+    "index.js",
+    "cli.js",
+    "lib/**/*.js",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "type": "commonjs",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "keywords": [
+    "whatsapp",
+    "signal-protocol",
+    "mobile",
+    "client",
+    "encryption",
+    "e2e",
+    "ios",
+    "multi-device"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kunboruto20/whalibmob.git"
+  },
+  "homepage": "https://github.com/Kunboruto20/whalibmob#readme",
+  "bugs": {
+    "url": "https://github.com/Kunboruto20/whalibmob/issues"
+  },
+  "dependencies": {
+    "@cacheable/node-cache": "^3.0.1",
+    "@noble/hashes": "^1.7.2",
+    "async-mutex": "^0.5.0",
+    "axios": "^1.7.2",
+    "curve25519-js": "^0.0.4",
+    "dotenv": "^16.4.5",
+    "pino": "^9.0.0",
+    "protobufjs": "^6.11.4",
+    "uuid": "^11.1.0",
+    "ws": "^8.21.1"
+  },
+  "optionalDependencies": {
+    "jimp": "^1.6.0",
+    "socks": "^2.8.9"
+  }
+}
