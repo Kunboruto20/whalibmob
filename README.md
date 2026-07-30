@@ -22,10 +22,13 @@ TELEGRAM NEW WHALIBMOB CHANNEL JOIN HERE https://t.me/+jWzq-I9o0Xc1Mzc8
 > Whalibmob now It needs to be rewritten because WhatsApp mobile and has changed the protocol lately and now whalibmob is in testing and some updates by Me Any pull request is accepted. 
 
 
-> [!IMPORTANT] 
-> If you like what I do and want to support me I can leave you here my Crypto usdc address for any donation and support any Small donation is accepted because the WhatsApp protocol changes very often : "0x8AD64F47a715eC24DeF193FBb9aC64d4E857f0f3"
- 
-Usdc ethereum network.
+> [!IMPORTANT]
+> **Support whalibmob.** Keeping this library working against WhatsApp's ever-changing mobile protocol is constant, hands-on work — if it saves you time, a donation of any size is genuinely appreciated and goes straight back into maintaining it.
+>
+> **USDC — Ethereum network (ERC-20):**
+> `0x8AD64F47a715eC24DeF193FBb9aC64d4E857f0f3`
+>
+> _Please send only USDC on the Ethereum (ERC-20) network to this address._
 
 
 
