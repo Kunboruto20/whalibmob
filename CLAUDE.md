@@ -96,6 +96,11 @@ request looks exactly like a successful one. Several of the comments in
   whatsmeow do.
 - Where the server's answer cannot be trusted as proof, **read the state back**
   (see `queryOwnAbout`) rather than reporting what was sent.
+- Registration (`Registration.js`, HTTPS not the socket) has the same trap in its
+  own form: the server reads the calling platform out of the **User-Agent**, not
+  out of any form field, and the Android envelope carries three headers the iOS
+  one does not. `registrationHeaders` is the single place both the direct and the
+  SOCKS path build that from — keep it that way, they drifted once already.
 
 ## Conventions
 
