@@ -121,6 +121,9 @@ npm install -g whalibmob
   - [Connecting Account](#connecting-account)
     - [Register a New Number](#register-a-new-number)
     - [Registering as Android](#registering-as-android)
+      - [Why an APK is involved at all](#why-an-apk-is-involved-at-all)
+      - [Fetching the APK on its own](#fetching-the-apk-on-its-own)
+      - [Reading it out of an APK you already have](#reading-it-out-of-an-apk-you-already-have)
     - [Device Attestation with Frida (optional)](#device-attestation-with-frida-optional)
     - [Connect](#connect)
   - [Linking to an Existing Account (Pairing Code)](#linking-to-an-existing-account-pairing-code)
@@ -274,10 +277,6 @@ wa version
 
 Registration is a one-time process. You need a phone number that can receive an SMS or voice call. **Use a dedicated number** — do not use a number already active on a real WhatsApp device.
 
-> [!IMPORTANT]
-> Registering as **Android** (`WA_OS=android`) needs one extra step first — see
-> [Registering as Android](#registering-as-android). Registering as iOS, the default, does not.
-
 **Step 1 — request a verification code**
 
 ```sh
@@ -290,6 +289,16 @@ wa registration --request-code 919634847671 --method voice
 # via an old WhatsApp account
 wa registration --request-code 919634847671 --method wa_old
 ```
+
+**Registering as Android** is the same command with the platform named. Nothing
+else to prepare — see [what it does behind that one command](#registering-as-android):
+
+```sh
+WA_OS=android WA_DEVICE=samsung-s24-ultra wa registration --request-code 919634847671 --debug
+```
+
+Set `WA_OS=android` in a `.env` file instead and the plain command is enough.
+`--debug` prints every request and reply, which is worth having the first time.
 
 The CLI sends the code request, prints the result, and then **stays open** in the interactive shell. You will see:
 
@@ -1551,6 +1560,34 @@ Both are optional and both keep working when omitted — you get an error naming
 
 ### Registering as Android
 
+**There is nothing to do first.** Name the platform and register:
+
+```sh
+WA_OS=android WA_DEVICE=samsung-s24-ultra wa registration --request-code 919634847671 --debug
+```
+
+The first Android registration finds no token material, fetches the WhatsApp APK
+from Google Play, reads what it needs out of it, checks that WhatsApp really
+signed it, and carries on to the code request — one command, no APK to find:
+
+```
+no Android token material yet — fetching the WhatsApp APK from Google Play
+    version 2.26.30.3 (code 263000302)
+    downloading base.apk and 1 density split (of 24 the server offered): config.xxxhdpi
+    token material written to /home/you/.waSession/android-apk-material.json
+requesting sms code for +919634847671...
+  status  sent
+```
+
+It happens once. Every later registration reads the file. `WA_NO_APK_DOWNLOAD=1`
+turns the fetch off if you would rather it never pulled a hundred megabytes
+unasked, and `wa apk-material` below does the same job by hand.
+
+The rest of this section is what happens behind that one command, and how to
+drive each part yourself.
+
+#### Why an APK is involved at all
+
 The registration token is computed differently on each platform, and only iOS
 derives it from a constant. The Android client signs it with material out of its
 own APK:
@@ -1568,7 +1605,34 @@ the iOS-shaped token as Android is answered with `{"reason":"bad_token"}`, and n
 value in `WA_STATIC_TOKEN` changes that — the constant is not what is wrong, the
 formula is. `WA_STATIC_TOKEN` applies to iOS only.
 
-**Get an APK.** Pull it off any phone or emulator that has WhatsApp installed:
+#### Fetching the APK on its own
+
+This runs by itself on a registration that finds no material. To do it separately
+— to refresh after a WhatsApp release, or just to see what it picks up:
+
+```sh
+wa apk-material --download
+```
+
+It is the route Cobalt takes: an anonymous Play Store token from the Aurora OSS
+dispenser, then Google's own `/fdfe` catalogue and delivery endpoints, then the
+signed CDN URLs. **No Google account of yours is involved.** Only the density
+splits are downloaded — the token's key comes from `about_logo.png`, which lives
+in one of those, and the architecture and language splits would be a hundred
+megabytes nothing here reads.
+
+Two caveats. The dispenser is a free third-party service: when it is down or rate
+limiting, this fails and an APK from a phone still works. And downloading from
+Play this way is against Play's terms of service, which is your call to make.
+
+Play serves the splits that suit the device profile it is asked as, not the full
+set a bundle holds, so the density this yields can differ from the one in a
+complete bundle — and a different density is a different key. The `about_logo`
+line in the output names which one was used.
+
+#### Reading it out of an APK you already have
+
+Pull one off any phone or emulator that has WhatsApp installed:
 
 ```sh
 adb shell pm path com.whatsapp
@@ -1593,9 +1657,20 @@ reading base.apk...
   package               com.whatsapp
   version               2.26.25.80  (code 260908001)
   certificates          1
+  signed by             C=US, ST=California, L=Santa Clara, O=WhatsApp Inc., …
+  sha256                AD:AD:64:31:29:8F:64:2B:…
   classes.dex md5       5c71f02aaad331e16e436bfa83ea3c5b
   written to            /home/you/.waSession/android-apk-material.json
 ```
+
+**Watch the `signed by` line.** The token is an HMAC over the signing
+certificates, so it is only the token the server expects when those certificates
+are WhatsApp's own. Mirrors re-sign the APKs they host, commonly with the AOSP
+test key whose private half ships in the Android sources — a re-signed APK yields
+a token that is well-formed and belongs to nobody. Anything other than WhatsApp
+in that subject is called out here as a warning, and registration refuses to
+start on it rather than spending code requests against your number on something
+that cannot succeed. `WA_ALLOW_FOREIGN_APK=1` sends it anyway.
 
 Only the derived pieces are kept — the APK is never needed again. Registration
 picks the file up on its own from then on. `--out <file>` writes it elsewhere,
@@ -1608,8 +1683,10 @@ announcing any other version describes a build the token does not belong to.
 `WA_VERSION` still overrides everything if you need it to; on a manifest with no
 `versionName`, pass `--version <x.y.z.w>`.
 
-**Re-run it when you update the APK.** `classes.dex` changes with every WhatsApp
-release, and its MD5 is signed into the token.
+**Refresh it on a new WhatsApp release.** `classes.dex` changes every release and
+its MD5 is signed into the token, so material from an older build stops matching
+the version being announced. `wa apk-material --download` re-reads the current
+one; deleting the file and registering again does the same thing on its own.
 
 Programmatically:
 

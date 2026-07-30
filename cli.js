@@ -252,9 +252,26 @@ function enableWireTrace() {
     };
     req.on('response', (res) => {
       trace(`\n${C.http}${stamp()} ◀── HTTP ${res.statusCode} from ${host}${C.off}`);
-      let body = '';
-      res.on('data', d => { if (body.length < 8192) body += d.toString('utf8'); });
-      res.on('end', () => { if (body) trace(`  ${C.dim}${body}${C.off}`); });
+      // Registration answers in JSON, so the body was printed as text. An APK
+      // download answers in tens of megabytes of binary, and printing that as
+      // text emptied a terminal full of control characters. Keep a bounded head
+      // of it, decide from those bytes whether it is text at all, and say what
+      // it was rather than showing it when it is not.
+      const head = [];
+      let seen = 0, total = 0;
+      res.on('data', (d) => {
+        total += d.length;
+        if (seen < 4096) { head.push(d); seen += d.length; }
+      });
+      res.on('end', () => {
+        if (!total) return;
+        const buf = Buffer.concat(head).slice(0, 4096);
+        if (isPrintable(buf)) {
+          trace(`  ${C.dim}${buf.toString('utf8')}${total > buf.length ? ' …' : ''}${C.off}`);
+        } else {
+          trace(`  ${C.dim}[${total} bytes, binary]${C.off}`);
+        }
+      });
     });
     return req;
   };
@@ -2068,7 +2085,7 @@ async function handleLine(line) {
           }
           const methodLabel = method === 'email' ? ('email → ' + emailAddr) : method;
           out('requesting ' + methodLabel + ' code for +' + ph + '...');
-          const codeOpts = method === 'email' ? { email: emailAddr } : {};
+          const codeOpts = Object.assign(method === 'email' ? { email: emailAddr } : {}, { onProgress: out });
           const r = await requestSmsCode(store, method, codeOpts);
           store.codePending = true;
           saveStore(store, sessFile);
@@ -2083,7 +2100,7 @@ async function handleLine(line) {
           const file  = path.join(_sessDir, `${ph}.json`);
           const store = loadStore(file) || initAuthCreds(ph);
           out('verifying...');
-          const r = await verifyCode(store, code, registrationPrompts());
+          const r = await verifyCode(store, code, Object.assign(registrationPrompts(), { onProgress: out }));
           if (r && (r.status === 'ok' || r.status === 'sent' || r.status === 'verified')) {
             if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
             const finalStore = r.store || store;
@@ -2329,6 +2346,7 @@ usage:
   wa registration --register <phone> --code <code>
   wa registration --check <phone>
   wa apk-material <base.apk> [split.apk ...]  read the Android token material
+  wa apk-material --download                  fetch that APK from Google Play
   wa version
 
 options:
@@ -2445,8 +2463,9 @@ async function main() {
   if (cmd === 'apk-material') {
     // parseArgs puts the first non-flag argument in sub, the rest in pos.
     const apks = [sub, ...pos].filter(Boolean);
-    if (!apks.length) {
+    if (!apks.length && !flags.download) {
       fail('usage: wa apk-material <base.apk> [split.apk ...]');
+      out('       wa apk-material --download        fetch the APK from Google Play instead');
       process.exit(1);
     }
     const outFile = flags.out ||
@@ -2454,12 +2473,26 @@ async function main() {
       path.join(_sessDir, 'android-apk-material.json');
     try {
       const AndroidApk = require('./lib/AndroidApk');
-      const [basePath, ...splitPaths] = apks;
-      out('reading ' + basePath + '...');
-      const material = AndroidApk.extractMaterial(
-        fs.readFileSync(basePath),
-        splitPaths.map(p => ({ name: path.basename(p), data: fs.readFileSync(p) }))
-      );
+      let material;
+      if (flags.download) {
+        const PlayStore = require('./lib/PlayStore');
+        out('fetching ' + (flags.business ? 'com.whatsapp.w4b' : 'com.whatsapp') + ' from Google Play...');
+        const apk = await PlayStore.downloadApk({
+          packageName: flags.business ? 'com.whatsapp.w4b' : 'com.whatsapp',
+          onProgress:  (m) => out('  ' + m)
+        });
+        material = AndroidApk.extractMaterial(apk.base, apk.splits);
+        // The catalogue's version is the authority when the manifest has none.
+        if (!material.apkVersion)     material.apkVersion     = apk.versionName;
+        if (!material.apkVersionCode) material.apkVersionCode = apk.versionCode;
+      } else {
+        const [basePath, ...splitPaths] = apks;
+        out('reading ' + basePath + '...');
+        material = AndroidApk.extractMaterial(
+          fs.readFileSync(basePath),
+          splitPaths.map(p => ({ name: path.basename(p), data: fs.readFileSync(p) }))
+        );
+      }
       if (flags.version) material.apkVersion = String(flags.version);
       if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
       fs.writeFileSync(outFile, JSON.stringify(AndroidApk.materialToJson(material), null, 2));
@@ -2467,10 +2500,24 @@ async function main() {
       kv('version', material.apkVersion
         ? material.apkVersion + (material.apkVersionCode ? '  (code ' + material.apkVersionCode + ')' : '')
         : '(not in the manifest — pass --version <x.y.z.w>)');
+      if (material.aboutLogoFrom) kv('about_logo', material.aboutLogoFrom);
       kv('certificates', String(material.certificates.length));
+      const signer = AndroidApk.describeCertificate(material.certificates[0]);
+      if (signer) {
+        kv('signed by', signer.subject);
+        kv('sha256', signer.fingerprint256);
+      }
       kv('classes.dex md5', material.classesDexMd5.toString('hex'));
       kv('written to', outFile);
       out('');
+      if (signer && !AndroidApk.looksLikeWhatsAppCertificate(signer)) {
+        warn('this APK is not signed by WhatsApp — the subject above is somebody else.');
+        out('  Mirrors re-sign the APKs they host, and re-signing replaces the certificate');
+        out('  the token is built from. The token will come out well-formed and belong to');
+        out('  nobody, which the server answers with bad_token. Use the APK installed on a');
+        out('  phone instead: pm path com.whatsapp');
+        out('');
+      }
       if (material.apkVersion) {
         out('  Registration will announce ' + material.apkVersion + ' from now on, because the');
         out('  token is signed over this APK — the live Play Store version would name a');
@@ -2541,7 +2588,7 @@ async function main() {
       const methodLabel = method === 'email' ? ('email → ' + emailAddr) : method;
       out('requesting ' + methodLabel + ' code for +' + ph + '...');
       try {
-        const codeOpts = method === 'email' ? { email: emailAddr } : {};
+        const codeOpts = Object.assign(method === 'email' ? { email: emailAddr } : {}, { onProgress: out });
         const r = await requestSmsCode(store, method, codeOpts);
         store.codePending = true;
         saveStore(store, sessFile);
@@ -2567,7 +2614,7 @@ async function main() {
       const store = loadStore(file) || initAuthCreds(ph);
       out('verifying code for +' + ph + '...');
       try {
-        const r = await verifyCode(store, code, registrationPrompts());
+        const r = await verifyCode(store, code, Object.assign(registrationPrompts(), { onProgress: out }));
         if (r && (r.status === 'ok' || r.status === 'sent' || r.status === 'verified')) {
           if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
           const finalStore = r.store || store;
