@@ -9,7 +9,7 @@
 
 CONTACT ME ON TELEGRAM  IF YOU WANT TO WORK WITH ME AND IF YOU HAVE PROBLEM WITH WHALIBMOB : @brtyu545
 
-TELEGRAM NEW WHALIBMOB CHANNEL JOIN HERE https://t.me/+jWzq-I9o0Xc1Mzc8
+If you want News about whalibmob enter this whalibmob channel: https://t.me/+sHN4MDCyB7U5OWY0
 
 
 
