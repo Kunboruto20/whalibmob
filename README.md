@@ -300,6 +300,10 @@ WA_OS=android WA_DEVICE=samsung-s24-ultra wa registration --request-code 9196348
 Set `WA_OS=android` in a `.env` file instead and the plain command is enough.
 `--debug` prints every request and reply, which is worth having the first time.
 
+The variables only matter for the command that *creates* the session. What a
+session registered as is written into it, so the confirmation step and every
+later connect follow the session, not whatever the shell carries at the time.
+
 The CLI sends the code request, prints the result, and then **stays open** in the interactive shell. You will see:
 
 ```
@@ -1341,6 +1345,28 @@ wa> /reg confirm 919634847671 123456
 registered  session saved to /home/user/.waSession/919634847671.json
 now run: /connect 919634847671
 ```
+
+**Registering as Android from the shell** works the same way, but `WA_OS` has to
+be set when the shell *starts* — the `wa>` prompt is already inside a running
+process, and nothing typed at it can change the environment that process was
+launched with:
+
+```sh
+WA_OS=android WA_DEVICE=samsung-s24-ultra wa
+```
+```sh
+wa> /reg code 919634847671
+no Android token material yet — fetching the WhatsApp APK from Google Play
+  ...
+  status  sent
+wa> /reg confirm 919634847671 123456
+```
+
+A `.env` file with `WA_OS=android` in the directory you start from does the same
+and saves the typing. Either way it only matters for the command that *creates*
+the session: what a session registered as is written into it, and every later
+step — the confirmation, a reconnect from a different shell tomorrow — follows
+the session rather than the environment.
 
 ---
 
