@@ -2467,6 +2467,7 @@ async function main() {
       kv('version', material.apkVersion
         ? material.apkVersion + (material.apkVersionCode ? '  (code ' + material.apkVersionCode + ')' : '')
         : '(not in the manifest — pass --version <x.y.z.w>)');
+      if (material.aboutLogoFrom) kv('about_logo', material.aboutLogoFrom);
       kv('certificates', String(material.certificates.length));
       const signer = AndroidApk.describeCertificate(material.certificates[0]);
       if (signer) {
