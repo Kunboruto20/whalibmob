@@ -1591,6 +1591,7 @@ wa apk-material base.apk split_config.xxhdpi.apk
 ```
 reading base.apk...
   package               com.whatsapp
+  version               2.26.25.80  (code 260908001)
   certificates          1
   classes.dex md5       5c71f02aaad331e16e436bfa83ea3c5b
   written to            /home/you/.waSession/android-apk-material.json
@@ -1599,6 +1600,13 @@ reading base.apk...
 Only the derived pieces are kept — the APK is never needed again. Registration
 picks the file up on its own from then on. `--out <file>` writes it elsewhere,
 and `WA_ANDROID_APK_MATERIAL` points at it if you keep it somewhere else.
+
+**The version comes from the APK too.** It is read out of the binary
+`AndroidManifest.xml` and announced from then on, instead of the version the Play
+Store currently lists. The token is signed over *this* build's `classes.dex`, so
+announcing any other version describes a build the token does not belong to.
+`WA_VERSION` still overrides everything if you need it to; on a manifest with no
+`versionName`, pass `--version <x.y.z.w>`.
 
 **Re-run it when you update the APK.** `classes.dex` changes with every WhatsApp
 release, and its MD5 is signed into the token.

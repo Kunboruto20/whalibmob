@@ -2464,12 +2464,22 @@ async function main() {
       if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
       fs.writeFileSync(outFile, JSON.stringify(AndroidApk.materialToJson(material), null, 2));
       kv('package', material.packageName);
+      kv('version', material.apkVersion
+        ? material.apkVersion + (material.apkVersionCode ? '  (code ' + material.apkVersionCode + ')' : '')
+        : '(not in the manifest — pass --version <x.y.z.w>)');
       kv('certificates', String(material.certificates.length));
       kv('classes.dex md5', material.classesDexMd5.toString('hex'));
       kv('written to', outFile);
       out('');
-      out('  Android registration will use this from now on. Re-run it when you');
-      out('  update the APK — classes.dex changes with every WhatsApp release.');
+      if (material.apkVersion) {
+        out('  Registration will announce ' + material.apkVersion + ' from now on, because the');
+        out('  token is signed over this APK — the live Play Store version would name a');
+        out('  different build. WA_VERSION still overrides it.');
+      } else {
+        out('  The manifest carries no versionName, so the live Play Store version will be');
+        out('  announced. If that does not match this APK, pass --version or set WA_VERSION.');
+      }
+      out('  Re-run this when you update the APK — classes.dex changes every release.');
     } catch (e) {
       fail(e.message);
       process.exit(1);
