@@ -2358,10 +2358,43 @@ function askDebugMode(cmd) {
   });
 }
 
+// Donation prompt — asked at startup, right after the debug question. Purely
+// optional and interactive-only: a piped/non-TTY run, the offline commands, and
+// WA_NO_DONATE=1 all skip it in silence, so nothing about it can get in the way
+// of a script or a real command.
+function askDonation(cmd) {
+  const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h'];
+  if (cmd && OFFLINE.includes(cmd)) return Promise.resolve();
+  if (!process.stdin.isTTY) return Promise.resolve();
+  if (process.env.WA_NO_DONATE === '1') return Promise.resolve();
+
+  return new Promise(resolve => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question('do you want to donate USDC to support whalibmob?  [y/N] ', (answer) => {
+      rl.close();
+      if (/^y(es)?$/i.test(String(answer).trim())) {
+        out('');
+        hr();
+        out('  Kunboruto20 — USDC address (Ethereum · ERC-20)');
+        out('  To send crypto, copy the address below:');
+        out('');
+        out('  0x8AD64F47a715eC24DeF193FBb9aC64d4E857f0f3');
+        out('');
+        out('  Send ONLY USDC on the Ethereum (ERC-20) network to this address.');
+        out('  Every donation keeps whalibmob maintained — thank you!');
+        hr();
+        out('');
+      }
+      resolve();
+    });
+  });
+}
+
 async function main() {
   const { cmd, sub, flags, pos } = parseArgs(process.argv);
 
   await askDebugMode(cmd);
+  await askDonation(cmd);
 
   _sessDir = flags.session || defaultSessionDir();
 
