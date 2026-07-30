@@ -25,10 +25,11 @@ TELEGRAM NEW WHALIBMOB CHANNEL JOIN HERE https://t.me/+jWzq-I9o0Xc1Mzc8
 > [!IMPORTANT]
 > **Support whalibmob.** Keeping this library working against WhatsApp's ever-changing mobile protocol is constant, hands-on work — if it saves you time, a donation of any size is genuinely appreciated and goes straight back into maintaining it.
 >
-> **USDC — Ethereum network (ERC-20):**
-> `0x8AD64F47a715eC24DeF193FBb9aC64d4E857f0f3`
->
-> _Please send only USDC on the Ethereum (ERC-20) network to this address._
+> **USDC — Ethereum network (ERC-20).** Please send only USDC on the Ethereum (ERC-20) network to the address below:
+
+```
+0x8AD64F47a715eC24DeF193FBb9aC64d4E857f0f3
+```
 
 
 
