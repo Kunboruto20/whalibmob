@@ -2328,10 +2328,12 @@ usage:
   wa registration --request-code <phone>    request SMS code
   wa registration --register <phone> --code <code>
   wa registration --check <phone>
+  wa apk-material <base.apk> [split.apk ...]  read the Android token material
   wa version
 
 options:
   --session <dir>   session directory  (default: ~/.waSession)
+  --out <file>      where apk-material writes  (default: <session dir>/android-apk-material.json)
   --sms             connect by registering this number over SMS
   --pair            connect by linking to an existing account (8-digit code)
   --method          sms | voice | wa_old | email  (default: sms)
@@ -2431,6 +2433,47 @@ async function main() {
 
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     out(USAGE);
+    return;
+  }
+
+  // Read the Android registration token material out of a WhatsApp APK.
+  //
+  // Registering as Android signs its token with the APK's own signing
+  // certificates, the MD5 of its classes.dex, and a key derived from
+  // about_logo.png — none of which can be derived, so they are read out of a
+  // real APK once and kept. Registering as iOS needs none of it.
+  if (cmd === 'apk-material') {
+    // parseArgs puts the first non-flag argument in sub, the rest in pos.
+    const apks = [sub, ...pos].filter(Boolean);
+    if (!apks.length) {
+      fail('usage: wa apk-material <base.apk> [split.apk ...]');
+      process.exit(1);
+    }
+    const outFile = flags.out ||
+      process.env.WA_ANDROID_APK_MATERIAL ||
+      path.join(_sessDir, 'android-apk-material.json');
+    try {
+      const AndroidApk = require('./lib/AndroidApk');
+      const [basePath, ...splitPaths] = apks;
+      out('reading ' + basePath + '...');
+      const material = AndroidApk.extractMaterial(
+        fs.readFileSync(basePath),
+        splitPaths.map(p => ({ name: path.basename(p), data: fs.readFileSync(p) }))
+      );
+      if (flags.version) material.apkVersion = String(flags.version);
+      if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
+      fs.writeFileSync(outFile, JSON.stringify(AndroidApk.materialToJson(material), null, 2));
+      kv('package', material.packageName);
+      kv('certificates', String(material.certificates.length));
+      kv('classes.dex md5', material.classesDexMd5.toString('hex'));
+      kv('written to', outFile);
+      out('');
+      out('  Android registration will use this from now on. Re-run it when you');
+      out('  update the APK — classes.dex changes with every WhatsApp release.');
+    } catch (e) {
+      fail(e.message);
+      process.exit(1);
+    }
     return;
   }
 
