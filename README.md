@@ -120,6 +120,7 @@ npm install -g whalibmob
 - [Library API](#library-api)
   - [Connecting Account](#connecting-account)
     - [Register a New Number](#register-a-new-number)
+    - [Registering as Android](#registering-as-android)
     - [Device Attestation with Frida (optional)](#device-attestation-with-frida-optional)
     - [Connect](#connect)
   - [Linking to an Existing Account (Pairing Code)](#linking-to-an-existing-account-pairing-code)
@@ -272,6 +273,10 @@ wa version
 ### First-Time Setup: Register a Number
 
 Registration is a one-time process. You need a phone number that can receive an SMS or voice call. **Use a dedicated number** — do not use a number already active on a real WhatsApp device.
+
+> [!IMPORTANT]
+> Registering as **Android** (`WA_OS=android`) needs one extra step first — see
+> [Registering as Android](#registering-as-android). Registering as iOS, the default, does not.
 
 **Step 1 — request a verification code**
 
@@ -1543,6 +1548,72 @@ Both are optional and both keep working when omitted — you get an error naming
 
 > [!NOTE]
 > Registration reports the screens it passes through to WhatsApp's `/client_log`, the way the phone clients do — a client that registers in total silence does something no real installation does. It is fire-and-forget and every failure is swallowed, so it can never take a registration down. Set `WA_FUNNEL_LOG=0` to send none of it.
+
+### Registering as Android
+
+The registration token is computed differently on each platform, and only iOS
+derives it from a constant. The Android client signs it with material out of its
+own APK:
+
+```
+key   = PBKDF2-HMAC-SHA1(password = "com.whatsapp" + about_logo.png,
+                         salt = fixed, iterations = 128, length = 64)
+token = urlencode(base64(HMAC-SHA1(key, signing certificates
+                                      + MD5(classes.dex)
+                                      + national number)))
+```
+
+None of that can be derived, so it has to be read out of a real APK once. Sending
+the iOS-shaped token as Android is answered with `{"reason":"bad_token"}`, and no
+value in `WA_STATIC_TOKEN` changes that — the constant is not what is wrong, the
+formula is. `WA_STATIC_TOKEN` applies to iOS only.
+
+**Get an APK.** Pull it off any phone or emulator that has WhatsApp installed:
+
+```sh
+adb shell pm path com.whatsapp
+# package:/data/app/~~xyz==/com.whatsapp-abc==/base.apk
+# package:/data/app/~~xyz==/com.whatsapp-abc==/split_config.xxhdpi.apk
+adb pull /data/app/~~xyz==/com.whatsapp-abc==/base.apk
+adb pull /data/app/~~xyz==/com.whatsapp-abc==/split_config.xxhdpi.apk
+```
+
+Recent releases ship as an App Bundle, so `about_logo.png` often lives in a
+density split rather than in `base.apk`. Pull the `split_config.*dpi.apk` files
+too and pass them along — only splits whose name ends in `dpi` are searched.
+
+**Read the material out of it:**
+
+```sh
+wa apk-material base.apk split_config.xxhdpi.apk
+```
+
+```
+reading base.apk...
+  package               com.whatsapp
+  certificates          1
+  classes.dex md5       5c71f02aaad331e16e436bfa83ea3c5b
+  written to            /home/you/.waSession/android-apk-material.json
+```
+
+Only the derived pieces are kept — the APK is never needed again. Registration
+picks the file up on its own from then on. `--out <file>` writes it elsewhere,
+and `WA_ANDROID_APK_MATERIAL` points at it if you keep it somewhere else.
+
+**Re-run it when you update the APK.** `classes.dex` changes with every WhatsApp
+release, and its MD5 is signed into the token.
+
+Programmatically:
+
+```js
+const { extractMaterial, computeToken, materialToJson } = require('whalibmob/lib/AndroidApk')
+
+const material = extractMaterial(
+  fs.readFileSync('base.apk'),
+  [{ name: 'split_config.xxhdpi.apk', data: fs.readFileSync('split_config.xxhdpi.apk') }]
+)
+fs.writeFileSync('android-apk-material.json', JSON.stringify(materialToJson(material)))
+```
 
 ### Device Attestation with Frida (optional)
 
