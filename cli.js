@@ -2468,9 +2468,22 @@ async function main() {
         ? material.apkVersion + (material.apkVersionCode ? '  (code ' + material.apkVersionCode + ')' : '')
         : '(not in the manifest — pass --version <x.y.z.w>)');
       kv('certificates', String(material.certificates.length));
+      const signer = AndroidApk.describeCertificate(material.certificates[0]);
+      if (signer) {
+        kv('signed by', signer.subject);
+        kv('sha256', signer.fingerprint256);
+      }
       kv('classes.dex md5', material.classesDexMd5.toString('hex'));
       kv('written to', outFile);
       out('');
+      if (signer && !AndroidApk.looksLikeWhatsAppCertificate(signer)) {
+        warn('this APK is not signed by WhatsApp — the subject above is somebody else.');
+        out('  Mirrors re-sign the APKs they host, and re-signing replaces the certificate');
+        out('  the token is built from. The token will come out well-formed and belong to');
+        out('  nobody, which the server answers with bad_token. Use the APK installed on a');
+        out('  phone instead: pm path com.whatsapp');
+        out('');
+      }
       if (material.apkVersion) {
         out('  Registration will announce ' + material.apkVersion + ' from now on, because the');
         out('  token is signed over this APK — the live Play Store version would name a');

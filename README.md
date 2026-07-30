@@ -1593,9 +1593,18 @@ reading base.apk...
   package               com.whatsapp
   version               2.26.25.80  (code 260908001)
   certificates          1
+  signed by             C=US, ST=California, L=Santa Clara, O=WhatsApp Inc., …
+  sha256                AD:AD:64:31:29:8F:64:2B:…
   classes.dex md5       5c71f02aaad331e16e436bfa83ea3c5b
   written to            /home/you/.waSession/android-apk-material.json
 ```
+
+**Watch the `signed by` line.** The token is an HMAC over the signing
+certificates, so it is only the token the server expects when those certificates
+are WhatsApp's own. Mirrors re-sign the APKs they host — a re-signed APK yields a
+token that is well-formed and belongs to nobody, which comes back as `bad_token`
+and looks exactly like having no material at all. Anything other than WhatsApp in
+that subject is called out as a warning.
 
 Only the derived pieces are kept — the APK is never needed again. Registration
 picks the file up on its own from then on. `--out <file>` writes it elsewhere,
