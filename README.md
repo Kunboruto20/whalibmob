@@ -1568,7 +1568,25 @@ the iOS-shaped token as Android is answered with `{"reason":"bad_token"}`, and n
 value in `WA_STATIC_TOKEN` changes that — the constant is not what is wrong, the
 formula is. `WA_STATIC_TOKEN` applies to iOS only.
 
-**Get an APK.** Pull it off any phone or emulator that has WhatsApp installed:
+**Or let it fetch the APK itself:**
+
+```sh
+wa apk-material --download
+```
+
+This is the route Cobalt takes: an anonymous Play Store token from the Aurora OSS
+dispenser, then Google's own `/fdfe` catalogue and delivery endpoints, then the
+signed CDN URLs. No Google account of yours is involved. Only the density splits
+are downloaded — the token's key comes from `about_logo.png`, which lives in one
+of those, and the architecture and language splits would be a hundred megabytes
+nothing here reads.
+
+Two caveats. The dispenser is a free third-party service: when it is down or rate
+limiting, this fails and an APK from a phone still works. And downloading from
+Play this way is against Play's terms of service, which is your call to make.
+
+**Or get an APK yourself.** Pull it off any phone or emulator that has WhatsApp
+installed:
 
 ```sh
 adb shell pm path com.whatsapp

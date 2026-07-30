@@ -2329,6 +2329,7 @@ usage:
   wa registration --register <phone> --code <code>
   wa registration --check <phone>
   wa apk-material <base.apk> [split.apk ...]  read the Android token material
+  wa apk-material --download                  fetch that APK from Google Play
   wa version
 
 options:
@@ -2445,8 +2446,9 @@ async function main() {
   if (cmd === 'apk-material') {
     // parseArgs puts the first non-flag argument in sub, the rest in pos.
     const apks = [sub, ...pos].filter(Boolean);
-    if (!apks.length) {
+    if (!apks.length && !flags.download) {
       fail('usage: wa apk-material <base.apk> [split.apk ...]');
+      out('       wa apk-material --download        fetch the APK from Google Play instead');
       process.exit(1);
     }
     const outFile = flags.out ||
@@ -2454,12 +2456,26 @@ async function main() {
       path.join(_sessDir, 'android-apk-material.json');
     try {
       const AndroidApk = require('./lib/AndroidApk');
-      const [basePath, ...splitPaths] = apks;
-      out('reading ' + basePath + '...');
-      const material = AndroidApk.extractMaterial(
-        fs.readFileSync(basePath),
-        splitPaths.map(p => ({ name: path.basename(p), data: fs.readFileSync(p) }))
-      );
+      let material;
+      if (flags.download) {
+        const PlayStore = require('./lib/PlayStore');
+        out('fetching ' + (flags.business ? 'com.whatsapp.w4b' : 'com.whatsapp') + ' from Google Play...');
+        const apk = await PlayStore.downloadApk({
+          packageName: flags.business ? 'com.whatsapp.w4b' : 'com.whatsapp',
+          onProgress:  (m) => out('  ' + m)
+        });
+        material = AndroidApk.extractMaterial(apk.base, apk.splits);
+        // The catalogue's version is the authority when the manifest has none.
+        if (!material.apkVersion)     material.apkVersion     = apk.versionName;
+        if (!material.apkVersionCode) material.apkVersionCode = apk.versionCode;
+      } else {
+        const [basePath, ...splitPaths] = apks;
+        out('reading ' + basePath + '...');
+        material = AndroidApk.extractMaterial(
+          fs.readFileSync(basePath),
+          splitPaths.map(p => ({ name: path.basename(p), data: fs.readFileSync(p) }))
+        );
+      }
       if (flags.version) material.apkVersion = String(flags.version);
       if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
       fs.writeFileSync(outFile, JSON.stringify(AndroidApk.materialToJson(material), null, 2));
