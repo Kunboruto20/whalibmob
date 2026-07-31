@@ -2395,7 +2395,11 @@ function announceTrace() {
 function askDebugMode(cmd) {
   if (TRACE_FORCE_ON)  { enableWireTrace(); announceTrace(); return Promise.resolve(); }
   if (TRACE_FORCE_OFF) return Promise.resolve();
-  const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h'];
+  // Commands that never open a WhatsApp connection: there is no wire for a
+  // trace to show, and stopping a maintenance command to ask is what makes
+  // `wa apk-material --download && wa refresh-version --all` prompt twice.
+  const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h',
+                   'apk-material', 'refresh-version'];
   if (cmd && OFFLINE.includes(cmd)) return Promise.resolve();
   if (!process.stdin.isTTY) return Promise.resolve();
 
@@ -2417,7 +2421,11 @@ function askDebugMode(cmd) {
 // WA_NO_DONATE=1 all skip it in silence, so nothing about it can get in the way
 // of a script or a real command.
 function askDonation(cmd) {
-  const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h'];
+  // Commands that never open a WhatsApp connection: there is no wire for a
+  // trace to show, and stopping a maintenance command to ask is what makes
+  // `wa apk-material --download && wa refresh-version --all` prompt twice.
+  const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h',
+                   'apk-material', 'refresh-version'];
   if (cmd && OFFLINE.includes(cmd)) return Promise.resolve();
   if (!process.stdin.isTTY) return Promise.resolve();
   if (process.env.WA_NO_DONATE === '1') return Promise.resolve();
@@ -2508,7 +2516,7 @@ async function main() {
            'that instead of what this command writes. Unset it for the refresh to take effect.');
     }
 
-    let changed = 0, failed = 0;
+    let changed = 0, failed = 0, kept = 0;
     const sources = new Set();
     for (const file of files) {
       try {
@@ -2518,6 +2526,10 @@ async function main() {
           changed++;
           sources.add(r.source);
           out(who.padEnd(30) + r.before + '  →  ' + r.after);
+        } else if (r.keptNewer) {
+          kept++;
+          out(who.padEnd(30) + r.before + '  (kept — newer than the ' +
+              r.candidate + ' available)');
         } else {
           out(who.padEnd(30) + r.after + '  (already current)');
         }
@@ -2528,7 +2540,9 @@ async function main() {
     }
 
     out('');
-    out('  ' + changed + ' session(s) updated' + (failed ? ', ' + failed + ' failed' : ''));
+    out('  ' + changed + ' session(s) updated' +
+        (kept ? ', ' + kept + ' left alone (already ahead)' : '') +
+        (failed ? ', ' + failed + ' failed' : ''));
     if (changed) {
       out('  read from ' + [...sources].join(', ') + '.');
       out('  reconnect for it to be announced.');
