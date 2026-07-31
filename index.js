@@ -2,7 +2,7 @@
 
 const { WhalibmobClient, checkNumberStatus, fetchIosVersion, fetchWaVersion, assertRegistrationKeys } = require('./lib/Client');
 const { getDeviceConfig } = require('./lib/DeviceConfig');
-const { fetchAndroidVersion } = require('./lib/Registration');
+const { fetchAndroidVersion, currentVersionFor, refreshSessionVersion } = require('./lib/Registration');
 const { createNewStore, saveStore, loadStore, toSixParts, fromSixParts, storeToJson, storeFromJson } = require('./lib/Store');
 const { checkIfRegistered, requestSmsCode, verifyCode } = require('./lib/Registration');
 const { SignalProtocol } = require('./lib/signal/SignalProtocol');
@@ -65,6 +65,10 @@ module.exports = {
   fetchWaVersion,
   fetchIosVersion,
   fetchAndroidVersion,
+  // What a device profile should be announcing now, and writing it into a
+  // session that registered long enough ago to have gone stale.
+  currentVersionFor,
+  refreshSessionVersion,
   // Device config — reads WA_OS / WA_DEVICE / WA_DEVICE_* from process.env
   getDeviceConfig,
   // Store helpers
