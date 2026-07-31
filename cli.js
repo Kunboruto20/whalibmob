@@ -2448,6 +2448,12 @@ async function main() {
 
   _sessDir = flags.session || defaultSessionDir();
 
+  // `--business` is the flag form of WA_BUSINESS, mapped onto the environment
+  // before anything reads a device profile. The device config is env-driven, so
+  // this is the whole of it: the profile, the token material, the version
+  // lookup and the vname certificate all follow from that one variable.
+  if (flags.business) process.env.WA_BUSINESS = '1';
+
   if (!cmd) {
     out('whalibmob v' + VERSION + '  —  type /help for commands');
     openShell();
@@ -2479,9 +2485,15 @@ async function main() {
       out('       wa apk-material --download        fetch the APK from Google Play instead');
       process.exit(1);
     }
+    // The Business build gets its own file: it is signed with different
+    // certificates and carries a different classes.dex, so its token cannot be
+    // computed from the consumer material. `wa apk-material --download` and
+    // `--download --business` therefore do not overwrite each other.
     const outFile = flags.out ||
       process.env.WA_ANDROID_APK_MATERIAL ||
-      path.join(_sessDir, 'android-apk-material.json');
+      path.join(_sessDir, flags.business
+        ? 'android-apk-material-business.json'
+        : 'android-apk-material.json');
     try {
       const AndroidApk = require('./lib/AndroidApk');
       let material;

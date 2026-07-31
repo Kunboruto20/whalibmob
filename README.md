@@ -121,6 +121,7 @@ npm install -g whalibmob
   - [Connecting Account](#connecting-account)
     - [Register a New Number](#register-a-new-number)
     - [Registering as Android](#registering-as-android)
+    - [Registering a WhatsApp Business account](#registering-a-whatsapp-business-account)
       - [Why an APK is involved at all](#why-an-apk-is-involved-at-all)
       - [Fetching the APK on its own](#fetching-the-apk-on-its-own)
       - [Reading it out of an APK you already have](#reading-it-out-of-an-apk-you-already-have)
@@ -1643,6 +1644,47 @@ unasked, and `wa apk-material` below does the same job by hand.
 
 The rest of this section is what happens behind that one command, and how to
 drive each part yourself.
+
+### Registering a WhatsApp Business account
+
+Set `WA_BUSINESS`, or pass `--business`, and the whole registration switches to
+the Business build:
+
+```sh
+WA_OS=android WA_BUSINESS=1 wa registration --request-code 919634847671
+wa registration --register 919634847671 --code 123456
+wa connect 919634847671
+```
+
+Everything that names the app follows from that one variable:
+
+| | consumer | Business |
+|---|---|---|
+| announced platform | `ANDROID` / `IOS` | `ANDROID_BUSINESS` / `IOS_BUSINESS` |
+| User-Agent | `Android/…` · `iOS/…` | `SMBA/…` · `SMB iOS/…` |
+| Android token material | `com.whatsapp` | `com.whatsapp.w4b` |
+| iOS token constant | consumer | Business |
+| version lookup | consumer listing | Business listing |
+| `vname` field | not sent | a self-signed verified-name certificate |
+| Frida attestation port | 1119 | 1120 |
+
+The Android token material lives in its own file
+(`android-apk-material-business.json`), so the two builds never overwrite each
+other and `wa apk-material --download --business` can sit beside the consumer
+one.
+
+`vname` is a `VerifiedNameCertificate` the client signs itself, carrying an
+empty name, the issuer `smb:wa` and a random serial. The name is empty because
+nothing is verified yet — WhatsApp issues the real one after it reviews the
+business. What the server checks is that the signature over those details was
+made with the identity key the same request registers.
+
+> [!IMPORTANT]
+> **Decide before the code goes out.** An account is created as Business or as
+> consumer, and the token, the User-Agent and the certificate all have to keep
+> saying which. A session that is already part-way through registering keeps
+> what it started as and says so rather than flipping halfway; delete the
+> session file to start it over as the other one.
 
 #### Why an APK is involved at all
 
@@ -4477,7 +4519,8 @@ These variables override individual fields on top of the selected profile:
 | Variable | Description |
 |---|---|
 | `WA_VERSION` | Pin the WhatsApp version (e.g. `2.24.13.80`). Skips the live store fetch, and is announced on connect **in place of the version stored in the session**. The CLI also reads it from a `.env` file in the working directory, so one left there is announced by every connect from that directory — which is how a working session starts being refused with [405](#when-the-server-answers-405-on-connect). Pin it deliberately, unset it when done. |
-| `WA_STATIC_TOKEN` | Override the static token used in registration token computation. iOS only — Android has no static token. |
+| `WA_STATIC_TOKEN` | Override the static token used in registration token computation. iOS only — Android has no static token. Overrides both the consumer and the Business constant. |
+| `WA_BUSINESS` | Register and connect as WhatsApp Business (`1`/`true`/`yes`/`on`). Decides the announced platform, the User-Agent, which APK the token material comes from, and the `vname` certificate. See [Registering a WhatsApp Business account](#registering-a-whatsapp-business-account). |
 
 ### When the server answers 405 on connect
 
