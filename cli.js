@@ -2516,7 +2516,7 @@ async function main() {
            'that instead of what this command writes. Unset it for the refresh to take effect.');
     }
 
-    let changed = 0, failed = 0;
+    let changed = 0, failed = 0, kept = 0;
     const sources = new Set();
     for (const file of files) {
       try {
@@ -2526,6 +2526,10 @@ async function main() {
           changed++;
           sources.add(r.source);
           out(who.padEnd(30) + r.before + '  →  ' + r.after);
+        } else if (r.keptNewer) {
+          kept++;
+          out(who.padEnd(30) + r.before + '  (kept — newer than the ' +
+              r.candidate + ' available)');
         } else {
           out(who.padEnd(30) + r.after + '  (already current)');
         }
@@ -2536,7 +2540,9 @@ async function main() {
     }
 
     out('');
-    out('  ' + changed + ' session(s) updated' + (failed ? ', ' + failed + ' failed' : ''));
+    out('  ' + changed + ' session(s) updated' +
+        (kept ? ', ' + kept + ' left alone (already ahead)' : '') +
+        (failed ? ', ' + failed + ' failed' : ''));
     if (changed) {
       out('  read from ' + [...sources].join(', ') + '.');
       out('  reconnect for it to be announced.');
