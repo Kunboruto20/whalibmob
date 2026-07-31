@@ -4611,7 +4611,15 @@ wa refresh-version 5568936182750  # then write its version into the session
 ```
 
 It touches `version` and nothing else — the keys, the device profile and the
-registration are left exactly as they were. `--all` does every session in the
+registration are left exactly as they were — and it never moves a session
+backwards. The store it reads from can be behind what a session already holds,
+since Play serves the build matching the device profile it was asked with rather
+than the newest on the listing, and announcing an older version is the one
+outcome that makes a 405 more likely:
+
+```
++40756218532  android       2.26.30.3  (kept — newer than the 2.26.29.73 available)
+``` `--all` does every session in the
 session directory, which is what belongs in a monthly cron for a bot that is
 meant to stay up:
 
