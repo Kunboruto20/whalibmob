@@ -4487,10 +4487,33 @@ phone number and a code request.
 Until 5.12.15 the Android device profiles announced platform `3` — BlackBerry,
 which WhatsApp stopped building in 2017 — instead of `0`. The server checks the
 announced version *against the platform it was announced with*, so a current
-Android build looked like an impossible BlackBerry one and came back as 405 on
-every connect, with nothing in the failure naming the platform. iOS announced `1`
-and was never affected. Sessions registered before the fix repair themselves the
-next time they are loaded; nothing has to be registered again.
+Android build looked like an impossible BlackBerry one, and nothing in the
+failure named the platform. iOS announced `1` and was never affected. Sessions
+registered before the fix repair themselves the next time they are loaded;
+nothing has to be registered again.
+
+5.12.16 goes further and makes the Android handshake payload match the reference
+client field for field: no carrier (`mcc`/`mnc` are `000`), `en`/`US` as the
+locale, no `osBuildNumber`, the model rather than the model id as the device, an
+uppercase `phoneId`, and `shortConnect`/`connectAttemptCount`/`connectReason`
+fixed at the values it sends on every connect. iOS keeps announcing the real
+carrier and locale, which it has always been accepted with.
+
+### Finding out what a 405 objects to
+
+`tools/diagnose-405.js` runs the login once per payload variation and prints
+what the server answered each time, so the field it dislikes can be read off
+instead of guessed:
+
+```sh
+node tools/diagnose-405.js 5568936182750
+```
+
+It uses the session already on disk, registers nothing, requests no code and
+never writes to the session. `405` means that row was refused, `401` means the
+client was accepted and only the credentials failed, `ok` means the login went
+through — so the first row that stops saying `405` names the field that was the
+problem. `--dry-run` prints the payloads without opening a socket.
 
 Announce a current version instead:
 
