@@ -412,12 +412,17 @@ function defaultSessionDir() {
   return readConfig().sessionDir || defaultBaseDir();
 }
 
-// A folder name typed by a person, turned into somewhere safe to write.
+// A folder name typed by a person, turned into somewhere to write.
 //
-// An absolute path or one starting with ~ is taken as given; a bare name is
-// created under the home directory, which is what someone typing
-// "whalibmob_auth" means. Path separators are refused rather than quietly
-// flattened: a name with a slash in it is a mistake worth pointing at.
+//   ""  or blank      null, and the caller falls back to the default
+//   whalibmob_auth    under the home directory — what a bare name means
+//   ~/anything        under the home directory
+//   /data/sessions    taken as given
+//   project/auth      relative to where the command is being run, as a shell
+//                     would read it
+//
+// Returning null rather than a path for a blank answer keeps the "just press
+// enter" case in one place: the caller owns what the default is.
 function resolveAuthFolder(name) {
   const raw = String(name || '').trim();
   if (!raw) return null;
