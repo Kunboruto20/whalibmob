@@ -60,6 +60,8 @@ const {
 } = require('./lib/Client');
 
 const { assertMeId, initAuthCreds } = require('./lib/auth-utils');
+const { defaultBaseDir, sessionDirFor, storeFileFor, webStoreFileFor,
+        listSessions, migrateSession, isLegacyLayout } = require('./lib/SessionPaths');
 
 // ─── Wire trace implementation ────────────────────────────────────────────────
 // Everything below is CLI-only instrumentation; the library is untouched.
@@ -389,8 +391,88 @@ function printParticipantResults(verb, results) {
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
+// Where the authentication folder is remembered between runs, so the question
+// below is asked once rather than every time.
+function configPath() {
+  return path.join(os.homedir(), '.whalibmob.json');
+}
+
+function readConfig() {
+  try { return JSON.parse(fs.readFileSync(configPath(), 'utf8')) || {}; }
+  catch (_) { return {}; }
+}
+
+function writeConfig(patch) {
+  const merged = Object.assign(readConfig(), patch);
+  try { fs.writeFileSync(configPath(), JSON.stringify(merged, null, 2)); } catch (_) {}
+  return merged;
+}
+
 function defaultSessionDir() {
-  return path.join(os.homedir(), '.waSession');
+  return readConfig().sessionDir || defaultBaseDir();
+}
+
+// A folder name typed by a person, turned into somewhere to write.
+//
+//   ""  or blank      null, and the caller falls back to the default
+//   whalibmob_auth    under the home directory — what a bare name means
+//   ~/anything        under the home directory
+//   /data/sessions    taken as given
+//   project/auth      relative to where the command is being run, as a shell
+//                     would read it
+//
+// Returning null rather than a path for a blank answer keeps the "just press
+// enter" case in one place: the caller owns what the default is.
+function resolveAuthFolder(name) {
+  const raw = String(name || '').trim();
+  if (!raw) return null;
+  if (raw.startsWith('~')) return path.join(os.homedir(), raw.slice(1).replace(/^[\/\\]/, ''));
+  if (path.isAbsolute(raw)) return raw;
+  if (/[\/\\]/.test(raw)) return path.resolve(raw);
+  return path.join(os.homedir(), raw);
+}
+
+// Ask what to call the authentication folder, once, and remember the answer.
+//
+// Skipped entirely when --session or WA_SESSION_DIR already say where it is,
+// when a previous run answered, when the default folder already holds sessions
+// (an existing installation is not asked to rename anything), and when stdin is
+// not a terminal, so scripts and cron never block on it.
+function askSessionDir(cmd, explicit) {
+  const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h'];
+  if (explicit) return Promise.resolve(explicit);
+  if (cmd && OFFLINE.includes(cmd)) return Promise.resolve(defaultSessionDir());
+  if (process.env.WA_SESSION_DIR) return Promise.resolve(process.env.WA_SESSION_DIR);
+
+  const remembered = readConfig().sessionDir;
+  if (remembered) return Promise.resolve(remembered);
+
+  const fallback = defaultBaseDir();
+  // An installation that already has sessions keeps them where they are.
+  if (listSessions(fallback).length) return Promise.resolve(fallback);
+  if (!process.stdin.isTTY) return Promise.resolve(fallback);
+
+  return new Promise(resolve => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    out('');
+    out('  where should sessions be kept? each number gets its own folder inside.');
+    out('  a bare name goes under your home directory; enter for ' + fallback);
+    rl.question('  authentication folder:  ', (answer) => {
+      rl.close();
+      const dir = resolveAuthFolder(answer) || fallback;
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        writeConfig({ sessionDir: dir });
+        out('  sessions will be kept in ' + dir);
+        out('');
+      } catch (e) {
+        warn('could not create ' + dir + ' (' + e.message + ') — using ' + fallback);
+        resolve(fallback);
+        return;
+      }
+      resolve(dir);
+    });
+  });
 }
 
 function normalizePhone(s) {
@@ -817,11 +899,11 @@ function openShell(prompt) {
 // already on disk that one wins, and a non-interactive stdin never blocks on a
 // question nobody is there to answer.
 function hasMobileSession(phone) {
-  return fs.existsSync(path.join(_sessDir, phone + '.json'));
+  return fs.existsSync(storeFileFor(_sessDir, phone));
 }
 
 function hasWebSession(phone) {
-  const f = path.join(_sessDir, phone + '.web.json');
+  const f = webStoreFileFor(_sessDir, phone);
   if (!fs.existsSync(f)) return false;
   try {
     const j = JSON.parse(fs.readFileSync(f, 'utf8'));
@@ -2076,8 +2158,8 @@ async function handleLine(line) {
             fail('email method requires an address — usage: /reg code <phone> email <address>');
             break;
           }
-          if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
-          const sessFile = path.join(_sessDir, `${ph}.json`);
+          sessionDirFor(_sessDir, ph, { create: true });
+          const sessFile = storeFileFor(_sessDir, ph);
           let store = loadStore(sessFile);
           if (!store) {
             store = initAuthCreds(ph);
@@ -2108,19 +2190,19 @@ async function handleLine(line) {
           const ph   = normalizePhone(p[2]);
           const code = p[3];
           if (!ph || !code) { fail('usage: /reg confirm <phone> <code>'); break; }
-          const file  = path.join(_sessDir, `${ph}.json`);
+          const file  = storeFileFor(_sessDir, ph);
           const store = loadStore(file) || initAuthCreds(ph);
           out('verifying...');
           const r = await verifyCode(store, code, Object.assign(registrationPrompts(), { onProgress: out }));
           if (r && (r.status === 'ok' || r.status === 'sent' || r.status === 'verified')) {
-            if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
+            sessionDirFor(_sessDir, ph, { create: true });
             const finalStore = r.store || store;
             finalStore.registered  = true;
             finalStore.codePending = false;
             // Save under the number WhatsApp filed the account as, not the one
             // that was typed — they differ often enough to matter.
             const savedPhone = String(finalStore.phoneNumber || ph);
-            const savedFile  = path.join(_sessDir, `${savedPhone}.json`);
+            const savedFile  = storeFileFor(_sessDir, savedPhone);
             saveStore(finalStore, savedFile);
             if (r.canonicalPhoneNumber) {
               out('note: WhatsApp knows this account as +' + r.canonicalPhoneNumber +
@@ -2359,10 +2441,11 @@ usage:
   wa apk-material <base.apk> [split.apk ...]  read the Android token material
   wa apk-material --download                  fetch that APK from Google Play
   wa refresh-version <phone>                  update the version a session announces
+  wa migrate-sessions [phone]                 move old flat sessions into folders
   wa version
 
 options:
-  --session <dir>   session directory  (default: ~/.waSession)
+  --session <dir>   authentication folder (default: remembered, else ~/.waSession)
   --out <file>      where apk-material writes  (default: <session dir>/android-apk-material.json)
   --sms             connect by registering this number over SMS
   --pair            connect by linking to an existing account (8-digit code)
@@ -2399,7 +2482,7 @@ function askDebugMode(cmd) {
   // trace to show, and stopping a maintenance command to ask is what makes
   // `wa apk-material --download && wa refresh-version --all` prompt twice.
   const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h',
-                   'apk-material', 'refresh-version'];
+                   'apk-material', 'refresh-version', 'migrate-sessions'];
   if (cmd && OFFLINE.includes(cmd)) return Promise.resolve();
   if (!process.stdin.isTTY) return Promise.resolve();
 
@@ -2425,7 +2508,7 @@ function askDonation(cmd) {
   // trace to show, and stopping a maintenance command to ask is what makes
   // `wa apk-material --download && wa refresh-version --all` prompt twice.
   const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h',
-                   'apk-material', 'refresh-version'];
+                   'apk-material', 'refresh-version', 'migrate-sessions'];
   if (cmd && OFFLINE.includes(cmd)) return Promise.resolve();
   if (!process.stdin.isTTY) return Promise.resolve();
   if (process.env.WA_NO_DONATE === '1') return Promise.resolve();
@@ -2455,10 +2538,13 @@ function askDonation(cmd) {
 async function main() {
   const { cmd, sub, flags, pos } = parseArgs(process.argv);
 
+  // The authentication folder first: it decides where everything this run
+  // touches lives, and asking it after the other two made the answer to the
+  // first question land in the wrong prompt.
+  _sessDir = await askSessionDir(cmd, flags.session);
+
   await askDebugMode(cmd);
   await askDonation(cmd);
-
-  _sessDir = flags.session || defaultSessionDir();
 
   // `--business` is the flag form of WA_BUSINESS, mapped onto the environment
   // before anything reads a device profile. The device config is env-driven, so
@@ -2483,6 +2569,42 @@ async function main() {
     return;
   }
 
+  // Move sessions out of the old flat layout into a folder each.
+  //
+  // Nothing forces this: a number whose files sit loose in the base directory
+  // keeps working exactly where it is. This is for anyone who wants the tidier
+  // shape for what they already have.
+  if (cmd === 'migrate-sessions') {
+    const one = normalizePhone(sub || '');
+    const all = listSessions(_sessDir);
+    const legacy = all.filter(x => x.legacy && (!one || x.phone === one));
+
+    if (!legacy.length) {
+      out(one
+        ? 'nothing to move for +' + one + ' — it is already in a folder of its own'
+        : 'nothing to move — every session in ' + _sessDir + ' already has its own folder');
+      return;
+    }
+
+    out('moving ' + legacy.length + ' session(s) into folders under ' + _sessDir);
+    out('');
+    let files = 0, skipped = 0;
+    for (const entry of legacy) {
+      try {
+        const r = migrateSession(_sessDir, entry.phone);
+        files   += r.moved.length;
+        skipped += r.skipped.length;
+        out('  +' + entry.phone.padEnd(18) + r.moved.length + ' file(s)' +
+            (r.skipped.length ? '   ' + r.skipped.length + ' left (already there)' : ''));
+      } catch (e) {
+        fail('+' + entry.phone + ': ' + e.message);
+      }
+    }
+    out('');
+    out('  ' + files + ' file(s) moved' + (skipped ? ', ' + skipped + ' skipped' : ''));
+    return;
+  }
+
   // Bring a session's stored version up to date.
   //
   // A session announces the version it registered with, forever — nothing else
@@ -2502,13 +2624,13 @@ async function main() {
     let files;
     if (flags.all) {
       try {
-        files = fs.readdirSync(_sessDir)
-          .filter(f => /^\d+\.json$/.test(f))
-          .map(f => path.join(_sessDir, f));
+        files = listSessions(_sessDir)
+          .filter(x => x.hasMobile)
+          .map(x => x.storeFile);
       } catch (_) { files = []; }
       if (!files.length) { fail('no sessions in ' + _sessDir); process.exit(1); }
     } else {
-      files = [path.join(_sessDir, one + '.json')];
+      files = [storeFileFor(_sessDir, one)];
     }
 
     if (process.env.WA_VERSION) {

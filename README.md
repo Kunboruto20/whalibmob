@@ -395,11 +395,15 @@ wa +919634847671>
 > [!TIP]
 > **The shell never exits on its own.** It stays open until you type `/quit` or press Ctrl+C. This is true for every command — registration, connection, sending messages — everything.
 
-Use a custom session directory with `--session`:
+Use a different authentication folder with `--session`:
 
 ```sh
 wa connect 919634847671 --session /data/my-sessions
 ```
+
+The CLI asks what to call it once, on a first run, and remembers the answer in
+`~/.whalibmob.json`. Each number gets its own folder inside — see
+[Saving & Restoring Sessions](#saving--restoring-sessions).
 
 > [!IMPORTANT]
 > **If this is refused with `405`, do not re-register the number.** The account
@@ -2414,19 +2418,110 @@ If `socks` is not installed, or a proxy is unreachable, you get a message saying
 
 ## Saving & Restoring Sessions
 
-Sessions are automatically persisted to disk as JSON files under the `sessionDir` you provide. The file is named `<phone>.json`. On the next `client.init()` call the session is restored and no re-registration is needed.
+Sessions are persisted to disk under the `sessionDir` you provide — the
+authentication folder. Pass any path you like; nothing is hardcoded.
 
 ```js
 const client = new WhalibmobClient({
-  sessionDir: path.join(process.env.HOME, '.waSession')
+  sessionDir: path.join(process.env.HOME, 'whalibmob_auth')
 })
 
 // no need to register again — just connect
 await client.init('919634847671')
 ```
 
+**Each number gets a folder of its own inside it**, holding every file that
+number owns:
+
+```
+whalibmob_auth/
+├── android-apk-material.json            ← shared by every Android registration
+├── android-apk-material-business.json
+├── 919634847671/
+│   ├── 919634847671.json                ← the store: keys, device, version
+│   ├── 919634847671.signal.json         ← Signal sessions
+│   ├── 919634847671.sk.json             ← sender keys
+│   ├── 919634847671.tctoken.json
+│   ├── 919634847671.device-cache.json
+│   ├── 919634847671.lid-mapping.json
+│   ├── 919634847671.lid-reverse-mapping.json
+│   ├── 919634847671.appState.json
+│   ├── 919634847671.appStateKeys.json
+│   ├── 919634847671.history.json
+│   └── 919634847671.messages.json
+└── 5568936182750/
+    └── …
+```
+
+A companion link for the same number lives beside it as `<phone>.web.json` and
+friends, in the same folder.
+
+One account is then one directory: copy it to move a number to another machine,
+delete it to be rid of one, archive it to keep it. Nothing has to be picked out
+of a pile by prefix.
+
 > [!NOTE]
-> Each phone number uses its own session file. The library handles Signal Protocol key persistence automatically.
+> **Sessions written by earlier versions keep working where they are.** The
+> layout is decided per number: a number whose files sit loose in the base
+> directory is left exactly as it is, and only new numbers get a folder. Nothing
+> is moved unless you ask — `wa migrate-sessions` does that, one number or all
+> of them, and re-running it is safe.
+
+### Where the folder comes from
+
+| order | source |
+|---|---|
+| 1 | `sessionDir` passed to `WhalibmobClient` (library), or `--session <dir>` (CLI) |
+| 2 | `WA_SESSION_DIR` in the environment |
+| 3 | the answer remembered in `~/.whalibmob.json`, which the CLI asks for once on a first run |
+| 4 | `~/.waSession` |
+
+The CLI asks only when none of the above has decided it and the default folder
+is empty, so an existing installation is never asked to rename anything, and a
+non-interactive run — a script, a cron — never blocks on the question.
+
+```
+  where should sessions be kept? each number gets its own folder inside.
+  a bare name goes under your home directory; enter for /home/you/.waSession
+  authentication folder:  whalibmob_auth
+  sessions will be kept in /home/you/whalibmob_auth
+```
+
+A bare name is created under your home directory; an absolute path or one
+starting with `~` is taken as given.
+
+### Working out the paths yourself
+
+`lib/SessionPaths` is the same resolver the library and the CLI use, so a
+caller that wants to read or move a session's files does not have to guess the
+layout:
+
+```js
+// exported from the package itself, or from lib/SessionPaths directly
+const {
+  defaultBaseDir, sessionDirFor, storeFileFor, webStoreFileFor,
+  listSessions, migrateSession, SessionPaths
+} = require('whalibmob')
+
+const { isLegacyLayout, SESSION_SUFFIXES } = SessionPaths
+
+const base = path.join(process.env.HOME, 'whalibmob_auth')
+
+sessionDirFor(base, '919634847671')                  // …/whalibmob_auth/919634847671
+sessionDirFor(base, '919634847671', { create: true }) // and makes it
+storeFileFor(base, '919634847671')                   // …/919634847671/919634847671.json
+webStoreFileFor(base, '919634847671')                // …/919634847671/919634847671.web.json
+
+listSessions(base)
+// [ { phone, dir, storeFile, webStoreFile, legacy, hasMobile, hasWeb }, … ]
+//   covers both layouts, so it is what to iterate over
+
+migrateSession(base, '919634847671')
+// { phone, from, to, moved: [...], skipped: [...] }   moves one number into its folder
+```
+
+`SESSION_SUFFIXES` is every per-number file the library writes — the list to
+copy or delete against if you are moving an account by hand.
 
 ## Signal Store Utilities
 
