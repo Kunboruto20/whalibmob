@@ -2395,7 +2395,11 @@ function announceTrace() {
 function askDebugMode(cmd) {
   if (TRACE_FORCE_ON)  { enableWireTrace(); announceTrace(); return Promise.resolve(); }
   if (TRACE_FORCE_OFF) return Promise.resolve();
-  const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h'];
+  // Commands that never open a WhatsApp connection: there is no wire for a
+  // trace to show, and stopping a maintenance command to ask is what makes
+  // `wa apk-material --download && wa refresh-version --all` prompt twice.
+  const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h',
+                   'apk-material', 'refresh-version'];
   if (cmd && OFFLINE.includes(cmd)) return Promise.resolve();
   if (!process.stdin.isTTY) return Promise.resolve();
 
@@ -2417,7 +2421,11 @@ function askDebugMode(cmd) {
 // WA_NO_DONATE=1 all skip it in silence, so nothing about it can get in the way
 // of a script or a real command.
 function askDonation(cmd) {
-  const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h'];
+  // Commands that never open a WhatsApp connection: there is no wire for a
+  // trace to show, and stopping a maintenance command to ask is what makes
+  // `wa apk-material --download && wa refresh-version --all` prompt twice.
+  const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h',
+                   'apk-material', 'refresh-version'];
   if (cmd && OFFLINE.includes(cmd)) return Promise.resolve();
   if (!process.stdin.isTTY) return Promise.resolve();
   if (process.env.WA_NO_DONATE === '1') return Promise.resolve();
