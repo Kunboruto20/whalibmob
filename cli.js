@@ -2358,6 +2358,7 @@ usage:
   wa registration --check <phone>
   wa apk-material <base.apk> [split.apk ...]  read the Android token material
   wa apk-material --download                  fetch that APK from Google Play
+  wa refresh-version <phone>                  update the version a session announces
   wa version
 
 options:
@@ -2367,6 +2368,9 @@ options:
   --pair            connect by linking to an existing account (8-digit code)
   --method          sms | voice | wa_old | email  (default: sms)
   --email <address> email address (required when --method email)
+  --business        register/connect as WhatsApp Business (same as WA_BUSINESS=1)
+  --all             refresh-version: every session in the session directory
+  --version <x>     refresh-version: write this version instead of looking one up
 
 debug:
   an interactive session asks once whether to trace the protocol.
@@ -2469,6 +2473,67 @@ async function main() {
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     out(USAGE);
     return;
+  }
+
+  // Bring a session's stored version up to date.
+  //
+  // A session announces the version it registered with, forever — nothing else
+  // writes that field, so a number registered today is still announcing today's
+  // version next year, and one day the server stops accepting it. Refreshing
+  // the APK material does not reach the sessions already on disk; this does.
+  // Run it after `wa apk-material --download`, or on a schedule.
+  if (cmd === 'refresh-version') {
+    const { refreshSessionVersion } = require('./lib/Registration');
+    const one = normalizePhone(sub || '');
+
+    if (!one && !flags.all) {
+      fail('usage: wa refresh-version <phone>   (or --all for every session)');
+      process.exit(1);
+    }
+
+    let files;
+    if (flags.all) {
+      try {
+        files = fs.readdirSync(_sessDir)
+          .filter(f => /^\d+\.json$/.test(f))
+          .map(f => path.join(_sessDir, f));
+      } catch (_) { files = []; }
+      if (!files.length) { fail('no sessions in ' + _sessDir); process.exit(1); }
+    } else {
+      files = [path.join(_sessDir, one + '.json')];
+    }
+
+    if (process.env.WA_VERSION) {
+      warn('WA_VERSION=' + process.env.WA_VERSION + ' is set — connecting will announce ' +
+           'that instead of what this command writes. Unset it for the refresh to take effect.');
+    }
+
+    let changed = 0, failed = 0;
+    const sources = new Set();
+    for (const file of files) {
+      try {
+        const r = await refreshSessionVersion(file, flags.version ? { version: flags.version } : null);
+        const who = '+' + r.phoneNumber + '  ' + r.os + (r.business ? '/business' : '');
+        if (r.changed) {
+          changed++;
+          sources.add(r.source);
+          out(who.padEnd(30) + r.before + '  →  ' + r.after);
+        } else {
+          out(who.padEnd(30) + r.after + '  (already current)');
+        }
+      } catch (e) {
+        failed++;
+        fail(path.basename(file) + ': ' + e.message);
+      }
+    }
+
+    out('');
+    out('  ' + changed + ' session(s) updated' + (failed ? ', ' + failed + ' failed' : ''));
+    if (changed) {
+      out('  read from ' + [...sources].join(', ') + '.');
+      out('  reconnect for it to be announced.');
+    }
+    process.exit(failed ? 1 : 0);
   }
 
   // Read the Android registration token material out of a WhatsApp APK.

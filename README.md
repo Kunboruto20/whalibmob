@@ -4590,13 +4590,46 @@ each platform learns that differently:
 | iOS | looked up on the App Store | falls back to a version compiled into the library, which goes stale |
 | Android | read from the APK the registration token material came from | `wa apk-material --download` fetches the current one |
 
-So a genuinely stale session version is mostly an iOS story: a lookup that times
-out or is rate limited leaves an old fallback in the session, and nothing says so
-until the handshake is refused. On Android the version travels with the APK, and
-refreshing the material refreshes the version with it:
+**That version is written once, at registration, and nothing else ever touches
+it.** A number registered today announces today's version next year too, and one
+day the server stops accepting it — a 405 with nothing wrong with the account.
+Refreshing the APK material does not reach the sessions already on disk.
+
+`wa refresh-version` is the part that does:
 
 ```sh
-wa apk-material --download
+wa apk-material --download        # Android: pick up the current APK first
+wa refresh-version 5568936182750  # then write its version into the session
+```
+
+```
++5568936182750  android       2.24.10.75  →  2.26.30.5
+
+  1 session(s) updated
+  read from the APK the token material came from.
+  reconnect for it to be announced.
+```
+
+It touches `version` and nothing else — the keys, the device profile and the
+registration are left exactly as they were. `--all` does every session in the
+session directory, which is what belongs in a monthly cron for a bot that is
+meant to stay up:
+
+```sh
+wa apk-material --download && wa refresh-version --all
+```
+
+`--version 2.26.30.5` writes one you name instead of looking one up. And if
+`WA_VERSION` is set, the command says so — the override would mask whatever it
+writes.
+
+From Node, the same thing:
+
+```js
+const { refreshSessionVersion, currentVersionFor } = require('whalibmob')
+
+await refreshSessionVersion('/home/you/.waSession/5568936182750.json')
+await currentVersionFor({ os: 'android' })   // { version, source }
 ```
 
 #### If every Android session is refused, whatever the version
