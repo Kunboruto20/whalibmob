@@ -86,8 +86,8 @@ npm install -g whalibmob
     - [Pin / Unpin](#pin--unpin)
     - [Archive / Unarchive](#archive--unarchive)
     - [Star / Unstar a Message](#star--unstar-a-message-cli)
-    - [Sync App State (CLI)](#cli-app-state)
-    - [Account Restriction Countdown](#cli-restriction)
+    - [Sync App State (CLI)](#sync-app-state)
+    - [Account Restriction Countdown](#account-restriction-countdown)
     - [Disappearing Messages](#cli-disappearing-messages)
     - [Default Disappearing Timer](#default-disappearing-timer)
     - [Block / Unblock](#block--unblock)
@@ -109,7 +109,7 @@ npm install -g whalibmob
     - [List Group Participants](#list-group-participants)
     - [Pending Join Requests](#pending-join-requests)
     - [Approve / Reject Join Requests](#approve--reject-join-requests)
-    - [Personal Invitations (CLI)](#cli-personal-invitations)
+    - [Personal Invitations (CLI)](#personal-invitations)
     - [Group Settings](#group-settings)
   - [Community Commands](#community-commands-cli)
   - [Newsletter / Channel Commands](#newsletter--channel-commands)
@@ -165,7 +165,7 @@ npm install -g whalibmob
     - [Persistent Files Written to Disk](#persistent-files-written-to-disk)
     - [Reading the History Store](#reading-the-history-store)
     - [tcToken — Error 463 Defense](#tctoken--error-463-defense)
-    - [When 463 Means the Account Is Restricted](#account-restriction)
+    - [When 463 Means the Account Is Restricted](#when-463-means-the-account-is-restricted)
     - [What Is Automatic vs What You Need to Do](#what-is-automatic-vs-what-you-need-to-do)
   - [Receiving Media](#receiving-media)
   - [Sending Messages](#sending-messages)
@@ -200,7 +200,7 @@ npm install -g whalibmob
     - [Mark a Chat Read / Unread](#mark-a-chat-read--unread)
     - [Pin / Unpin a Chat](#pin--unpin-a-chat)
     - [Star / Unstar a Message](#star--unstar-a-message)
-    - [Reading Changes Made Elsewhere](#app-state-sync)
+    - [Reading Changes Made Elsewhere](#reading-changes-made-elsewhere)
     - [Disappearing Messages](#disappearing-messages)
   - [User Queries](#user-queries)
     - [Check If a Number Has WhatsApp](#check-if-a-number-has-whatsapp)
@@ -357,7 +357,7 @@ wa> /reg confirm 919634847671 123456
 On success you will see:
 
 ```
-registered  session saved to /home/user/.waSession/919634847671.json
+registered  session saved to /home/user/.waSession/919634847671/919634847671.json
 now run: /connect 919634847671
 ```
 
@@ -1379,7 +1379,7 @@ wa> /reg code 919634847671 wa_old
 
 # confirm the code received
 wa> /reg confirm 919634847671 123456
-registered  session saved to /home/user/.waSession/919634847671.json
+registered  session saved to /home/user/.waSession/919634847671/919634847671.json
 now run: /connect 919634847671
 ```
 
@@ -2760,11 +2760,11 @@ connect()
 | `chat_removed` | `{ jid, kind, remote }` | A chat was cleared or deleted on another device |
 | `contact_update` | `{ jid, name, firstName, lid, username, removed, remote }` | A contact was renamed or removed elsewhere |
 | `push_name_update` | `{ name, remote }` | Your own display name changed on another device |
-| `app_state_sync` | `{ collections, applied }` | An app-state sync finished; see [Reading Changes Made Elsewhere](#app-state-sync) |
+| `app_state_sync` | `{ collections, applied }` | An app-state sync finished; see [Reading Changes Made Elsewhere](#reading-changes-made-elsewhere) |
 | `app_state_mutation` | `{ collection, index, action, removed }` | An app-state change this library does not model |
 | `app_state_key_missing` | `{ collection, keyId }` | App state cannot be read until your phone shares this key |
 | `app_state_keys` | `{ keys }` | Your phone shared app-state sync keys; a sync starts automatically |
-| `account_restriction` | `{ active, remaining, remainingMs, endsAtDate, enforcementType, reason, source }` | The account was restricted or the restriction was lifted — see [When 463 Means the Account Is Restricted](#account-restriction) |
+| `account_restriction` | `{ active, remaining, remainingMs, endsAtDate, enforcementType, reason, source }` | The account was restricted or the restriction was lifted — see [When 463 Means the Account Is Restricted](#when-463-means-the-account-is-restricted) |
 | `mex_notification` | `{ opName, data }` | A server push over `w:mex` this library does not model |
 
 `remote: true` on a chat event means the change was made on your phone or another
@@ -4729,9 +4729,10 @@ writes.
 From Node, the same thing:
 
 ```js
-const { refreshSessionVersion, currentVersionFor } = require('whalibmob')
+const { refreshSessionVersion, currentVersionFor, storeFileFor } = require('whalibmob')
 
-await refreshSessionVersion('/home/you/.waSession/5568936182750.json')
+const base = path.join(process.env.HOME, '.waSession')
+await refreshSessionVersion(storeFileFor(base, '5568936182750'))
 await currentVersionFor({ os: 'android' })   // { version, source }
 ```
 
