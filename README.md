@@ -4569,14 +4569,17 @@ Sessions written before the fix repair themselves the next time they are loaded
 — the platform is derived from the profile's `os` rather than trusted from the
 file — so nothing has to be registered again.
 
-5.12.16 also brought the rest of the Android handshake in line with what a
-native Android client announces: no carrier (`mcc` and `mnc` are `000`), `en`
-and `US` as the locale, no `osBuildNumber`, the model rather than the model id
-as the device name, an uppercase `phoneId`, and `shortConnect`, `connectType`,
-`connectReason` and `connectAttemptCount` fixed at the values a real client
-sends on every connect — `connectType` had been sending `3`, which is not in the
-enum at all. iOS announces the real carrier and locale, which it has always been
-accepted with, and is unchanged.
+One other field in the same payload was wrong rather than merely unusual:
+`connectType` sent `3` on every reconnect, and the enum has no `3` — the legal
+values are `0` (cellular, unknown radio), `1` (wifi) and `100`–`112` for the
+named cellular radios. It now sends `1`.
+
+Nothing else in the payload changed. Other clients announce no carrier
+(`mcc`/`mnc` as `000`) and `en`/`US` regardless of the number; this library
+announces the carrier and locale the number actually belongs to, and a live
+session was tried against the server both ways — neither is refused. `000/000`
+is what a handset with no SIM reports, so a number with a carrier behind it
+saying so is the more ordinary thing to be.
 
 ### Finding out what a 405 objects to
 
@@ -4592,21 +4595,22 @@ node $(npm root -g)/whalibmob/tools/diagnose-405.js 5568936182750
 ```
 
 ```
-reference shape, as-is            ok — LOGIN ACCEPTED
-  + the real carrier (mcc/mnc)    ok — LOGIN ACCEPTED
-  + the real locale               405   {"reason":"405"}
+what this library sends           ok — LOGIN ACCEPTED
+  without the carrier (000/000)   ok — LOGIN ACCEPTED
+  without the locale (en/US)      ok — LOGIN ACCEPTED
 ```
 
 `405` means that row was refused, `401` means the client was accepted and only
-the credentials failed, `ok` means the login went through — so the first row
-that stops saying `ok` names the field the server objected to. Every row uses
-the session already on disk: nothing is registered, no code is requested, and
-the session is never written to. `--dry-run` prints the payload sizes without
-opening a socket.
+the credentials failed, `ok` means the login went through. The first row is what
+a real connect puts on the wire, and each row after it changes exactly one
+field, so a row that behaves differently from the first names the field the
+server objected to. Every row uses the session already on disk: nothing is
+registered, no code is requested, and the session is never written to.
+`--dry-run` prints the payload sizes without opening a socket.
 
-If *every* row is accepted while `wa connect` is refused, the payload is not the
-problem and the difference is in the environment the CLI reads and the tool does
-not — which is `WA_VERSION`, and the top of this section.
+**If the first row is accepted while `wa connect` is refused, the payload is not
+the problem.** The difference is then in what the CLI reads and this tool does
+not — `WA_VERSION`, from `.env`. Go back to the top of this section.
 
 ## License
 
