@@ -254,6 +254,7 @@ npm install -g whalibmob
   - [Android Profiles](#android-profiles)
   - [Custom Device Fields](#custom-device-fields)
   - [Version & Token Overrides](#version--token-overrides)
+  - [When the server answers 405 on connect](#when-the-server-answers-405-on-connect)
 
 ---
 
@@ -4466,8 +4467,46 @@ These variables override individual fields on top of the selected profile:
 
 | Variable | Description |
 |---|---|
-| `WA_VERSION` | Pin the WhatsApp version (e.g. `2.24.13.80`). Skips the live store fetch. |
-| `WA_STATIC_TOKEN` | Override the static token used in registration token computation. |
+| `WA_VERSION` | Pin the WhatsApp version (e.g. `2.24.13.80`). Skips the live store fetch, and is announced on connect in place of the version stored in the session. |
+| `WA_STATIC_TOKEN` | Override the static token used in registration token computation. iOS only — Android has no static token. |
+
+### When the server answers 405 on connect
+
+```
+WhatsApp auth failure 405 — client outdated — the version this session
+announces is not one the server accepts.
+```
+
+**The session is fine and the number is still registered.** 405 is the server
+declining the *client*, not the account: the version being announced is one it no
+longer accepts. Registering the number again is the one move that cannot help —
+the same version would go out and be refused identically, at the cost of a real
+phone number and a code request.
+
+Announce a current version instead:
+
+```sh
+WA_VERSION=2.26.30.3 wa connect 919634847671
+```
+
+Or put `WA_VERSION` in the `.env` file, where it applies to every command.
+
+**Where the stale version comes from.** Each platform learns its version
+differently:
+
+| | how the version is found | what happens when that fails |
+|---|---|---|
+| iOS | looked up on the App Store | falls back to a version compiled into the library, which goes stale |
+| Android | read from the APK the token material came from | `wa apk-material --download` fetches the current one |
+
+So this is mostly an iOS story: a lookup that times out or is rate limited leaves
+a months-old fallback version in the session, and nothing says so until the
+handshake is refused. On Android the version travels with the APK, and refreshing
+the material refreshes the version with it:
+
+```sh
+wa apk-material --download
+```
 
 ## License
 
