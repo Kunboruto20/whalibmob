@@ -15,8 +15,10 @@
 //   401  the client was accepted and only the credentials were rejected
 //   ok   the login succeeded
 //
-// Read it by comparing rows: the first row that stops saying 405 names the
-// field that was the problem.
+// Read it by comparing rows: the first row is what a connect actually sends, so
+// if it is accepted the payload is not the problem — check WA_VERSION, which the
+// CLI reads from .env and this tool does not. If it is refused, the row that
+// behaves differently names the field responsible.
 
 const path = require('path');
 const os   = require('os');
@@ -57,23 +59,24 @@ const meta   = getCountryMeta(parsePhone(store.phoneNumber).cc);
 const device = store.device || {};
 const isAndroid = String(device.os).toLowerCase() === 'android';
 
-// What the reference client announces on Android, and the knobs that differ
-// between it and what this library used to send.
+// With no overrides this is exactly what a connect puts on the wire. Each
+// override changes one field, so a row that behaves differently from the first
+// one names the field responsible.
 function payloadFor(over) {
   over = over || {};
   const ua = {
     platform:        over.platform !== undefined ? over.platform : platformForOs(device.os),
     version:         over.version  || store.version,
-    mcc:             over.realCarrier ? meta.mcc : '000',
-    mnc:             over.realCarrier ? meta.mnc : '000',
+    mcc:             over.noCarrier ? '000' : meta.mcc,
+    mnc:             over.noCarrier ? '000' : meta.mnc,
     osVersion:       device.osVersion,
     manufacturer:    device.manufacturer,
     device:          over.useModelId ? device.modelId : device.model,
-    osBuildNumber:   over.withBuild ? device.osBuildNumber : null,
+    osBuildNumber:   over.noBuild ? null : device.osBuildNumber,
     phoneId:         over.lowerPhoneId ? store.fdid.toLowerCase() : store.fdid.toUpperCase(),
     releaseChannel:  0,
-    localeLanguage:  over.realLocale ? meta.lg : 'en',
-    localeCountry:   over.realLocale ? meta.lc : 'US',
+    localeLanguage:  over.noLocale ? 'en' : meta.lg,
+    localeCountry:   over.noLocale ? 'US' : meta.lc,
     deviceType:      0,
     deviceModelType: device.modelId
   };
@@ -81,7 +84,7 @@ function payloadFor(over) {
     username:            BigInt(store.phoneNumber),
     passive:             false,
     pushName:            store.registered ? (store.name || null) : null,
-    shortConnect:        true,
+    shortConnect:        false,
     connectType:         1,
     connectReason:       1,
     connectAttemptCount: 0,
@@ -113,15 +116,15 @@ function attempt(over) {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// One variable at a time, starting from the reference client's exact shape.
+// One variable at a time, starting from what this library actually sends.
 const ROWS = [
-  ['reference client, as-is',        {}],
-  ['  + the real carrier (mcc/mnc)', { realCarrier: true }],
-  ['  + the real locale',            { realLocale: true }],
-  ['  + osBuildNumber',              { withBuild: true }],
-  ['  + model id as the device',     { useModelId: true }],
-  ['  + lowercase phoneId',          { lowerPhoneId: true }],
-  ['everything the old code sent',   { realCarrier: true, realLocale: true, withBuild: true }],
+  ['what this library sends',        {}],
+  ['  without the carrier (000/000)',{ noCarrier: true }],
+  ['  without the locale (en/US)',   { noLocale: true }],
+  ['  without osBuildNumber',        { noBuild: true }],
+  ['  model id as the device',       { useModelId: true }],
+  ['  lowercase phoneId',            { lowerPhoneId: true }],
+  ['  none of the above',            { noCarrier: true, noLocale: true, noBuild: true }],
   ['announced as iOS',               { platform: PLATFORM.IOS }]
 ];
 
