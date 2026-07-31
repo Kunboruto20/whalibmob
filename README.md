@@ -291,14 +291,36 @@ wa registration --request-code 919634847671 --method wa_old
 ```
 
 **Registering as Android** is the same command with the platform named. Nothing
-else to prepare — see [what it does behind that one command](#registering-as-android):
+else to prepare — see [what it does behind that one command](#registering-as-android).
+
+Linux, macOS, Termux:
 
 ```sh
 WA_OS=android WA_DEVICE=samsung-s24-ultra wa registration --request-code 919634847671 --debug
 ```
 
-Set `WA_OS=android` in a `.env` file instead and the plain command is enough.
-`--debug` prints every request and reply, which is worth having the first time.
+Windows, Command Prompt — `set` on its own line, because `VAR=value` in front of
+a command is Unix syntax and Windows refuses it:
+
+```bat
+set WA_OS=android
+set WA_DEVICE=samsung-s24-ultra
+wa registration --request-code 919634847671 --debug
+```
+
+Windows, PowerShell:
+
+```powershell
+$env:WA_OS = "android"
+$env:WA_DEVICE = "samsung-s24-ultra"
+wa registration --request-code 919634847671 --debug
+```
+
+A `.env` file in the directory you run from works the same everywhere and saves
+repeating it — see [Device Quick Start](#device-quick-start). `--debug` prints
+every request and reply, which is worth having the first time: its first line
+names the platform that actually went out, so you can see whether the variables
+arrived.
 
 The variables only matter for the command that *creates* the session. What a
 session registered as is written into it, so the confirmation step and every
@@ -4308,11 +4330,55 @@ Copy `.env.example` to `.env` in your project root and set the variables you nee
 
 ### Device Quick Start
 
-Emulate an Android Pixel 8 Pro:
+Emulate an Android Pixel 8 Pro. **The syntax for setting a variable differs per
+shell**, and getting it wrong is the most common reason a device profile appears
+to be ignored:
+
+**Linux, macOS, Termux** — set them for the one command:
 
 ```sh
 WA_OS=android WA_DEVICE=pixel_8_pro node your-app.js
+WA_OS=android WA_DEVICE=pixel_8_pro wa registration --request-code 919634847671
 ```
+
+**Windows, Command Prompt** — `set` first, one per line. `VAR=value` in front of
+a command is Unix syntax and Windows answers it with
+`'WA_OS' is not recognized as an internal or external command`:
+
+```bat
+set WA_OS=android
+set WA_DEVICE=pixel_8_pro
+wa registration --request-code 919634847671
+```
+
+Keep them on separate lines. Chaining with `&&` puts the space before the `&&`
+inside the value.
+
+**Windows, PowerShell**:
+
+```powershell
+$env:WA_OS = "android"
+$env:WA_DEVICE = "pixel_8_pro"
+wa registration --request-code 919634847671
+```
+
+**Anywhere, and the one worth preferring** — a `.env` file in the directory you
+run from, which behaves identically on every platform:
+
+```dotenv
+WA_OS=android
+WA_DEVICE=pixel_8_pro
+```
+
+```sh
+wa registration --request-code 919634847671
+```
+
+The CLI reads `.env` from the **current directory**, not from where whalibmob is
+installed, so `cd` to the directory holding it before running. Whichever way you
+choose, the first line of `--debug` output tells you whether it took:
+`User-Agent: WhatsApp/… Android/14 Device/Google-Pixel 8 Pro`. An `iOS/…` there
+means the variables never arrived.
 
 Or put the variables in a `.env` file. When using the **CLI** (`wa` command) the file is loaded automatically. When using the **library directly**, load it before `require('whalibmob')`:
 
