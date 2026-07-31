@@ -255,6 +255,7 @@ npm install -g whalibmob
   - [Custom Device Fields](#custom-device-fields)
   - [Version & Token Overrides](#version--token-overrides)
   - [When the server answers 405 on connect](#when-the-server-answers-405-on-connect)
+  - [Finding out what a 405 objects to](#finding-out-what-a-405-objects-to)
 
 ---
 
@@ -398,6 +399,14 @@ Use a custom session directory with `--session`:
 ```sh
 wa connect 919634847671 --session /data/my-sessions
 ```
+
+> [!IMPORTANT]
+> **If this is refused with `405`, do not re-register the number.** The account
+> is fine; the server declined the version the connect announced. Check for a
+> `WA_VERSION` in your shell or in a `.env` file in the directory you ran the
+> command from — it overrides the version the session registered with, and a
+> stale one left there refuses every connect from that directory. See
+> [When the server answers 405 on connect](#when-the-server-answers-405-on-connect).
 
 ### CLI Pairing Code
 
@@ -2163,7 +2172,7 @@ Every event from the SMS primary API fires here too — `message`, `receipt`, `p
 | `pair_device` | `{ refs }` | the QR path produced reference strings |
 | `history_sync` | `{ syncTypeName, chats, contacts, pushNames, merged }` | a chunk of history arrived |
 | `history_sync_error` | `{ err, notification }` | a chunk could not be fetched or decrypted |
-| `client_rejected` | `{ reason, location, message }` | the server refused the client itself, not the session — `405` means the announced version is not accepted. Distinct from `auth_failure`, and there is nothing to re-pair. |
+| `client_rejected` | `{ reason, location, message }` | the server refused the client itself, not the session — `405` means the announced version is not accepted. Fires whether the refusal arrives during the handshake or once the stream is open, and the client stops retrying either way. Distinct from `auth_failure`, and there is nothing to re-pair. |
 
 ### Reading What the Phone Sent
 
@@ -4467,46 +4476,137 @@ These variables override individual fields on top of the selected profile:
 
 | Variable | Description |
 |---|---|
-| `WA_VERSION` | Pin the WhatsApp version (e.g. `2.24.13.80`). Skips the live store fetch, and is announced on connect in place of the version stored in the session. |
+| `WA_VERSION` | Pin the WhatsApp version (e.g. `2.24.13.80`). Skips the live store fetch, and is announced on connect **in place of the version stored in the session**. The CLI also reads it from a `.env` file in the working directory, so one left there is announced by every connect from that directory — which is how a working session starts being refused with [405](#when-the-server-answers-405-on-connect). Pin it deliberately, unset it when done. |
 | `WA_STATIC_TOKEN` | Override the static token used in registration token computation. iOS only — Android has no static token. |
 
 ### When the server answers 405 on connect
 
 ```
-WhatsApp auth failure 405 — client outdated — the version this session
-announces is not one the server accepts.
+WhatsApp auth failure 405 — client outdated. The server refused the version
+this connect announced, which was 2.24.10.75. That value came from WA_VERSION
+in the environment — the CLI also reads it out of a .env file in the directory
+it runs from — while the session itself holds 2.26.29.73.
 ```
 
 **The session is fine and the number is still registered.** 405 is the server
-declining the *client*, not the account: the version being announced is one it no
-longer accepts. Registering the number again is the one move that cannot help —
-the same version would go out and be refused identically, at the cost of a real
+declining the *client*, not the account: the version being announced is not one
+it accepts. Registering the number again is the one move that cannot help — the
+same version would go out and be refused identically, at the cost of a real
 phone number and a code request.
 
-Announce a current version instead:
+Connecting announces exactly one version, and there are only two places it can
+come from:
+
+| order | where the announced version comes from |
+|---|---|
+| 1 | `WA_VERSION`, from the shell **or from a `.env` file in the directory the command runs in** |
+| 2 | the version stored in the session file — what the number was registered with |
+
+Almost every 405 is the first line winning when nobody meant it to.
+
+#### Check `WA_VERSION` before anything else
+
+The CLI loads `.env` from the working directory before it does anything else, so
+a `WA_VERSION` left in that file is announced by *every* connect started from
+that directory — in place of the version the session registered with, which the
+server would have accepted. Nothing about the session changes, so the failure
+looks like a dead account and is not one.
+
+```sh
+grep -i wa_version .env ~/.env
+env | grep WA_VERSION
+```
+
+Remove or comment the line, then connect again. Since 5.12.17 you do not have to
+go looking: the CLI says so before it connects,
+
+```
+warning: WA_VERSION=2.24.10.75 is pinned (shell or .env in /home/you) —
+connecting announces it instead of the version stored in the session.
+```
+
+and a 405 names the version that went out and which of the two places it came
+from, because that decides the remedy — unset the override, or pin a newer one.
+
+Pin `WA_VERSION` deliberately and temporarily, to force one specific build:
 
 ```sh
 WA_VERSION=2.26.30.3 wa connect 919634847671
 ```
 
-Or put `WA_VERSION` in the `.env` file, where it applies to every command.
+Leaving it in `.env` means every session on that machine announces it until the
+day it goes stale, wherever those sessions came from.
 
-**Where the stale version comes from.** Each platform learns its version
-differently:
+#### Keeping the session's own version current
+
+With no override, the session announces the version it was registered with, and
+each platform learns that differently:
 
 | | how the version is found | what happens when that fails |
 |---|---|---|
 | iOS | looked up on the App Store | falls back to a version compiled into the library, which goes stale |
-| Android | read from the APK the token material came from | `wa apk-material --download` fetches the current one |
+| Android | read from the APK the registration token material came from | `wa apk-material --download` fetches the current one |
 
-So this is mostly an iOS story: a lookup that times out or is rate limited leaves
-a months-old fallback version in the session, and nothing says so until the
-handshake is refused. On Android the version travels with the APK, and refreshing
-the material refreshes the version with it:
+So a genuinely stale session version is mostly an iOS story: a lookup that times
+out or is rate limited leaves an old fallback in the session, and nothing says so
+until the handshake is refused. On Android the version travels with the APK, and
+refreshing the material refreshes the version with it:
 
 ```sh
 wa apk-material --download
 ```
+
+#### If every Android session is refused, whatever the version
+
+Then it is the library, not the version — update it. Until 5.12.15 the Android
+device profiles announced platform `3`, which is BlackBerry, a client WhatsApp
+stopped building in 2017. The server validates the announced app version
+*against the platform it was announced with*, so a current Android build arrived
+looking like an impossible BlackBerry one, and nothing in the failure named the
+platform. iOS announced `1` and was never affected.
+
+Sessions written before the fix repair themselves the next time they are loaded
+— the platform is derived from the profile's `os` rather than trusted from the
+file — so nothing has to be registered again.
+
+5.12.16 also brought the rest of the Android handshake in line with what a
+native Android client announces: no carrier (`mcc` and `mnc` are `000`), `en`
+and `US` as the locale, no `osBuildNumber`, the model rather than the model id
+as the device name, an uppercase `phoneId`, and `shortConnect`, `connectType`,
+`connectReason` and `connectAttemptCount` fixed at the values a real client
+sends on every connect — `connectType` had been sending `3`, which is not in the
+enum at all. iOS announces the real carrier and locale, which it has always been
+accepted with, and is unchanged.
+
+### Finding out what a 405 objects to
+
+When the version is right and the connect is still refused, stop guessing:
+`tools/diagnose-405.js` runs the login once per payload variation and prints
+what the server answered each time.
+
+```sh
+node tools/diagnose-405.js 5568936182750
+
+# installed globally:
+node $(npm root -g)/whalibmob/tools/diagnose-405.js 5568936182750
+```
+
+```
+reference shape, as-is            ok — LOGIN ACCEPTED
+  + the real carrier (mcc/mnc)    ok — LOGIN ACCEPTED
+  + the real locale               405   {"reason":"405"}
+```
+
+`405` means that row was refused, `401` means the client was accepted and only
+the credentials failed, `ok` means the login went through — so the first row
+that stops saying `ok` names the field the server objected to. Every row uses
+the session already on disk: nothing is registered, no code is requested, and
+the session is never written to. `--dry-run` prints the payload sizes without
+opening a socket.
+
+If *every* row is accepted while `wa connect` is refused, the payload is not the
+problem and the difference is in the environment the CLI reads and the tool does
+not — which is `WA_VERSION`, and the top of this section.
 
 ## License
 
