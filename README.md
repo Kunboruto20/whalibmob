@@ -4477,36 +4477,39 @@ WhatsApp auth failure 405 — client outdated — the version this session
 announces is not one the server accepts.
 ```
 
-**The session is fine and the number is still registered.** 405 is the server
-declining the *client*, not the account: the version being announced is one it no
-longer accepts. Registering the number again is the one move that cannot help —
-the same version would go out and be refused identically, at the cost of a real
-phone number and a code request.
+**This should not reach you any more, and the session is fine either way.** 405
+is the server declining the *client*, not the account: the version being
+announced is one it no longer accepts. Registering the number again is the one
+move that cannot help — the same version would go out and be refused
+identically, at the cost of a real phone number and a code request.
 
-Announce a current version instead:
+**Connecting looks the version up on its own.** A session used to announce
+whatever it registered with for the rest of its life, which is what went stale.
+Now `connect()` resolves it first and takes the newest of what it knows:
+
+| source | when it applies |
+|---|---|
+| `WA_VERSION` | whenever it is set — ends the question, no lookup at all |
+| the App Store / Play listing | every connect, memoised for the run |
+| the APK the token material came from | Android, alongside the listing |
+| the version in the session | always, as one more candidate |
+
+Taking the newest means a stale source can never drag the answer down, and a
+lookup that fails simply contributes nothing — an offline run keeps using the
+session's own version exactly as before. The refreshed value is written back only
+after a handshake has accepted it. And if a 405 arrives anyway, the memoised
+lookup is dropped, asked again and the connection retried once.
+
+Nothing about this overrides a version you pinned yourself. `WA_VERSION` is
+checked first and answers alone:
 
 ```sh
 WA_VERSION=2.26.30.3 wa connect 919634847671
 ```
 
-Or put `WA_VERSION` in the `.env` file, where it applies to every command.
-
-**Where the stale version comes from.** Each platform learns its version
-differently:
-
-| | how the version is found | what happens when that fails |
-|---|---|---|
-| iOS | looked up on the App Store | falls back to a version compiled into the library, which goes stale |
-| Android | read from the APK the token material came from | `wa apk-material --download` fetches the current one |
-
-So this is mostly an iOS story: a lookup that times out or is rate limited leaves
-a months-old fallback version in the session, and nothing says so until the
-handshake is refused. On Android the version travels with the APK, and refreshing
-the material refreshes the version with it:
-
-```sh
-wa apk-material --download
-```
+If you are pinning one on Android, keep it in step with the APK you took the
+token material from — `wa apk-material --download` reports the version it read,
+and leaving `WA_VERSION` unset lets the two stay in step on their own.
 
 ## License
 
