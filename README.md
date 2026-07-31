@@ -2163,7 +2163,7 @@ Every event from the SMS primary API fires here too — `message`, `receipt`, `p
 | `pair_device` | `{ refs }` | the QR path produced reference strings |
 | `history_sync` | `{ syncTypeName, chats, contacts, pushNames, merged }` | a chunk of history arrived |
 | `history_sync_error` | `{ err, notification }` | a chunk could not be fetched or decrypted |
-| `client_rejected` | `{ reason, location, message }` | the server refused the client itself, not the session — `405` means the announced version is not accepted. Distinct from `auth_failure`, and there is nothing to re-pair. |
+| `client_rejected` | `{ reason, location, message }` | the server refused the client itself, not the session — `405` means the announced version is not accepted. Fires whether the refusal arrives during the handshake or once the stream is open, and the client stops retrying either way. Distinct from `auth_failure`, and there is nothing to re-pair. |
 
 ### Reading What the Phone Sent
 
@@ -4482,6 +4482,15 @@ declining the *client*, not the account: the version being announced is one it n
 longer accepts. Registering the number again is the one move that cannot help —
 the same version would go out and be refused identically, at the cost of a real
 phone number and a code request.
+
+**If every Android session gets this, on any version, update the library.**
+Until 5.12.15 the Android device profiles announced platform `3` — BlackBerry,
+which WhatsApp stopped building in 2017 — instead of `0`. The server checks the
+announced version *against the platform it was announced with*, so a current
+Android build looked like an impossible BlackBerry one and came back as 405 on
+every connect, with nothing in the failure naming the platform. iOS announced `1`
+and was never affected. Sessions registered before the fix repair themselves the
+next time they are loaded; nothing has to be registered again.
 
 Announce a current version instead:
 
