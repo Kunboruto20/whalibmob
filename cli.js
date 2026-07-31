@@ -957,6 +957,17 @@ async function doConnectWeb(phone, opts) {
 
 async function doConnect(phone) {
   phone = normalizePhone(phone);
+
+  // A WA_VERSION left in .env is announced by every connect from this
+  // directory, in place of the version the session was registered with, and a
+  // stale one is refused with a 405 that says nothing about where the value
+  // came from. Say it out loud before connecting rather than after failing.
+  if (process.env.WA_VERSION) {
+    warn('WA_VERSION=' + process.env.WA_VERSION + ' is pinned (shell or .env in ' +
+         process.cwd() + ') — connecting announces it instead of the version ' +
+         'stored in the session. Unset it to use the session\'s own.');
+  }
+
   const client = new WhalibmobClient({ sessionDir: _sessDir });
   attachEvents(client);
 
