@@ -121,6 +121,7 @@ npm install -g whalibmob
   - [Connecting Account](#connecting-account)
     - [Register a New Number](#register-a-new-number)
     - [Registering as Android](#registering-as-android)
+    - [Registering a WhatsApp Business account](#registering-a-whatsapp-business-account)
       - [Why an APK is involved at all](#why-an-apk-is-involved-at-all)
       - [Fetching the APK on its own](#fetching-the-apk-on-its-own)
       - [Reading it out of an APK you already have](#reading-it-out-of-an-apk-you-already-have)
@@ -1643,6 +1644,47 @@ unasked, and `wa apk-material` below does the same job by hand.
 
 The rest of this section is what happens behind that one command, and how to
 drive each part yourself.
+
+### Registering a WhatsApp Business account
+
+Set `WA_BUSINESS`, or pass `--business`, and the whole registration switches to
+the Business build:
+
+```sh
+WA_OS=android WA_BUSINESS=1 wa registration --request-code 919634847671
+wa registration --register 919634847671 --code 123456
+wa connect 919634847671
+```
+
+Everything that names the app follows from that one variable:
+
+| | consumer | Business |
+|---|---|---|
+| announced platform | `ANDROID` / `IOS` | `ANDROID_BUSINESS` / `IOS_BUSINESS` |
+| User-Agent | `Android/…` · `iOS/…` | `SMBA/…` · `SMB iOS/…` |
+| Android token material | `com.whatsapp` | `com.whatsapp.w4b` |
+| iOS token constant | consumer | Business |
+| version lookup | consumer listing | Business listing |
+| `vname` field | not sent | a self-signed verified-name certificate |
+| Frida attestation port | 1119 | 1120 |
+
+The Android token material lives in its own file
+(`android-apk-material-business.json`), so the two builds never overwrite each
+other and `wa apk-material --download --business` can sit beside the consumer
+one.
+
+`vname` is a `VerifiedNameCertificate` the client signs itself, carrying an
+empty name, the issuer `smb:wa` and a random serial. The name is empty because
+nothing is verified yet — WhatsApp issues the real one after it reviews the
+business. What the server checks is that the signature over those details was
+made with the identity key the same request registers.
+
+> [!IMPORTANT]
+> **Decide before the code goes out.** An account is created as Business or as
+> consumer, and the token, the User-Agent and the certificate all have to keep
+> saying which. A session that is already part-way through registering keeps
+> what it started as and says so rather than flipping halfway; delete the
+> session file to start it over as the other one.
 
 #### Why an APK is involved at all
 
@@ -4477,7 +4519,8 @@ These variables override individual fields on top of the selected profile:
 | Variable | Description |
 |---|---|
 | `WA_VERSION` | Pin the WhatsApp version (e.g. `2.24.13.80`). Skips the live store fetch, and is announced on connect **in place of the version stored in the session**. The CLI also reads it from a `.env` file in the working directory, so one left there is announced by every connect from that directory — which is how a working session starts being refused with [405](#when-the-server-answers-405-on-connect). Pin it deliberately, unset it when done. |
-| `WA_STATIC_TOKEN` | Override the static token used in registration token computation. iOS only — Android has no static token. |
+| `WA_STATIC_TOKEN` | Override the static token used in registration token computation. iOS only — Android has no static token. Overrides both the consumer and the Business constant. |
+| `WA_BUSINESS` | Register and connect as WhatsApp Business (`1`/`true`/`yes`/`on`). Decides the announced platform, the User-Agent, which APK the token material comes from, and the `vname` certificate. See [Registering a WhatsApp Business account](#registering-a-whatsapp-business-account). |
 
 ### When the server answers 405 on connect
 
@@ -4547,13 +4590,46 @@ each platform learns that differently:
 | iOS | looked up on the App Store | falls back to a version compiled into the library, which goes stale |
 | Android | read from the APK the registration token material came from | `wa apk-material --download` fetches the current one |
 
-So a genuinely stale session version is mostly an iOS story: a lookup that times
-out or is rate limited leaves an old fallback in the session, and nothing says so
-until the handshake is refused. On Android the version travels with the APK, and
-refreshing the material refreshes the version with it:
+**That version is written once, at registration, and nothing else ever touches
+it.** A number registered today announces today's version next year too, and one
+day the server stops accepting it — a 405 with nothing wrong with the account.
+Refreshing the APK material does not reach the sessions already on disk.
+
+`wa refresh-version` is the part that does:
 
 ```sh
-wa apk-material --download
+wa apk-material --download        # Android: pick up the current APK first
+wa refresh-version 5568936182750  # then write its version into the session
+```
+
+```
++5568936182750  android       2.24.10.75  →  2.26.30.5
+
+  1 session(s) updated
+  read from the APK the token material came from.
+  reconnect for it to be announced.
+```
+
+It touches `version` and nothing else — the keys, the device profile and the
+registration are left exactly as they were. `--all` does every session in the
+session directory, which is what belongs in a monthly cron for a bot that is
+meant to stay up:
+
+```sh
+wa apk-material --download && wa refresh-version --all
+```
+
+`--version 2.26.30.5` writes one you name instead of looking one up. And if
+`WA_VERSION` is set, the command says so — the override would mask whatever it
+writes.
+
+From Node, the same thing:
+
+```js
+const { refreshSessionVersion, currentVersionFor } = require('whalibmob')
+
+await refreshSessionVersion('/home/you/.waSession/5568936182750.json')
+await currentVersionFor({ os: 'android' })   // { version, source }
 ```
 
 #### If every Android session is refused, whatever the version
@@ -4569,14 +4645,17 @@ Sessions written before the fix repair themselves the next time they are loaded
 — the platform is derived from the profile's `os` rather than trusted from the
 file — so nothing has to be registered again.
 
-5.12.16 also brought the rest of the Android handshake in line with what a
-native Android client announces: no carrier (`mcc` and `mnc` are `000`), `en`
-and `US` as the locale, no `osBuildNumber`, the model rather than the model id
-as the device name, an uppercase `phoneId`, and `shortConnect`, `connectType`,
-`connectReason` and `connectAttemptCount` fixed at the values a real client
-sends on every connect — `connectType` had been sending `3`, which is not in the
-enum at all. iOS announces the real carrier and locale, which it has always been
-accepted with, and is unchanged.
+One other field in the same payload was wrong rather than merely unusual:
+`connectType` sent `3` on every reconnect, and the enum has no `3` — the legal
+values are `0` (cellular, unknown radio), `1` (wifi) and `100`–`112` for the
+named cellular radios. It now sends `1`.
+
+Nothing else in the payload changed. Other clients announce no carrier
+(`mcc`/`mnc` as `000`) and `en`/`US` regardless of the number; this library
+announces the carrier and locale the number actually belongs to, and a live
+session was tried against the server both ways — neither is refused. `000/000`
+is what a handset with no SIM reports, so a number with a carrier behind it
+saying so is the more ordinary thing to be.
 
 ### Finding out what a 405 objects to
 
@@ -4592,21 +4671,22 @@ node $(npm root -g)/whalibmob/tools/diagnose-405.js 5568936182750
 ```
 
 ```
-reference shape, as-is            ok — LOGIN ACCEPTED
-  + the real carrier (mcc/mnc)    ok — LOGIN ACCEPTED
-  + the real locale               405   {"reason":"405"}
+what this library sends           ok — LOGIN ACCEPTED
+  without the carrier (000/000)   ok — LOGIN ACCEPTED
+  without the locale (en/US)      ok — LOGIN ACCEPTED
 ```
 
 `405` means that row was refused, `401` means the client was accepted and only
-the credentials failed, `ok` means the login went through — so the first row
-that stops saying `ok` names the field the server objected to. Every row uses
-the session already on disk: nothing is registered, no code is requested, and
-the session is never written to. `--dry-run` prints the payload sizes without
-opening a socket.
+the credentials failed, `ok` means the login went through. The first row is what
+a real connect puts on the wire, and each row after it changes exactly one
+field, so a row that behaves differently from the first names the field the
+server objected to. Every row uses the session already on disk: nothing is
+registered, no code is requested, and the session is never written to.
+`--dry-run` prints the payload sizes without opening a socket.
 
-If *every* row is accepted while `wa connect` is refused, the payload is not the
-problem and the difference is in the environment the CLI reads and the tool does
-not — which is `WA_VERSION`, and the top of this section.
+**If the first row is accepted while `wa connect` is refused, the payload is not
+the problem.** The difference is then in what the CLI reads and this tool does
+not — `WA_VERSION`, from `.env`. Go back to the top of this section.
 
 ## License
 
