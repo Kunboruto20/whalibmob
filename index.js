@@ -3,6 +3,7 @@
 const { WhalibmobClient, checkNumberStatus, fetchIosVersion, fetchWaVersion, assertRegistrationKeys } = require('./lib/Client');
 const { getDeviceConfig } = require('./lib/DeviceConfig');
 const { fetchAndroidVersion, currentVersionFor, refreshSessionVersion } = require('./lib/Registration');
+const SessionPaths = require('./lib/SessionPaths');
 const { createNewStore, saveStore, loadStore, toSixParts, fromSixParts, storeToJson, storeFromJson } = require('./lib/Store');
 const { checkIfRegistered, requestSmsCode, verifyCode } = require('./lib/Registration');
 const { SignalProtocol } = require('./lib/signal/SignalProtocol');
@@ -69,6 +70,15 @@ module.exports = {
   // session that registered long enough ago to have gone stale.
   currentVersionFor,
   refreshSessionVersion,
+  // Where a session's files live: one folder per number inside the
+  // authentication folder. The same resolver the CLI uses.
+  SessionPaths,
+  defaultBaseDir:  SessionPaths.defaultBaseDir,
+  sessionDirFor:   SessionPaths.sessionDirFor,
+  storeFileFor:    SessionPaths.storeFileFor,
+  webStoreFileFor: SessionPaths.webStoreFileFor,
+  listSessions:    SessionPaths.listSessions,
+  migrateSession:  SessionPaths.migrateSession,
   // Device config — reads WA_OS / WA_DEVICE / WA_DEVICE_* from process.env
   getDeviceConfig,
   // Store helpers
