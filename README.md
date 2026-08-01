@@ -127,6 +127,7 @@ npm install -g whalibmob
       - [Reading it out of an APK you already have](#reading-it-out-of-an-apk-you-already-have)
     - [Device Attestation with Frida (optional)](#device-attestation-with-frida-optional)
     - [Connect](#connect)
+      - [Client Options](#client-options)
   - [Linking to an Existing Account (Pairing Code)](#linking-to-an-existing-account-pairing-code)
     - [Requesting a Pairing Code](#requesting-a-pairing-code)
     - [Reconnecting a Linked Session](#reconnecting-a-linked-session)
@@ -1927,6 +1928,37 @@ client.on('connected', () => {
 
 await client.init('919634847671')
 ```
+
+#### Client Options
+
+Every option is optional; `sessionDir` is the only one most senders ever set.
+
+| Option | Default | What it does |
+|---|---|---|
+| `sessionDir` | `~/.waSession` | The authentication folder. Each number gets its own subfolder inside it — see [Saving & Restoring Sessions](#saving--restoring-sessions). |
+| `autoFixNumber` | `true` | Re-file the session automatically when the server reports the account under a different number. Set `false` to be told instead of fixed — see [The Number WhatsApp Files Your Account Under](#the-number-whatsapp-files-your-account-under). |
+| `autoRead` | `true` | Send read receipts for incoming messages. `false` leaves them unread. |
+| `pino` | off | Debug logging. `true` turns it on at `debug` level; an object is passed to `pino` as-is. |
+| `sentCacheSize` | `2000` | How many sent messages keep their plaintext so a retry receipt naming them can be answered. |
+| `maxRetryResends` | `5` | How many times one message may be re-sent in answer to retry receipts before the client gives up. |
+
+```js
+const client = new WhalibmobClient({
+  sessionDir:      path.join(process.env.HOME, '.waSession'),
+  sentCacheSize:   10000,
+  maxRetryResends: 8
+})
+```
+
+**When to raise the last two.** A recipient's device that cannot decrypt a message asks for it again, and whalibmob answers by rebuilding the Signal session and re-sending. Answering requires the original text, which is why sent messages are held: a receipt naming a message no longer in the cache cannot be answered at all, and that message — already acked by the server — silently never arrives.
+
+The defaults cover an ordinary sender. Raise `sentCacheSize` if you push messages faster than replies come back, which is easy to do when several recipients are being worked through at once: your own replies age out of the cache while the recipient is still asking for them. The symptom is this line in the debug log:
+
+```
+[DBG] RETRY_RECV msgId=... — no cached plaintext, skipping resend
+```
+
+If you see it, the cache is smaller than your in-flight window. An entry holds the encoded message, not the media it points at, so entries are small and raising the bound costs little memory.
 
 ## Linking to an Existing Account (Pairing Code)
 
