@@ -202,7 +202,12 @@ function enableWireTrace() {
         return origWrite(chunk, ...rest);
       };
 
-      sock.on('data', (d) => {
+      // Prepended, not appended: the socket already carries the handshake's own
+      // data listener, registered while connect() was building the socket. An
+      // appended one runs after the frame has been read, so a frame the server
+      // sent would print *after* the error it caused — or not at all, once the
+      // failure tears the connection down. The trace has to come first.
+      sock.prependListener('data', (d) => {
         if (this.secured) return;
         // Label positionally, but say so when the reply is plainly not a Noise
         // frame — a proxy or captive portal answering in ASCII is worth reading
