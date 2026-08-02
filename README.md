@@ -294,6 +294,20 @@ wa registration --request-code 919634847671 --method voice
 wa registration --request-code 919634847671 --method wa_old
 ```
 
+**Set the account's display name while registering** with `--name`. This is the
+name people who have *not* saved your number see next to it — in group
+participant lists, in notifications, and beside your messages. Quote it if it
+contains spaces:
+
+```sh
+wa registration --request-code 919634847671 --name "Ricardo Trade"
+```
+
+The name is stored with the session and announced on every connection from then
+on. Registration itself carries no name — the server learns it when the session
+connects — so a number registered without `--name` has none until one is set.
+It can be given at either registration step, and changed later with `/name`.
+
 **Registering as Android** is the same command with the platform named. Nothing
 else to prepare — see [what it does behind that one command](#registering-as-android).
 
@@ -1378,6 +1392,10 @@ wa> /reg code 919634847671
 wa> /reg code 919634847671 voice
 wa> /reg code 919634847671 wa_old
 
+# register with a display name — what people who have not saved
+# your number see. Quote it if it has spaces.
+wa> /reg code 919634847671 --name "Ricardo Trade"
+
 # confirm the code received
 wa> /reg confirm 919634847671 123456
 registered  session saved to /home/user/.waSession/919634847671/919634847671.json
@@ -1542,8 +1560,8 @@ wa> /quit
 | `/biz <phone\|jid>` | Query business profile of a WhatsApp Business account |
 | **Registration** | |
 | `/reg check <phone>` | Check if number has WhatsApp |
-| `/reg code <phone> [method]` | Request verification code |
-| `/reg confirm <phone> <code>` | Complete registration |
+| `/reg code <phone> [method] [--name "Name"]` | Request verification code, optionally naming the account |
+| `/reg confirm <phone> <code> [--name "Name"]` | Complete registration |
 | **Connection** | |
 | `/connect <phone> [sms\|pair]` | Connect to WhatsApp — asks which method when unset |
 | `/pair <phone> [code]` | Link to an existing account by 8-digit pairing code |
@@ -1578,11 +1596,26 @@ const sessFile = path.join(sessDir, phone + '.json')
 
 fs.mkdirSync(sessDir, { recursive: true })
 
-const store = createNewStore(phone)
+// `name` is the display name the account registers with — what people who have
+// not saved the number see. Omit it and the account has no name until one is
+// set later with client.changeName().
+const store = createNewStore(phone, { name: 'Ricardo Trade' })
 saveStore(store, sessFile)
 
 await requestSmsCode(store, 'sms')   // 'sms' | 'voice' | 'wa_old'
 ```
+
+The name is written to the session, not sent to the registration endpoint — the
+server learns it from the first connection, and from every one after. It can
+also be passed as an option at either step, which is the way to name a session
+that already exists:
+
+```js
+await requestSmsCode(store, 'sms', { name: 'Ricardo Trade' })
+await verifyCode(store, '123456',  { name: 'Ricardo Trade' })
+```
+
+Names are trimmed, collapsed to single spaces and capped at 25 characters.
 
 **Step 2 — verify the code**
 
