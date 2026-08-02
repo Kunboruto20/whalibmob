@@ -1152,6 +1152,17 @@ function requireConn() {
 
 // ─── tokenizer ────────────────────────────────────────────────────────────────
 
+// Pull `--flag value` out of a token list, in place, and hand back the value.
+// Removing it keeps every positional argument at the index the usage line
+// promises, whichever end of the command the flag was typed at.
+function takeFlag(toks, flag) {
+  const i = toks.indexOf(flag);
+  if (i === -1) return null;
+  const value = (i + 1 < toks.length && !toks[i + 1].startsWith('--')) ? toks[i + 1] : null;
+  toks.splice(i, value === null ? 1 : 2);
+  return value;
+}
+
 function tokens(line) {
   const s = String(line || '');
   const t = []; let b = '';
@@ -2167,6 +2178,10 @@ async function handleLine(line) {
       // ── registration ───────────────────────────────────────────────────────
 
       case '/reg': {
+        // --name is pulled out before anything reads a position, so the phone
+        // and the code stay where the usage lines say they are no matter where
+        // the flag was typed. A name with spaces needs quoting: --name "A B".
+        const regName = takeFlag(p, '--name');
         const sub = p[1] && p[1].toLowerCase();
 
         if (sub === 'check') {
@@ -2182,7 +2197,12 @@ async function handleLine(line) {
           const method = (p[3] || 'sms').toLowerCase();
           // email method: /reg code <phone> email <address>
           const emailAddr = method === 'email' ? (p[4] || '') : '';
-          if (!ph) { fail('usage: /reg code <phone> [sms|voice|wa_old|email <address>]'); break; }
+          if (!ph) {
+            fail('usage: /reg code <phone> [sms|voice|wa_old|email <address>] [--name "Your Name"]');
+            out('  --name sets the display name the account registers with — what people');
+            out('  who have not saved your number see. It can be changed later with /name.');
+            break;
+          }
           if (method === 'email' && !emailAddr) {
             fail('email method requires an address — usage: /reg code <phone> email <address>');
             break;
@@ -2191,7 +2211,7 @@ async function handleLine(line) {
           const sessFile = storeFileFor(_sessDir, ph);
           let store = loadStore(sessFile);
           if (!store) {
-            store = initAuthCreds(ph);
+            store = initAuthCreds(ph, { name: regName });
             saveStore(store, sessFile);
           } else if (!store.codePending && !store.registered) {
             // Only check /exist when keys were never used to request a code.
@@ -2200,14 +2220,16 @@ async function handleLine(line) {
             const fresh = await assertRegistrationKeys(store, waVersion);
             if (!fresh) {
               out('  device keys already registered — generating new keys...');
-              store = initAuthCreds(ph);
+              store = initAuthCreds(ph, { name: regName });
               saveStore(store, sessFile);
               out('  new keys saved — proceed with code below');
             }
           }
           const methodLabel = method === 'email' ? ('email → ' + emailAddr) : method;
           out('requesting ' + methodLabel + ' code for +' + ph + '...');
-          const codeOpts = Object.assign(method === 'email' ? { email: emailAddr } : {}, { onProgress: out });
+          const codeOpts = Object.assign(method === 'email' ? { email: emailAddr } : {},
+            { onProgress: out, name: regName });
+          if (regName) out('  registering as "' + (store.name || regName) + '"');
           const r = await requestSmsCode(store, method, codeOpts);
           store.codePending = true;
           saveStore(store, sessFile);
@@ -2218,11 +2240,12 @@ async function handleLine(line) {
         else if (sub === 'confirm') {
           const ph   = normalizePhone(p[2]);
           const code = p[3];
-          if (!ph || !code) { fail('usage: /reg confirm <phone> <code>'); break; }
+          if (!ph || !code) { fail('usage: /reg confirm <phone> <code> [--name "Your Name"]'); break; }
           const file  = storeFileFor(_sessDir, ph);
-          const store = loadStore(file) || initAuthCreds(ph);
+          const store = loadStore(file) || initAuthCreds(ph, { name: regName });
           out('verifying...');
-          const r = await verifyCode(store, code, Object.assign(registrationPrompts(), { onProgress: out }));
+          const r = await verifyCode(store, code,
+            Object.assign(registrationPrompts(), { onProgress: out, name: regName }));
           if (r && (r.status === 'ok' || r.status === 'sent' || r.status === 'verified')) {
             sessionDirFor(_sessDir, ph, { create: true });
             const finalStore = r.store || store;
@@ -2239,6 +2262,11 @@ async function handleLine(line) {
               out('      the session is saved under that number');
             }
             out('registered  session saved to ' + savedFile);
+            if (finalStore.name && finalStore.name !== 'User') {
+              out('  name        ' + finalStore.name + '  (announced on every connect)');
+            } else {
+              out('  name        not set — run /name <text> after connecting');
+            }
             out('now run: /connect ' + savedPhone);
           } else {
             fail('verification failed  ' + JSON.stringify(r));
@@ -2464,8 +2492,8 @@ usage:
   wa connect <phone>                        connect and open interactive shell
   wa pair    <phone> [code]                 link to an existing account (8-digit code)
   wa listen  <phone>                        connect and listen (stay-alive)
-  wa registration --request-code <phone>    request SMS code
-  wa registration --register <phone> --code <code>
+  wa registration --request-code <phone> [--name "Your Name"]
+  wa registration --register <phone> --code <code> [--name "Your Name"]
   wa registration --check <phone>
   wa apk-material <base.apk> [split.apk ...]  read the Android token material
   wa apk-material --download                  fetch that APK from Google Play
@@ -2490,6 +2518,7 @@ debug:
 
   --debug           trace without asking  (same as WA_DEBUG=1)
   --no-debug, -q    stay quiet without asking  (same as WA_DEBUG=0)
+  --name <text>     display name to register with (registration commands only)
   --trace-bytes     also dump the raw encoded bytes of every stanza
 
 after connecting, type /help for all available commands.
@@ -2821,10 +2850,11 @@ async function main() {
       // the base directory stays there, a new one gets a directory of its own.
       sessionDirFor(_sessDir, ph, { create: true });
       const sessFile = storeFileFor(_sessDir, ph);
+      const regName = typeof flags.name === 'string' ? flags.name : null;
       let store = loadStore(sessFile);
       if (!store) {
         // Brand new — generate fresh keys, save immediately, no need to check /exist
-        store = initAuthCreds(ph);
+        store = initAuthCreds(ph, { name: regName });
         saveStore(store, sessFile);
       } else if (!store.codePending && !store.registered) {
         // Existing store but code was never sent and not registered — check if
@@ -2835,7 +2865,7 @@ async function main() {
         const fresh = await assertRegistrationKeys(store, waVersion);
         if (!fresh) {
           out('  device keys already registered — generating new keys...');
-          store = initAuthCreds(ph);
+          store = initAuthCreds(ph, { name: regName });
           saveStore(store, sessFile);
         }
       }
@@ -2844,7 +2874,9 @@ async function main() {
       const methodLabel = method === 'email' ? ('email → ' + emailAddr) : method;
       out('requesting ' + methodLabel + ' code for +' + ph + '...');
       try {
-        const codeOpts = Object.assign(method === 'email' ? { email: emailAddr } : {}, { onProgress: out });
+        const codeOpts = Object.assign(method === 'email' ? { email: emailAddr } : {},
+          { onProgress: out, name: regName });
+        if (regName) out('  registering as "' + (store.name || regName) + '"');
         const r = await requestSmsCode(store, method, codeOpts);
         store.codePending = true;
         saveStore(store, sessFile);
@@ -2866,11 +2898,13 @@ async function main() {
       const code = flags.code;
       if (!ph)   { fail('phone number required'); process.exit(1); }
       if (!code) { fail('--code is required');    process.exit(1); }
+      const regName = typeof flags.name === 'string' ? flags.name : null;
       const file  = storeFileFor(_sessDir, ph);
-      const store = loadStore(file) || initAuthCreds(ph);
+      const store = loadStore(file) || initAuthCreds(ph, { name: regName });
       out('verifying code for +' + ph + '...');
       try {
-        const r = await verifyCode(store, code, Object.assign(registrationPrompts(), { onProgress: out }));
+        const r = await verifyCode(store, code,
+          Object.assign(registrationPrompts(), { onProgress: out, name: regName }));
         if (r && (r.status === 'ok' || r.status === 'sent' || r.status === 'verified')) {
           if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
           const finalStore = r.store || store;
