@@ -1148,10 +1148,19 @@ function requireConn() {
 // ─── tokenizer ────────────────────────────────────────────────────────────────
 
 function tokens(line) {
-  const t = []; let b = '', q = false;
-  for (const c of line) {
-    if (c === '"' || c === "'") { q = !q; continue; }
-    if (c === ' ' && !q) { if (b) { t.push(b); b = ''; } } else b += c;
+  const s = String(line || '');
+  const t = []; let b = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    // A quote groups only when it opens an argument and is actually closed
+    // later in the line. Anything else is text the user typed — an apostrophe
+    // inside a word, an unterminated quote — and message bodies go out
+    // verbatim, so it has to survive as itself.
+    if ((c === '"' || c === "'") && b === '') {
+      const end = s.indexOf(c, i + 1);
+      if (end !== -1) { b += s.slice(i + 1, end); i = end; continue; }
+    }
+    if (c === ' ') { if (b) { t.push(b); b = ''; } } else b += c;
   }
   if (b) t.push(b);
   return t;
@@ -1246,13 +1255,19 @@ async function handleLine(line) {
         out('disconnected');
         break;
 
-      case '/reconnect':
+      case '/reconnect': {
         if (!_client) { fail('not connected'); break; }
+        // A companion session has no primary registration of its own, so it can
+        // only come back the way it was linked. Read the mode before the
+        // disconnect, while the client that knows it is still the current one.
+        const web = _client._mode === 'web';
         _client.disconnect();
         await new Promise(r => setTimeout(r, 1200));
         out('reconnecting...');
-        await doConnect(_phone);
+        if (web) await doConnectWeb(_phone);
+        else     await doConnect(_phone);
         break;
+      }
 
       // ── messaging ──────────────────────────────────────────────────────────
 
@@ -1617,7 +1632,15 @@ async function handleLine(line) {
         requireConn();
         const jid = normalizeJid(p[1]);
         const ids = p.slice(2);
-        if (!jid || !ids.length) { fail('usage: /read <jid> <msgId...>'); break; }
+        if (!jid) { fail('usage: /read <jid> [msgId...]'); break; }
+        // Two different requests share the name: receipts for named messages,
+        // and the whole chat. Without message ids there is nothing to send a
+        // receipt for, so the chat itself is what gets marked.
+        if (!ids.length) {
+          await _client.markChatRead(jid);
+          out('marked read');
+          break;
+        }
         _client.markRead(jid, ids);
         out('marked read  ' + ids.length + ' message(s) in ' + jid);
         break;
@@ -1646,13 +1669,6 @@ async function handleLine(line) {
       }
 
       // ── chats ──────────────────────────────────────────────────────────────
-
-      case '/read':
-        requireConn();
-        if (!p[1]) { fail('usage: /read <jid>'); break; }
-        await _client.markChatRead(normalizeJid(p[1]));
-        out('marked read');
-        break;
 
       case '/restriction':
       case '/limit': {
@@ -1824,7 +1840,15 @@ async function handleLine(line) {
 
       case '/ephemeral': {
         requireConn();
-        const jid = normalizeJid(p[1]) || asGroupJid(p[1]);
+        // The timer is set with a different stanza for a group than for a DM,
+        // so the domain decides which one goes out. A bare id has none, and
+        // normalizeJid answers the user domain for anything it is given, so a
+        // group id has to be recognised by its shape first: either the legacy
+        // "<creator>-<created>" form or the 120363… ids groups are issued now.
+        const raw = p[1] || '';
+        const isGroupId = /@g\.us$/.test(raw) ||
+                          (!raw.includes('@') && (/^\d+-\d+$/.test(raw) || /^120363\d*$/.test(raw)));
+        const jid = isGroupId ? asGroupJid(raw) : normalizeJid(raw);
         const sec = p[2];
         if (!jid || sec === undefined) {
           fail('usage: /ephemeral <jid> <seconds>  (0=off  86400=1d  604800=1w  7776000=90d)');
@@ -2788,7 +2812,10 @@ async function main() {
         process.exit(1);
       }
       if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
-      const sessFile = path.join(_sessDir, `${ph}.json`);
+      // Same file the shell's /reg code writes: a number already filed loose in
+      // the base directory stays there, a new one gets a directory of its own.
+      sessionDirFor(_sessDir, ph, { create: true });
+      const sessFile = storeFileFor(_sessDir, ph);
       let store = loadStore(sessFile);
       if (!store) {
         // Brand new — generate fresh keys, save immediately, no need to check /exist
@@ -2834,7 +2861,7 @@ async function main() {
       const code = flags.code;
       if (!ph)   { fail('phone number required'); process.exit(1); }
       if (!code) { fail('--code is required');    process.exit(1); }
-      const file  = path.join(_sessDir, `${ph}.json`);
+      const file  = storeFileFor(_sessDir, ph);
       const store = loadStore(file) || initAuthCreds(ph);
       out('verifying code for +' + ph + '...');
       try {
@@ -2844,8 +2871,11 @@ async function main() {
           const finalStore = r.store || store;
           finalStore.registered  = true;
           finalStore.codePending = false;
+          // The account can come back filed under a different form of the
+          // number, and that is the one the session belongs to.
           const savedPhone = String(finalStore.phoneNumber || ph);
-          const savedFile  = path.join(_sessDir, `${savedPhone}.json`);
+          sessionDirFor(_sessDir, savedPhone, { create: true });
+          const savedFile  = storeFileFor(_sessDir, savedPhone);
           saveStore(finalStore, savedFile);
           if (r.canonicalPhoneNumber) {
             out('note: WhatsApp knows this account as +' + r.canonicalPhoneNumber +
