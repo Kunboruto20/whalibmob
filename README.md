@@ -430,16 +430,17 @@ The CLI asks what to call it once, on a first run, and remembers the answer in
 
 ### CLI Pairing Code
 
-If the number is already in use on a phone, or the verification SMS never arrives, link to the existing account instead. When it is not obvious which way you mean, `wa connect` asks:
+If the number is already in use on a phone, or the verification SMS never arrives, link to the existing account instead.
+
+`wa connect` works out which of the two a number is set up for by reading its session files, and says which one it chose:
 
 ```
-  how do you want to connect?
-    1) sms           register this number as its own device
-    2) pairing code  link to an existing WhatsApp account (8-digit code)
-  sms or pairing code?  [1/2] 2
+connecting as companion (pairing code)...
 ```
 
-The question is skipped when only one kind of session exists on disk, and when stdin is not a terminal. Force either one:
+A number can hold both — registered over SMS as its own device, and linked as a companion to another account. When it holds both, the one used most recently wins. A half-finished registration does not count as a session either way. When there is nothing to connect with, it says so and names the two commands that would create one, rather than picking a side.
+
+Force either one:
 
 ```sh
 wa connect 919634847671 --sms
@@ -1430,7 +1431,7 @@ the session rather than the environment.
 
 ```sh
 # connect to a number (while already in the shell)
-# asks sms or pairing code when both are possible
+# picks sms or pairing from the session files on disk
 wa> /connect 919634847671
 
 # force one or the other
@@ -1563,7 +1564,7 @@ wa> /quit
 | `/reg code <phone> [method] [--name "Name"]` | Request verification code, optionally naming the account |
 | `/reg confirm <phone> <code> [--name "Name"]` | Complete registration |
 | **Connection** | |
-| `/connect <phone> [sms\|pair]` | Connect to WhatsApp — asks which method when unset |
+| `/connect <phone> [sms\|pair]` | Connect to WhatsApp — picks the method from the session files when unset |
 | `/pair <phone> [code]` | Link to an existing account by 8-digit pairing code |
 | `/disconnect` | Disconnect current session |
 | `/reconnect` | Force reconnection |
