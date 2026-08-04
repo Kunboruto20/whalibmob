@@ -40,7 +40,7 @@
     "url": "https://github.com/Kunboruto20/whalibmob/issues"
   },
   "dependencies": {
-    "@cacheable/node-cache": "^3.0.1",
+    "@cacheable/node-cache": "3.1.1",
     "@noble/hashes": "^1.7.2",
     "async-mutex": "^0.5.0",
     "axios": "^1.7.2",
