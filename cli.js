@@ -484,6 +484,26 @@ function normalizePhone(s) {
   return String(s || '').replace(/^\+/, '').replace(/\D/g, '');
 }
 
+// What to tell the person once a code request has gone through. A flash call
+// needs its own words: nothing arrives in a message, so "enter the code" names
+// something they will never receive. What they get is a call that stops before
+// it can be answered, and the code is the number it came from.
+//
+// The method printed is the one that actually went out — a flash request the
+// server declined and fell back to SMS has to say SMS, or the instructions
+// describe a call that is never coming.
+function printCodeNextSteps(store, phone, confirmCmd) {
+  if (store && store.codeMethod === 'flash') {
+    out('  a call will ring +' + phone + ' and hang up by itself — do not answer it');
+    out('  the code is the LAST 6 DIGITS of the number that called');
+    out('  pasting the whole number works too — only its last 6 digits are sent');
+    out('  run: ' + confirmCmd + ' <last-6-digits>');
+    return;
+  }
+  out('  important: enter the code within 10 minutes');
+  out('  run: ' + confirmCmd + ' <code>');
+}
+
 function normalizeJid(s) {
   if (!s) return null;
   s = String(s);
@@ -2236,7 +2256,7 @@ async function handleLine(line) {
           // email method: /reg code <phone> email <address>
           const emailAddr = method === 'email' ? (p[4] || '') : '';
           if (!ph) {
-            fail('usage: /reg code <phone> [sms|voice|wa_old|email <address>] [--name "Your Name"]');
+            fail('usage: /reg code <phone> [sms|voice|wa_old|flash|email <address>] [--name "Your Name"]');
             out('  --name sets the display name the account registers with — what people');
             out('  who have not saved your number see. It can be changed later with /name.');
             break;
@@ -2272,8 +2292,7 @@ async function handleLine(line) {
           store.codePending = true;
           saveStore(store, sessFile);
           out('  status  ' + (r && r.status));
-          out('  important: enter the code within 10 minutes');
-          out('  now run: /reg confirm ' + ph + ' <code>');
+          printCodeNextSteps(store, ph, '/reg confirm ' + ph);
         }
         else if (sub === 'confirm') {
           const ph   = normalizePhone(p[2]);
@@ -2544,7 +2563,9 @@ options:
   --out <file>      where apk-material writes  (default: <session dir>/android-apk-material.json)
   --sms             connect by registering this number over SMS
   --pair            connect by linking to an existing account (8-digit code)
-  --method          sms | voice | wa_old | email  (default: sms)
+  --method          sms | voice | wa_old | flash | email  (default: sms)
+                    flash: WhatsApp rings the number and hangs up; the code is
+                    the last 6 digits of the calling number (Android only)
   --email <address> email address (required when --method email)
   --business        register/connect as WhatsApp Business (same as WA_BUSINESS=1)
   --all             refresh-version: every session in the session directory
@@ -2920,8 +2941,7 @@ async function main() {
         saveStore(store, sessFile);
         out('  status  ' + (r && r.status));
         if (r && (r.status === 'sent' || r.status === 'ok')) {
-          out('  important: enter the code within 10 minutes');
-          out('  run: wa registration --register ' + ph + ' --code <code>');
+          printCodeNextSteps(store, ph, 'wa registration --register ' + ph + ' --code');
         }
       } catch (e) {
         out('  ' + (e.message || String(e)));
