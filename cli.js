@@ -900,41 +900,60 @@ function openShell(prompt) {
 // Which way in: register this number over SMS as the account's own device, or
 // link to an account that already exists the way WhatsApp Web does.
 //
-// Asked only when it is genuinely ambiguous. If exactly one kind of session is
-// already on disk that one wins, and a non-interactive stdin never blocks on a
-// question nobody is there to answer.
-function hasMobileSession(phone) {
-  return fs.existsSync(storeFileFor(_sessDir, phone));
-}
-
-function hasWebSession(phone) {
-  const f = webStoreFileFor(_sessDir, phone);
-  if (!fs.existsSync(f)) return false;
+// Which kind of session a number has, read off the file rather than guessed.
+//
+// A number can hold both — registered over SMS as its own device, and linked
+// as a companion to some other account — so "the file is there" was never
+// enough to go on. It is also not enough on its own: a registration that was
+// started and never finished leaves a store behind with `registered` still
+// false, and connecting with it can only fail.
+//
+// Returns null when there is nothing usable, otherwise when the session was
+// last written. That timestamp is the tie-breaker below.
+function readSessionKind(file, extra) {
+  if (!fs.existsSync(file)) return null;
   try {
-    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
-    return !!(j.registered && j.me && j.me.id);
-  } catch (_) { return false; }
+    const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!j.registered) return null;
+    if (extra && !extra(j)) return null;
+    return { mtime: fs.statSync(file).mtimeMs };
+  } catch (_) { return null; }
 }
 
-function askLoginMethod(phone) {
-  const mob = hasMobileSession(phone);
-  const web = hasWebSession(phone);
-  if (web && !mob) return Promise.resolve('pairing');
-  if (mob && !web) return Promise.resolve('sms');
-  if (!process.stdin.isTTY) return Promise.resolve(mob ? 'sms' : 'pairing');
+function mobileSession(phone) {
+  return readSessionKind(storeFileFor(_sessDir, phone));
+}
 
-  return new Promise(resolve => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    out('');
-    out('  how do you want to connect?');
-    out('    1) sms           register this number as its own device');
-    out('    2) pairing code  link to an existing WhatsApp account (8-digit code)');
-    rl.question('  sms or pairing code?  [1/2] ', (answer) => {
-      rl.close();
-      const a = String(answer).trim().toLowerCase();
-      resolve((a === '2' || a.startsWith('p')) ? 'pairing' : 'sms');
-    });
-  });
+function webSession(phone) {
+  return readSessionKind(webStoreFileFor(_sessDir, phone), j => !!(j.me && j.me.id));
+}
+
+function hasMobileSession(phone) { return !!mobileSession(phone); }
+function hasWebSession(phone)    { return !!webSession(phone); }
+
+/**
+ * Work out how to connect a number, without asking.
+ *
+ * This used to put a question on the terminal, and the question was worse than
+ * useless: it opened a second reader on the same stdin while the shell's own
+ * was still running, so the two split the answer between them and the one that
+ * mattered usually got nothing. An unrecognised answer then fell through to
+ * "sms" — the more destructive of the two — and a companion session that was
+ * perfectly good was met with a login as a primary device, which the server
+ * answers with a 401 that reads exactly like a revoked session.
+ *
+ * There is nothing to ask. The session files say which kinds exist, and when
+ * both do, the one used most recently is the one being asked for.
+ *
+ * @returns {'sms'|'pairing'|null}  null when the number has no usable session
+ */
+function resolveLoginMethod(phone) {
+  const mob = mobileSession(phone);
+  const web = webSession(phone);
+  if (mob && !web) return 'sms';
+  if (web && !mob) return 'pairing';
+  if (!mob && !web) return null;
+  return web.mtime >= mob.mtime ? 'pairing' : 'sms';
 }
 
 // Handlers for the two things a registration can stop and ask for.
@@ -945,8 +964,18 @@ function askLoginMethod(phone) {
 function registrationPrompts() {
   const prompt = (question) => new Promise((resolve) => {
     if (!process.stdin.isTTY) return resolve(null);
+    // The shell's own reader has to stand down first. Two readline interfaces
+    // on one stdin both take the keypresses, so the answer is split between
+    // them: the shell treats it as a command and this one is left with
+    // nothing. Every other place that asks something mid-session already does
+    // this — the two that did not were where the answer went missing.
+    _rl && _rl.pause();
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(question, (answer) => { rl.close(); resolve(String(answer).trim()); });
+    rl.question(question, (answer) => {
+      rl.close();
+      _rl && (_rl.resume(), _rl.prompt(true));
+      resolve(String(answer).trim());
+    });
   });
 
   return {
@@ -1229,8 +1258,17 @@ async function handleLine(line) {
         const forced = (p[2] || '').toLowerCase();
         const method = forced === 'pair' || forced === 'pairing' ? 'pairing'
                      : forced === 'sms'                          ? 'sms'
-                     : await askLoginMethod(phn);
-        out('connecting...');
+                     : resolveLoginMethod(phn);
+        // Nothing on disk to connect with. Say which of the two things to do
+        // rather than picking one and letting the server explain it as a 401.
+        if (!method) {
+          fail('no session for +' + phn);
+          out('  register it as its own device:  /reg code ' + phn);
+          out('  or link it to an account:       /pair ' + phn);
+          break;
+        }
+        out('connecting as ' + (method === 'pairing' ? 'companion (pairing code)'
+                                                     : 'primary device (sms)') + '...');
         if (method === 'pairing') await doConnectWeb(phn);
         else                      await doConnect(phn);
         break;
@@ -2943,7 +2981,13 @@ async function main() {
     const forced = String(flags.method || '').toLowerCase();
     const method = flags.pair || forced === 'pair' || forced === 'pairing' ? 'pairing'
                  : flags.sms  || forced === 'sms'                          ? 'sms'
-                 : await askLoginMethod(phone);
+                 : resolveLoginMethod(phone);
+    if (!method) {
+      fail('no session for +' + phone);
+      out('  register it as its own device:  wa registration --request-code ' + phone);
+      out('  or link it to an account:       wa pair ' + phone);
+      process.exit(1);
+    }
     // Plain `wa>` until the connection actually opens. Naming the number in the
     // prompt before that says "connected as this number" while the line above
     // it says there is no session, which is the opposite of what happened —
