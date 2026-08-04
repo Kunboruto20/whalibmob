@@ -292,7 +292,40 @@ wa registration --request-code 919634847671 --method voice
 
 # via an old WhatsApp account
 wa registration --request-code 919634847671 --method wa_old
+
+# via flash call — WhatsApp rings the number and hangs up (Android only)
+WA_OS=android wa registration --request-code 919634847671 --method flash
 ```
+
+**Flash call** sends no code anywhere. WhatsApp rings the number from a
+one-time number and drops the call before it can be answered, and the
+verification code *is* that number — its last 6 digits. The official Android app
+reads them out of the call log; here the person holding the phone reads the
+missed call instead and types them:
+
+```sh
+# phone shows a missed call from +40 21 555 123456
+wa registration --register 919634847671 --code 123456
+```
+
+Pasting the whole number works too — only its last six digits are sent. Do not
+answer the call; it hangs up on its own, and answering it does not verify
+anything.
+
+Three things to know before choosing it:
+
+- **Android only.** iOS has no API for reading an incoming call's number, so
+  WhatsApp never offers flash there. Asking for it as iOS is refused before any
+  request goes out, so the number spends no attempt learning that.
+- **The server decides.** Flash is not offered for every number or country. When
+  it declines, the request falls back to SMS automatically and the session
+  records that, so the SMS code is confirmed as an SMS code rather than being
+  trimmed like a caller ID.
+- **The caller ID has to be visible.** A carrier that withholds the calling
+  number leaves nothing to read.
+
+Set `WA_FLASH_CODE_LEN` if a number's server expects a different length than the
+six digits the app defaults to.
 
 **Set the account's display name while registering** with `--name`. This is the
 name people who have *not* saved your number see next to it — in group
