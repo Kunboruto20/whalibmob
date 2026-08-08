@@ -7,6 +7,7 @@ const SessionPaths = require('./lib/SessionPaths');
 const { createNewStore, saveStore, loadStore, toSixParts, fromSixParts, storeToJson, storeFromJson } = require('./lib/Store');
 const { checkIfRegistered, requestSmsCode, verifyCode } = require('./lib/Registration');
 const { SignalProtocol } = require('./lib/signal/SignalProtocol');
+const WAM = require('./lib/WAM');
 const { SignalStore } = require('./lib/signal/SignalStore');
 const { SenderKeyStore, SenderKeyCrypto } = require('./lib/signal/SenderKey');
 const { DeviceManager } = require('./lib/DeviceManager');
@@ -103,6 +104,14 @@ module.exports = {
   encodeCompanionRegisterPayload,
   encodeCompanionLoginPayload,
   fetchWaWebVersion,
+  // WAM — the web client's stats channel: the event/global tables, the binary
+  // encoder and the BinaryInfo holder, all as the reference client defines
+  // them. See client.wamBuffer / client.sendWAMBuffer().
+  WAM,
+  encodeWAM:  WAM.encodeWAM,
+  BinaryInfo: WAM.BinaryInfo,
+  WEB_EVENTS: WAM.WEB_EVENTS,
+  WEB_GLOBALS: WAM.WEB_GLOBALS,
   // Signal / encryption internals
   SignalProtocol,
   SignalStore,
