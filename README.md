@@ -2149,7 +2149,8 @@ History arrives in chunks over the first minute or so after linking, largest fir
 | File | Holds |
 |---|---|
 | `<phone>.web.json` | link state — keys, `advSecretKey`, the device slot you were given |
-| `<phone>.web.signal.json` | Signal sessions and pre-keys for the linked device |
+| `<phone>.web.signal.json` | Signal sessions, signed pre-key, identities, LID map, pre-key counters |
+| `<phone>.web.pre-key-<id>.json` | one one-time pre-key — 812 of them |
 | `<phone>.web.sk.json` | group SenderKeys |
 | `<phone>.web.tctoken.json` | privacy tokens |
 | `<phone>.web.appState.json` | app-state version and hash per collection |
@@ -2538,7 +2539,11 @@ whalibmob_auth/
 ├── android-apk-material-business.json
 ├── 919634847671/
 │   ├── 919634847671.json                ← the store: keys, device, version
-│   ├── 919634847671.signal.json         ← Signal sessions
+│   ├── 919634847671.signal.json         ← Signal sessions, signed pre-key, identities
+│   ├── 919634847671.pre-key-1.json      ← one-time pre-keys, one file each
+│   ├── 919634847671.pre-key-2.json
+│   ├── …                                  812 of them
+│   ├── 919634847671.pre-key-812.json
 │   ├── 919634847671.sk.json             ← sender keys
 │   ├── 919634847671.tctoken.json
 │   ├── 919634847671.device-cache.json
@@ -2565,6 +2570,66 @@ of a pile by prefix.
 > directory is left exactly as it is, and only new numbers get a folder. Nothing
 > is moved unless you ask — `wa migrate-sessions` does that, one number or all
 > of them, and re-running it is safe.
+
+### One-time Pre-keys
+
+A pre-key is a one-shot Diffie-Hellman key the account leaves with the server so
+somebody who wants to message it can open a Signal session without it being
+online. Each one is handed out once and then gone. Run out and nobody can start
+a conversation with the number at all — the messages are not delayed, they are
+never sent, and nothing anywhere reports it.
+
+whalibmob keeps a pool of **812**, generated the moment a session is created and
+written one key per file, in whatever authentication folder you gave it:
+
+```
+~/.waSession/919634847671/
+├── 919634847671.pre-key-1.json
+├── 919634847671.pre-key-2.json
+└── … 919634847671.pre-key-812.json
+```
+
+A companion link for the same number keeps its own pool beside it as
+`919634847671.web.pre-key-<id>.json`. The two are never shared: they are
+separate devices with separate identity keys, and a key offered under the wrong
+one cannot be answered.
+
+The file is the same shape the reference client writes — the raw 32-byte public
+key and the private key, both BufferJSON:
+
+```json
+{"private":{"type":"Buffer","data":"…"},"public":{"type":"Buffer","data":"…"}}
+```
+
+**Keeping the server stocked.** Three things drive it, and all of them ask the
+server what it is actually holding rather than guessing from the local pool —
+the two drift apart, because the server spends a key on every bundle it hands
+out and none of that reaches this side.
+
+| When | What it does |
+|---|---|
+| on login | asks the server for its count; **0** there means a full 812 goes up, anything low means a top-up of 5 |
+| when the server says it is running low | same check, same batch |
+| every 30 minutes | same check — for the session that stays up long enough to be drained without a word |
+
+A batch is the next ids the server has not been sent, never the whole pool
+again, and only counts as sent once the server has acknowledged it — a rejected
+upload is retried four times with backoff and then left for the next check, with
+the same keys still queued. Ids are never reused, even after the key under one
+has been spent.
+
+After the login upload the account also asks for the server's **key bundle
+digest** and compares the identity key and signed pre-key it is being served
+against the ones this session holds. A mismatch there is the failure that used
+to need the number registering again to clear.
+
+None of this needs calling: `init()` and `connectWeb()` both do it, identically.
+
+> [!NOTE]
+> **Sessions written before 5.14.19 keep every key they had.** Pre-keys used to
+> live inside `<phone>.signal.json`; on the first start they are moved out into
+> files of their own and the aggregate copy is dropped. The keys themselves do
+> not change, so the bundles the server has already handed out stay answerable.
 
 ### Where the folder comes from
 
@@ -2719,6 +2784,14 @@ try {
 Creates a fresh credential store for the given phone number — the key pairs, registration ID and device identifiers a number needs before it can even ask for an SMS code. This is what `/reg code` calls.
 
 It returns everything `createNewStore` does, plus a few fields kept for application code that expects them: `nextPreKeyId`, `firstUnuploadedPreKeyId`, `accountSyncCounter`, `accountSettings`, `processedHistoryMessages` and `advSecretKey`. Those extras live on the object only — `saveStore` does not write them, so they are not there again after a reload. Nothing in the library reads them; treat them as a convenience, not as state.
+
+> [!NOTE]
+> The two pre-key counters the library actually runs on are the ones in the
+> `SignalStore` — `nextPreKeyId()` and `firstUnuploadedPreKeyId()`, persisted in
+> `<phone>.signal.json`. They live there rather than in the store because a
+> number's mobile half and its companion half have a `SignalStore` each and must
+> never share a pre-key id space. The fields above are the same names on a
+> different object and do not drive anything.
 
 ```js
 const { initAuthCreds, saveStore } = require('whalibmob')
