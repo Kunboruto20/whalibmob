@@ -2005,6 +2005,7 @@ Every option is optional; `sessionDir` is the only one most senders ever set.
 | `sessionDir` | `~/.waSession` | The authentication folder. Each number gets its own subfolder inside it — see [Saving & Restoring Sessions](#saving--restoring-sessions). |
 | `autoFixNumber` | `true` | Re-file the session automatically when the server reports the account under a different number. Set `false` to be told instead of fixed — see [The Number WhatsApp Files Your Account Under](#the-number-whatsapp-files-your-account-under). |
 | `autoRead` | `true` | Send read receipts for incoming messages. `false` leaves them unread. |
+| `refreshVersion` | `true` | **iOS sessions only.** Check the App Store for the current build on every `init()` and write it into the session file. Set `false` to keep announcing whatever the session registered with — see [Keeping the Announced Version Current](#keeping-the-announced-version-current). Android is unaffected either way. |
 | `pino` | off | Debug logging. `true` turns it on at `debug` level; an object is passed to `pino` as-is. |
 | `sentCacheSize` | `2000` | How many sent messages keep their plaintext so a retry receipt naming them can be answered. |
 | `maxRetryResends` | `5` | How many times one message may be re-sent in answer to retry receipts before the client gives up. |
@@ -2570,6 +2571,60 @@ of a pile by prefix.
 > directory is left exactly as it is, and only new numbers get a folder. Nothing
 > is moved unless you ask — `wa migrate-sessions` does that, one number or all
 > of them, and re-running it is safe.
+
+### Keeping the Announced Version Current
+
+Every connection announces the WhatsApp build it claims to be. The server checks
+it, and when it stops recognising the number it refuses the handshake with
+`405` — a failure that says nothing about the version and has nothing to do with
+the account.
+
+A session records the version it registered with. Left alone it announces that
+same number forever, so a number registered in spring is still claiming a spring
+build in autumn, and one day the connect simply stops working.
+
+**iOS sessions now refresh themselves.** On every `init()` the client asks the
+App Store what the current build is and writes it into `<phone>.json` before the
+handshake. Nothing to run, nothing to remember:
+
+```js
+client.on('version_update', ({ from, to }) => {
+  console.log('announcing', to, 'instead of', from)
+})
+
+await client.init('40756469325')
+```
+
+Three rules keep this from being the thing that breaks a working session:
+
+- **It never goes backwards.** The App Store lookup answers with a pinned
+  fallback rather than failing when it cannot reach the network, and that
+  fallback can easily be older than what the session holds. Moving a session to
+  an older version is the one outcome that makes a `405` *more* likely.
+- **`WA_VERSION` still wins.** A version pinned on the way out of a `405` is a
+  decision, and is never quietly replaced.
+- **A failed lookup changes nothing.** The session keeps the version it has and
+  the connect carries on.
+
+Set `{ refreshVersion: false }` on the client to turn it off.
+
+> [!NOTE]
+> **Android is deliberately left alone.** Its version comes out of the APK the
+> token material was read from, and the two have to agree — the registration
+> token is computed from that build. Refreshing the announced version behind the
+> caller's back would put it out of step with the token. Android keeps the
+> explicit flow: `wa apk-material --download`, then `wa refresh-version`.
+
+The manual tool still works on both platforms, and is the only way to move an
+Android session:
+
+```bash
+wa refresh-version 40756469325                    # current build for the platform
+wa refresh-version 40756469325 --version 2.25.1.2 # or one you name
+```
+
+Companion sessions have never had this problem: `connectWeb()` reads the live
+web revision on every connect already.
 
 ### One-time Pre-keys
 
