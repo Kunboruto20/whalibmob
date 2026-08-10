@@ -1788,9 +1788,9 @@ This runs by itself on a registration that finds no material. To do it separatel
 wa apk-material --download
 ```
 
-It is the route Cobalt takes: an anonymous Play Store token from the Aurora OSS
-dispenser, then Google's own `/fdfe` catalogue and delivery endpoints, then the
-signed CDN URLs. **No Google account of yours is involved.** Only the density
+The route is an anonymous Play Store token from the Aurora OSS dispenser, then
+Google's own `/fdfe` catalogue and delivery endpoints, then the signed CDN URLs.
+**No Google account of yours is involved.** Only the density
 splits are downloaded — the token's key comes from `about_logo.png`, which lives
 in one of those, and the architecture and language splits would be a hundred
 megabytes nothing here reads.
@@ -2322,6 +2322,8 @@ Every event from the SMS primary API fires here too — `message`, `receipt`, `p
 | `history_sync` | `{ syncTypeName, chats, contacts, pushNames, merged }` | a chunk of history arrived |
 | `history_sync_error` | `{ err, notification }` | a chunk could not be fetched or decrypted |
 | `client_rejected` | `{ reason, location, message }` | the server refused the client itself, not the session — `405` means the announced version is not accepted. Fires whether the refusal arrives during the handshake or once the stream is open, and the client stops retrying either way. Distinct from `auth_failure`, and there is nothing to re-pair. |
+| `version_update` | `{ from, to, source }` | the announced version was refreshed from the platform's store before a handshake. Fires on reconnects as well as the first connect |
+| `apk_material_stale` | `{ materialVersion, liveVersion, hint }` | Android only: the Play Store listing has moved past the APK the cached token material came from. Nothing is broken — registration is what reads that material — but the next number registered from this install would go out under an older build |
 
 ### Reading What the Phone Sent
 
@@ -2585,40 +2587,53 @@ A session records the version it registered with. Left alone it announces that
 same number forever, so a number registered in spring is still claiming a spring
 build in autumn, and one day the connect simply stops working.
 
-**iOS sessions now refresh themselves.** On every `init()` the client asks the
-App Store what the current build is and writes it into `<phone>.json` before the
-handshake. Nothing to run, nothing to remember:
+**Sessions refresh themselves, on both platforms.** Before every handshake the
+client asks the platform's store what the current build is and writes it into
+`<phone>.json`. iOS reads the App Store listing, Android the Play Store one.
+Nothing to run, nothing to remember:
 
 ```js
-client.on('version_update', ({ from, to }) => {
-  console.log('announcing', to, 'instead of', from)
+client.on('version_update', ({ from, to, source }) => {
+  console.log('announcing', to, 'instead of', from, '—', source)
 })
 
 await client.init('40756469325')
 ```
 
-Three rules keep this from being the thing that breaks a working session:
+**Reconnects are covered too.** The check runs from the socket-connect step
+rather than from `init()`, so the library's own reconnect loop passes through it
+as well. A bot that stays up for weeks does not go on announcing whatever the
+listing said the morning it started. The handshake reads the version out of the
+store at the moment it runs, so a version written here is the one that goes out.
 
-- **It never goes backwards.** The App Store lookup answers with a pinned
-  fallback rather than failing when it cannot reach the network, and that
-  fallback can easily be older than what the session holds. Moving a session to
-  an older version is the one outcome that makes a `405` *more* likely.
+Four rules keep this from being the thing that breaks a working session:
+
+- **It never goes backwards.** Both lookups answer with a pinned fallback rather
+  than failing when they cannot reach the network, and that fallback can easily
+  be older than what the session holds. Moving a session to an older version is
+  the one outcome that makes a `405` *more* likely.
 - **`WA_VERSION` still wins.** A version pinned on the way out of a `405` is a
   decision, and is never quietly replaced.
 - **A failed lookup changes nothing.** The session keeps the version it has and
   the connect carries on.
+- **The network is not asked twice for the same answer.** Each lookup is
+  memoised for six hours, so a connection that flaps every few seconds reaches
+  the store once rather than once per attempt — and a session up for a month
+  still picks up a release the day it lands.
 
 Set `{ refreshVersion: false }` on the client to turn it off.
 
 > [!NOTE]
-> **Android is deliberately left alone.** Its version comes out of the APK the
-> token material was read from, and the two have to agree — the registration
-> token is computed from that build. Refreshing the announced version behind the
-> caller's back would put it out of step with the token. Android keeps the
-> explicit flow: `wa apk-material --download`, then `wa refresh-version`.
+> **Registration still reads the APK.** A number being registered announces the
+> `versionName` of the APK its token material came from, because the Android
+> registration token is signed over that build. Only the *announced* version on
+> an already-registered session follows the Play Store listing — no token
+> travels in the handshake, so there is nothing there for it to fall out of step
+> with. When the listing moves past the cached material the client emits
+> `apk_material_stale`, which is the cue to run `wa apk-material --download`
+> before registering the next number.
 
-The manual tool still works on both platforms, and is the only way to move an
-Android session:
+The manual tool still works on both platforms:
 
 ```bash
 wa refresh-version 40756469325                    # current build for the platform
@@ -4867,7 +4882,7 @@ come from:
 | order | where the announced version comes from |
 |---|---|
 | 1 | `WA_VERSION`, from the shell **or from a `.env` file in the directory the command runs in** |
-| 2 | the version stored in the session file — what the number was registered with |
+| 2 | the version stored in the session file — refreshed from the platform's store before every handshake, unless `{ refreshVersion: false }` |
 
 Almost every 405 is the first line winning when nobody meant it to.
 
