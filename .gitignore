@@ -1,0 +1,6 @@
+node_modules/
+.env
+*.log
+
+# npm lockfile — the package ships as a library, consumers resolve their own
+package-lock.json
