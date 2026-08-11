@@ -2007,10 +2007,11 @@ Every option is optional; `sessionDir` is the only one most senders ever set.
 | `sessionDir` | `~/.waSession` | The authentication folder. Each number gets its own subfolder inside it — see [Saving & Restoring Sessions](#saving--restoring-sessions). |
 | `autoFixNumber` | `true` | Re-file the session automatically when the server reports the account under a different number. Set `false` to be told instead of fixed — see [The Number WhatsApp Files Your Account Under](#the-number-whatsapp-files-your-account-under). |
 | `autoRead` | `true` | Send read receipts for incoming messages. `false` leaves them unread. |
-| `refreshVersion` | `true` | **iOS sessions only.** Check the App Store for the current build on every `init()` and write it into the session file. Set `false` to keep announcing whatever the session registered with — see [Keeping the Announced Version Current](#keeping-the-announced-version-current). Android is unaffected either way. |
+| `refreshVersion` | `true` | Check the platform's store for the current build on every connect and reconnect, and write it into the session file. Both iOS and Android. Set `false` to keep announcing whatever the session registered with — see [Keeping the Announced Version Current](#keeping-the-announced-version-current). |
 | `pino` | off | Debug logging. `true` turns it on at `debug` level; an object is passed to `pino` as-is. |
 | `sentCacheSize` | `2000` | How many sent messages keep their plaintext so a retry receipt naming them can be answered. |
 | `maxRetryResends` | `5` | How many times one message may be re-sent in answer to retry receipts before the client gives up. |
+| `tcTokenPresendTimeoutMs` | `5000` | How long the first message to a new contact waits for its trusted-contact token before going out without one — see [tcToken — Error 463 Defense](#tctoken--error-463-defense). `0` sends immediately and lets the token arrive for the next message. |
 
 ```js
 const client = new WhalibmobClient({
@@ -3278,8 +3279,9 @@ whalibmob implements the full lifecycle to prevent this:
 | Step | What the library does automatically |
 |---|---|
 | **History seed** | On every history sync chunk, `tcToken` bytes are extracted from each conversation in the protobuf and loaded into `TcTokenStore` in memory. The first send after reconnect already has a valid token ready — no 463 risk on cold start. |
+| **First contact** | The very first DM to a contact has no token on file yet. Before the stanza is built, the library issues one and waits for it, so that message carries a `<tctoken>` like every later one instead of counting as an anonymous reach-out. The wait is bounded by `tcTokenPresendTimeoutMs` (default 5 s) — past it the message goes out regardless and the token lands in time for the next one. |
 | **Attach on send** | Before dispatching any DM, `MessageSender` looks up the token for the recipient JID, checks it has not expired (28-day rolling window), and pushes a `<tctoken>` child node into the message stanza. |
-| **Proactive issuance** | After each successful DM send, the library fires a `<iq type='set' xmlns='privacy'>` requesting a fresh token for that JID from the server — once per 7-day bucket, deduplicated in-flight. |
+| **Renewal** | After a successful DM send, the library fires a `<iq type='set' xmlns='privacy'>` requesting a fresh token for that JID from the server — once per 7-day bucket, deduplicated in-flight. This one is fire-and-forget: the token being attached right now is still valid, so nothing waits for it. |
 | **Incoming notification** | When a contact starts a new conversation, WhatsApp pushes a `<notification type='privacy_token'>`. The library catches it in `_handlePrivacyTokenNotification` and stores the token immediately. |
 | **Identity change re-issue** | When decrypting a `pkmsg` (new Signal session from peer), the library calls `_reissueTcTokenAfterIdentityChange` to re-issue the token for the new session. |
 | **Error 463 recovery** | If a send fails with error 463, the library issues a fresh token, waits for the server response, and automatically retries the same message with the new token attached. |
