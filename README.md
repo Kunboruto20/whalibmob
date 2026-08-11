@@ -152,7 +152,7 @@ npm install -g whalibmob
     - [Two Sessions on One Number](#two-sessions-on-one-number)
   - [The Number WhatsApp Files Your Account Under](#the-number-whatsapp-files-your-account-under)
   - [When Registration Is Refused for Consent](#when-registration-is-refused-for-consent)
-  - [Routing Registration Through a Proxy](#routing-registration-through-a-proxy)
+  - [Routing Traffic Through a Proxy](#routing-traffic-through-a-proxy)
   - [Saving & Restoring Sessions](#saving--restoring-sessions)
   - [Signal Store Utilities](#signal-store-utilities)
     - [makeCacheableSignalKeyStore](#makecacheablesignalkeystore)
@@ -2488,9 +2488,9 @@ If that is refused too, the number has to go through the real app once, on a pho
 > [!NOTE]
 > The `login` field in that reply is worth reading. Brazilian mobiles gained a ninth digit that WhatsApp never adopted, so `+5571976034186` is filed as `+557176034186`. whalibmob adopts the server's form automatically on a successful registration and saves the session under it — the digit difference is not itself the failure.
 
-## Routing Registration Through a Proxy
+## Routing Traffic Through a Proxy
 
-Registration is the part of the protocol most likely to be refused from a datacenter IP. If you are seeing security blocks or an undeterminable number status, route it through a SOCKS proxy — Tor, or a residential provider.
+Two reasons to want this. Registration is the part of the protocol most likely to be refused from a datacenter IP, so a residential exit helps with security blocks and undeterminable number statuses. And on a network that cannot reach WhatsApp at all, nothing works without one.
 
 Install the optional dependency and set one environment variable:
 
@@ -2517,10 +2517,30 @@ process.env.SOCKS_PROXY = 'socks5://user:pass@proxy.example.com:1080'
 await requestSmsCode(phone, store)
 ```
 
-> [!NOTE]
-> This covers the registration traffic to `v.whatsapp.net`. The message socket and media transfers are not proxied — if you need those behind a proxy as well, open an issue describing the setup.
+### What goes through it
 
-If `socks` is not installed, or a proxy is unreachable, you get a message saying so rather than a silent failure. In the rare case the package lives somewhere `require()` cannot find it, `WA_SOCKS_LIB` takes an absolute path to it.
+Everything the library sends out:
+
+| Connection | Destination |
+|---|---|
+| Message socket, mobile | raw TCP to WhatsApp |
+| Message socket, web | `wss://web.whatsapp.com/ws/chat` |
+| Registration | `v.whatsapp.net` |
+| Announced version, iOS | App Store lookup |
+| Announced version, Android | Play Store listing |
+| Announced version, web | `web.whatsapp.com/sw.js` |
+| APK material for registration | Play Store download |
+| Media upload | WhatsApp's media hosts |
+
+Node's `http`/`https` modules ignore proxy environment variables entirely — a proxy has to be handed in as an agent, per call site. Only the registration POST used to do that, which produced a confusing failure: `curl -x socks5://…` reached WhatsApp while the library timed out on the same machine, falling back to a pinned version with only a debug line to show for it:
+
+```
+[DBG] WEB_VERSION 2.3000.1035194821 (pinned fallback: sw.js fetch timed out)
+```
+
+All eight paths now share one agent.
+
+If `socks` is not installed, or a proxy is unreachable, you get a message saying so rather than a silent failure. A proxy URL that cannot be parsed leaves the connection direct rather than throwing — a version lookup with a pinned fallback should not take a process down over its proxy. In the rare case the package lives somewhere `require()` cannot find it, `WA_SOCKS_LIB` takes an absolute path to it.
 
 ## Saving & Restoring Sessions
 
