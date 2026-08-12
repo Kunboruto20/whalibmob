@@ -152,6 +152,7 @@ npm install -g whalibmob
     - [Two Sessions on One Number](#two-sessions-on-one-number)
   - [The Number WhatsApp Files Your Account Under](#the-number-whatsapp-files-your-account-under)
   - [When Registration Is Refused for Consent](#when-registration-is-refused-for-consent)
+  - [The Push Token](#the-push-token)
   - [Routing Traffic Through a Proxy](#routing-traffic-through-a-proxy)
   - [Saving & Restoring Sessions](#saving--restoring-sessions)
   - [Signal Store Utilities](#signal-store-utilities)
@@ -2487,6 +2488,26 @@ If that is refused too, the number has to go through the real app once, on a pho
 
 > [!NOTE]
 > The `login` field in that reply is worth reading. Brazilian mobiles gained a ninth digit that WhatsApp never adopted, so `+5571976034186` is filed as `+557176034186`. whalibmob adopts the server's form automatically on a successful registration and saves the session under it — the digit difference is not itself the failure.
+
+## The Push Token
+
+Every WhatsApp on a real phone holds a Firebase push token. It is the address Google uses to wake the app when a message arrives, and no install exists without one — so a registration that ships no `push_token` describes a WhatsApp that cannot be notified.
+
+Registration fetches a real one and sends it, in three plain HTTPS calls to Google:
+
+| Step | Endpoint | Yields |
+|---|---|---|
+| 1 | `android.clients.google.com/checkin` | an android id and security token — the device's identity with Google |
+| 2 | `firebaseinstallations.googleapis.com` | a Firebase installation for WhatsApp's project |
+| 3 | `android.clients.google.com/c2dm/register3` | the FCM token itself |
+
+No root, no Frida, no phone. This is unrelated to Play Integrity attestation — the two travel in the same request but come from different places, and one works without the other.
+
+It runs once per number. The Firebase identity is cached on the session, because Google issues an android id once and expects it back; fetching a new one per registration step would mint a fresh phantom device each time.
+
+**Failure is silent by design.** A blocked network, a refusal from Google, a malformed answer — all end with the field omitted and registration proceeding exactly as it did before push tokens were wired up. A push token helps; it is never a prerequisite.
+
+Turn it off with `WA_FCM_PUSH=0`.
 
 ## Routing Traffic Through a Proxy
 
