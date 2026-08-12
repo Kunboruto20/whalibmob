@@ -28,7 +28,7 @@ If you want News about whalibmob enter this whalibmob channel: https://t.me/+sHN
 
 - whalibmob does not require a browser, Selenium, or any other external runtime — it communicates directly with WhatsApp using a **TCP socket** and the **Noise Protocol** handshake.
 - The library operates as a real **iOS mobile device**, using the Mobile API endpoint, which behaves differently from the Web API.
-- It **also speaks WhatsApp Web over a WebSocket**. When a number cannot receive an SMS, or is already in use on a phone, whalibmob can link itself to that existing account with an **8-character pairing code** and run as one of its linked devices — with full message history and the account's address book. See [Linking to an Existing Account](#linking-to-an-existing-account-pairing-code). The API is identical in both modes.
+- It **also speaks WhatsApp Web over a WebSocket**. When a number cannot receive an SMS, or is already in use on a phone, whalibmob can link itself to that existing account with an **8-character pairing code** and run as one of its linked devices — with full message history and the account's address book. See [Linking to an Existing Account](#linking-to-an-existing-account-pairing-code-or-qr). The API is identical in both modes.
 - Signal Protocol encryption is **fully inlined** in pure JavaScript — no native binaries, no node-gyp, runs anywhere Node.js runs.
 
 ## Install
@@ -130,7 +130,7 @@ npm install -g whalibmob
     - [Device Attestation with Frida (optional)](#device-attestation-with-frida-optional)
     - [Connect](#connect)
       - [Client Options](#client-options)
-  - [Linking to an Existing Account (Pairing Code)](#linking-to-an-existing-account-pairing-code)
+  - [Linking to an Existing Account (Pairing Code or QR)](#linking-to-an-existing-account-pairing-code-or-qr)
     - [Requesting a Pairing Code](#requesting-a-pairing-code)
     - [Reconnecting a Linked Session](#reconnecting-a-linked-session)
     - [Choosing Your Own Code](#choosing-your-own-code)
@@ -1477,6 +1477,9 @@ wa> /connect 919634847671 pair
 # link to an existing account by 8-digit pairing code
 wa> /pair 919634847671
 
+# or link by scanning a QR drawn in the terminal
+wa> /qrcode 919634847671
+
 # with a code you chose yourself (exactly 8 characters)
 wa> /pair 919634847671 MYCODE12
 
@@ -1602,6 +1605,7 @@ wa> /quit
 | **Connection** | |
 | `/connect <phone> [sms\|pair]` | Connect to WhatsApp — picks the method from the session files when unset |
 | `/pair <phone> [code]` | Link to an existing account by 8-digit pairing code |
+| `/qrcode <phone>` | Link to an existing account by scanning a QR drawn in the terminal |
 | `/disconnect` | Disconnect current session |
 | `/reconnect` | Force reconnection |
 | `/session` | Show session info |
@@ -1667,6 +1671,27 @@ if (result.status === 'ok') {
   console.log('registered')
 }
 ```
+
+**Optional — let the code arrive by itself.** The two steps above are the whole flow, and nothing about them changes if you do nothing else. But because registration now sends a Firebase push token (see [The Push Token](#the-push-token)), WhatsApp *may* also deliver the six-digit code as a silent push. Open a listener for it before requesting the code, and the code can come back with nothing typed:
+
+```js
+const { receivePushCode } = require('whalibmob')
+
+// open the listener FIRST, so the push has somewhere to land
+const codePromise = receivePushCode(store, store.device, { timeoutMs: 180000 })
+
+await requestSmsCode(store, 'sms')        // any method; the push is a copy of the code
+const code = await codePromise            // the six digits, or null if no push came
+
+if (code) {
+  const result = await verifyCode(store, code)
+  if (result.status === 'ok') saveStore(result.store, sessFile)
+} else {
+  // no push this time — read the code the ordinary way and call verifyCode(store, code)
+}
+```
+
+This is purely additive: `receivePushCode` resolves `null` on a timeout or any failure, so the plain `requestSmsCode` / `verifyCode` path always stands behind it. Whether WhatsApp sends the silent push is the server's decision — see [Receiving the code over push](#receiving-the-code-over-push-without-typing-it) for what governs it. From the CLI the same thing is one command, `/reg push <phone>`.
 
 **When the code is not the end of it.** The server can answer a submitted code with a CAPTCHA, or with a demand for the account's two-step verification PIN. Neither is something the library can work out on its own, so both come back to you through optional handlers:
 
@@ -2032,11 +2057,16 @@ The defaults cover an ordinary sender. Raise `sentCacheSize` if you push message
 
 If you see it, the cache is smaller than your in-flight window. An entry holds the encoded message, not the media it points at, so entries are small and raising the bound costs little memory.
 
-## Linking to an Existing Account (Pairing Code)
+## Linking to an Existing Account (Pairing Code or QR)
 
 Registering a number over SMS makes whalibmob that number's **own device**. Sometimes that is not what you want — the number is already in use on a phone, or the verification SMS never arrives. For those cases whalibmob can instead connect over a **WebSocket** and link itself to an account that already exists, exactly the way the WhatsApp Web and desktop clients do.
 
-You get an 8-character pairing code, the account owner types it into their phone, and from then on whalibmob is one of the account's linked devices. The whole library works the same afterwards — same client, same methods, same events.
+There are two ways to link, and they reach the same place:
+
+- **Pairing code** — whalibmob gives you an 8-character code, the owner types it into their phone.
+- **QR code** — whalibmob draws a QR, the owner scans it with the phone's camera.
+
+Both link the number as a companion device, both leave the whole library working the same afterwards — same client, same methods, same events. The only difference is what the owner does: type a code, or scan a square.
 
 > [!IMPORTANT]
 > The two modes are independent. SMS registration is unchanged and still the default; nothing about it is affected by linking. A single number can even have both a registered session and a linked session — they are stored in separate files and never share state.
@@ -2075,7 +2105,45 @@ On the phone that owns the number:
 
 **WhatsApp → Settings → Linked Devices → Link a device → Link with phone number instead**, then type the code.
 
-A few seconds after the code is accepted you will see `paired`, the server restarts the stream, and `connected` fires on the new connection. From that point on everything else in this document applies unchanged:
+### Linking by QR Code
+
+The QR path is the scan-to-connect alternative. You **do not** request a pairing code — you just connect and listen for the `qr` event. Because no code is asked for, the server volunteers a QR instead, and whalibmob turns it into a ready-to-render string:
+
+```js
+const { WhalibmobClient } = require('whalibmob')
+const qrcode = require('qrcode-terminal')          // npm install qrcode-terminal
+const path = require('path')
+
+const client = new WhalibmobClient({
+  sessionDir: path.join(process.env.HOME, '.waSession')
+})
+
+// a fresh QR string arrives here, and again each time the previous one expires
+client.on('qr', ({ qr, remaining }) => {
+  qrcode.generate(qr, { small: true })             // draw it in the terminal
+  console.log('scan it — refreshes on its own,', remaining, 'left before it expires')
+})
+
+client.on('qr_timeout', () => console.log('QR set expired — reconnect for a fresh one'))
+
+client.on('paired',    (p)  => console.log('scanned — linked as', p.jid))
+client.on('connected', ()   => console.log('ready'))
+
+// connect as a companion — and DO NOT request a pairing code
+await client.connectWeb('919634847671', { syncFullHistory: true })
+```
+
+On the phone that owns the number:
+
+**WhatsApp → Settings → Linked Devices → Link a device**, then point the camera at the QR.
+
+The `qr` string is what a WhatsApp camera reads: `ref,noise,identity,advSecret,platformId` — a one-time ref plus this client's public keys, comma-joined, the same fields WhatsApp Web itself renders. It rotates on its own (about a minute for the first, then shorter) until the account is scanned or the refs run out. `qrcode-terminal` is optional — without it you get the raw string on `qr` and can render it however you like (a PNG, a web page, an image in a chat). To emit the QR as a `wa.me/settings/linked_devices#…` link instead of the bare fields, pass `{ qrWrapUrl: true }` to `connectWeb`.
+
+Everything after the scan is identical to the pairing-code path: `paired`, a stream restart, then `connected`.
+
+### After the link — same for both paths
+
+A few seconds after the code is accepted (or the QR is scanned) you will see `paired`, the server restarts the stream, and `connected` fires on the new connection. From that point on everything else in this document applies unchanged:
 
 ```js
 await client.sendText('919876543210@s.whatsapp.net', 'sent from a linked device')
@@ -2119,9 +2187,11 @@ await client.connectWeb(phone, {
 | Event | Fires when |
 |---|---|
 | `pairing_code` | a code has been requested — `{ code, phoneNumber }` |
-| `paired` | the owner accepted the code — `{ jid, lid, deviceIndex, platform }` |
+| `qr` | a QR is ready to render — `{ qr, ref, ttlMs, remaining }`; fires again on each rotation |
+| `qr_timeout` | the QR refs ran out — reconnect for a fresh set |
+| `paired` | the owner accepted the code or scanned the QR — `{ jid, lid, deviceIndex, platform }` |
 | `restart_required` | the server is restarting the stream after pairing (normal; the reconnect is automatic) |
-| `pair_device` | the QR path produced reference strings — `{ refs }` |
+| `pair_device` | the raw QR reference strings, before they are turned into `qr` — `{ refs }` |
 | `history_sync` | a chunk of history arrived from the phone |
 
 ### Getting the History and the Address Book
@@ -2491,9 +2561,21 @@ If that is refused too, the number has to go through the real app once, on a pho
 
 ## The Push Token
 
-Every WhatsApp on a real phone holds a Firebase push token. It is the address Google uses to wake the app when a message arrives, and no install exists without one — so a registration that ships no `push_token` describes a WhatsApp that cannot be notified.
+Every WhatsApp on a real phone holds a Firebase push token. It is the address Google uses to wake the app, and no install exists without one — so a registration that ships no `push_token` describes a WhatsApp that cannot be notified, which is a device that does not exist.
 
-Registration fetches a real one and sends it, in three plain HTTPS calls to Google:
+The token does two distinct jobs, and it is easy to conflate them:
+
+1. **It makes the registration look real — always.** Every `/code` request now carries the token, whichever delivery method you ask for. The server sees an install that can be reached, not a headless client. This is the reason the token matters, and it applies to `sms`, `voice`, `wa_old` — all of them.
+2. **It can carry the code itself — sometimes.** Because you handed WhatsApp a direct line, WhatsApp *may* also push the six-digit code silently down it, so the app fills the code in on its own. This is why the code auto-completes on a real phone before you have read the SMS. It happens *alongside* the method you chose, not instead of it.
+
+The delivery method and the push are not alternatives. You still choose how a human receives the code (`sms`, `voice`, `wa_old`); the push, when it comes, is a second silent copy of that same code sent straight to the app.
+
+```
+request a code ─┬─ method you chose  →  reaches a human   (SMS, a call, the existing WhatsApp)
+                └─ push_token line   →  reaches the app    (silent, auto-filled — if WhatsApp sends it)
+```
+
+Registration fetches a real token and sends it, in three plain HTTPS calls to Google:
 
 | Step | Endpoint | Yields |
 |---|---|---|
@@ -2509,24 +2591,39 @@ It runs once per number. The Firebase identity is cached on the session, because
 
 Turn it off with `WA_FCM_PUSH=0`.
 
-### Receiving the code over push, without an SMS
+### Receiving the code over push, without typing it
 
-A real phone does not always wait for an SMS: WhatsApp can deliver the six-digit verification code as a silent Firebase push, straight into the app. `receivePushCode(store, device)` opens the same connection the phone keeps to Google — a long-lived TLS stream to `mtalk.google.com:5228` speaking the MCS protocol — logs in with the Firebase identity, and resolves with the code the moment it arrives.
+This is the receiving end of job 2 above. When WhatsApp sends the code as a silent push, something has to be listening on the Firebase line to catch it — the same long-lived connection every Android phone keeps open to Google. `receivePushCode(store, device)` opens it: a TLS stream to `mtalk.google.com:5228` speaking the MCS protocol, logged in with the Firebase identity, resolving with the code the moment a push carrying it arrives.
+
+The order matters. Open the listener **first**, so the line is live before the code is requested; then request the code by whatever method; then await it.
 
 ```js
 const { receivePushCode, requestSmsCode, verifyCode } = require('whalibmob')
 
-// open the listener first, so the push has somewhere to land
-const codePromise = receivePushCode(store, store.device, { timeoutMs: 120000 })
-await requestSmsCode(store, 'sms')          // WhatsApp may answer over push
-const code = await codePromise              // arrives with no SMS, no typing
+// 1. open the listener first, so the push has somewhere to land
+const codePromise = receivePushCode(store, store.device, { timeoutMs: 180000 })
+
+// 2. request the code — any method. The push, if it comes, is a copy of it.
+await requestSmsCode(store, 'sms')          // or 'voice', 'wa_old', …
+
+// 3. if the push arrives, the code is here with nothing typed
+const code = await codePromise
 if (code) await verifyCode(store, code)
+else      { /* no push — read the code from SMS / the existing WhatsApp, then verifyCode */ }
 ```
 
-The connection carries a heartbeat and tracks message ids so a reconnect does not re-see what it already read, exactly as the native client does. It resolves `null` on timeout, a refused login, or any failure — at which point the ordinary SMS flow still applies. Like the token, it routes through the configured SOCKS proxy.
+From the CLI the whole sequence is one command:
 
-> [!NOTE]
-> Whether WhatsApp delivers the code over push to a given request depends on the server, and may require valid attestation alongside. This receives the push correctly when one is sent; it does not force WhatsApp to choose that channel. It never replaces SMS — it runs beside it.
+```
+/reg push <phone> [sms|voice]
+```
+
+It opens the listener, waits until it is logged in, requests the code, and confirms automatically if the push arrives — falling back to `/reg confirm <phone> <code>` when it does not.
+
+The connection carries a heartbeat and remembers the message ids it has seen, so a reconnect does not re-read a delivered code, the way the native client does. It resolves `null` on timeout, a refused login, or any failure — at which point you simply read the code the ordinary way and verify it. Like the token, it routes through the configured SOCKS proxy.
+
+> [!IMPORTANT]
+> Receiving the push is not the same as making WhatsApp send it. Whether WhatsApp pushes the code for a given request is the server's decision, and on a client shipping empty attestation it will often send the code only by the method you asked for (SMS, `wa_old`, a call) and no silent push. This listener catches the push correctly **when one is sent**; it cannot force that channel, and it never replaces the chosen method — it runs beside it. With a valid Play Integrity attestation in the request (`WA_FRIDA_HOST`), the server is more likely to include the silent push.
 
 ## Routing Traffic Through a Proxy
 
