@@ -28,7 +28,7 @@ If you want News about whalibmob enter this whalibmob channel: https://t.me/+sHN
 
 - whalibmob does not require a browser, Selenium, or any other external runtime — it communicates directly with WhatsApp using a **TCP socket** and the **Noise Protocol** handshake.
 - The library operates as a real **iOS mobile device**, using the Mobile API endpoint, which behaves differently from the Web API.
-- It **also speaks WhatsApp Web over a WebSocket**. When a number cannot receive an SMS, or is already in use on a phone, whalibmob can link itself to that existing account with an **8-character pairing code** and run as one of its linked devices — with full message history and the account's address book. See [Linking to an Existing Account](#linking-to-an-existing-account-pairing-code). The API is identical in both modes.
+- It **also speaks WhatsApp Web over a WebSocket**. When a number cannot receive an SMS, or is already in use on a phone, whalibmob can link itself to that existing account with an **8-character pairing code** and run as one of its linked devices — with full message history and the account's address book. See [Linking to an Existing Account](#linking-to-an-existing-account-pairing-code-or-qr). The API is identical in both modes.
 - Signal Protocol encryption is **fully inlined** in pure JavaScript — no native binaries, no node-gyp, runs anywhere Node.js runs.
 
 ## Install
@@ -130,7 +130,7 @@ npm install -g whalibmob
     - [Device Attestation with Frida (optional)](#device-attestation-with-frida-optional)
     - [Connect](#connect)
       - [Client Options](#client-options)
-  - [Linking to an Existing Account (Pairing Code)](#linking-to-an-existing-account-pairing-code)
+  - [Linking to an Existing Account (Pairing Code or QR)](#linking-to-an-existing-account-pairing-code-or-qr)
     - [Requesting a Pairing Code](#requesting-a-pairing-code)
     - [Reconnecting a Linked Session](#reconnecting-a-linked-session)
     - [Choosing Your Own Code](#choosing-your-own-code)
@@ -1477,6 +1477,9 @@ wa> /connect 919634847671 pair
 # link to an existing account by 8-digit pairing code
 wa> /pair 919634847671
 
+# or link by scanning a QR drawn in the terminal
+wa> /qrcode 919634847671
+
 # with a code you chose yourself (exactly 8 characters)
 wa> /pair 919634847671 MYCODE12
 
@@ -1602,6 +1605,7 @@ wa> /quit
 | **Connection** | |
 | `/connect <phone> [sms\|pair]` | Connect to WhatsApp — picks the method from the session files when unset |
 | `/pair <phone> [code]` | Link to an existing account by 8-digit pairing code |
+| `/qrcode <phone>` | Link to an existing account by scanning a QR drawn in the terminal |
 | `/disconnect` | Disconnect current session |
 | `/reconnect` | Force reconnection |
 | `/session` | Show session info |
@@ -2053,11 +2057,16 @@ The defaults cover an ordinary sender. Raise `sentCacheSize` if you push message
 
 If you see it, the cache is smaller than your in-flight window. An entry holds the encoded message, not the media it points at, so entries are small and raising the bound costs little memory.
 
-## Linking to an Existing Account (Pairing Code)
+## Linking to an Existing Account (Pairing Code or QR)
 
 Registering a number over SMS makes whalibmob that number's **own device**. Sometimes that is not what you want — the number is already in use on a phone, or the verification SMS never arrives. For those cases whalibmob can instead connect over a **WebSocket** and link itself to an account that already exists, exactly the way the WhatsApp Web and desktop clients do.
 
-You get an 8-character pairing code, the account owner types it into their phone, and from then on whalibmob is one of the account's linked devices. The whole library works the same afterwards — same client, same methods, same events.
+There are two ways to link, and they reach the same place:
+
+- **Pairing code** — whalibmob gives you an 8-character code, the owner types it into their phone.
+- **QR code** — whalibmob draws a QR, the owner scans it with the phone's camera.
+
+Both link the number as a companion device, both leave the whole library working the same afterwards — same client, same methods, same events. The only difference is what the owner does: type a code, or scan a square.
 
 > [!IMPORTANT]
 > The two modes are independent. SMS registration is unchanged and still the default; nothing about it is affected by linking. A single number can even have both a registered session and a linked session — they are stored in separate files and never share state.
@@ -2096,7 +2105,45 @@ On the phone that owns the number:
 
 **WhatsApp → Settings → Linked Devices → Link a device → Link with phone number instead**, then type the code.
 
-A few seconds after the code is accepted you will see `paired`, the server restarts the stream, and `connected` fires on the new connection. From that point on everything else in this document applies unchanged:
+### Linking by QR Code
+
+The QR path is the scan-to-connect alternative. You **do not** request a pairing code — you just connect and listen for the `qr` event. Because no code is asked for, the server volunteers a QR instead, and whalibmob turns it into a ready-to-render string:
+
+```js
+const { WhalibmobClient } = require('whalibmob')
+const qrcode = require('qrcode-terminal')          // npm install qrcode-terminal
+const path = require('path')
+
+const client = new WhalibmobClient({
+  sessionDir: path.join(process.env.HOME, '.waSession')
+})
+
+// a fresh QR string arrives here, and again each time the previous one expires
+client.on('qr', ({ qr, remaining }) => {
+  qrcode.generate(qr, { small: true })             // draw it in the terminal
+  console.log('scan it — refreshes on its own,', remaining, 'left before it expires')
+})
+
+client.on('qr_timeout', () => console.log('QR set expired — reconnect for a fresh one'))
+
+client.on('paired',    (p)  => console.log('scanned — linked as', p.jid))
+client.on('connected', ()   => console.log('ready'))
+
+// connect as a companion — and DO NOT request a pairing code
+await client.connectWeb('919634847671', { syncFullHistory: true })
+```
+
+On the phone that owns the number:
+
+**WhatsApp → Settings → Linked Devices → Link a device**, then point the camera at the QR.
+
+The `qr` string is what a WhatsApp camera reads: `ref,noise,identity,advSecret,platformId` — a one-time ref plus this client's public keys, comma-joined, the same fields WhatsApp Web itself renders. It rotates on its own (about a minute for the first, then shorter) until the account is scanned or the refs run out. `qrcode-terminal` is optional — without it you get the raw string on `qr` and can render it however you like (a PNG, a web page, an image in a chat). To emit the QR as a `wa.me/settings/linked_devices#…` link instead of the bare fields, pass `{ qrWrapUrl: true }` to `connectWeb`.
+
+Everything after the scan is identical to the pairing-code path: `paired`, a stream restart, then `connected`.
+
+### After the link — same for both paths
+
+A few seconds after the code is accepted (or the QR is scanned) you will see `paired`, the server restarts the stream, and `connected` fires on the new connection. From that point on everything else in this document applies unchanged:
 
 ```js
 await client.sendText('919876543210@s.whatsapp.net', 'sent from a linked device')
@@ -2140,9 +2187,11 @@ await client.connectWeb(phone, {
 | Event | Fires when |
 |---|---|
 | `pairing_code` | a code has been requested — `{ code, phoneNumber }` |
-| `paired` | the owner accepted the code — `{ jid, lid, deviceIndex, platform }` |
+| `qr` | a QR is ready to render — `{ qr, ref, ttlMs, remaining }`; fires again on each rotation |
+| `qr_timeout` | the QR refs ran out — reconnect for a fresh set |
+| `paired` | the owner accepted the code or scanned the QR — `{ jid, lid, deviceIndex, platform }` |
 | `restart_required` | the server is restarting the stream after pairing (normal; the reconnect is automatic) |
-| `pair_device` | the QR path produced reference strings — `{ refs }` |
+| `pair_device` | the raw QR reference strings, before they are turned into `qr` — `{ refs }` |
 | `history_sync` | a chunk of history arrived from the phone |
 
 ### Getting the History and the Address Book
