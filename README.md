@@ -2491,9 +2491,21 @@ If that is refused too, the number has to go through the real app once, on a pho
 
 ## The Push Token
 
-Every WhatsApp on a real phone holds a Firebase push token. It is the address Google uses to wake the app when a message arrives, and no install exists without one — so a registration that ships no `push_token` describes a WhatsApp that cannot be notified.
+Every WhatsApp on a real phone holds a Firebase push token. It is the address Google uses to wake the app, and no install exists without one — so a registration that ships no `push_token` describes a WhatsApp that cannot be notified, which is a device that does not exist.
 
-Registration fetches a real one and sends it, in three plain HTTPS calls to Google:
+The token does two distinct jobs, and it is easy to conflate them:
+
+1. **It makes the registration look real — always.** Every `/code` request now carries the token, whichever delivery method you ask for. The server sees an install that can be reached, not a headless client. This is the reason the token matters, and it applies to `sms`, `voice`, `wa_old` — all of them.
+2. **It can carry the code itself — sometimes.** Because you handed WhatsApp a direct line, WhatsApp *may* also push the six-digit code silently down it, so the app fills the code in on its own. This is why the code auto-completes on a real phone before you have read the SMS. It happens *alongside* the method you chose, not instead of it.
+
+The delivery method and the push are not alternatives. You still choose how a human receives the code (`sms`, `voice`, `wa_old`); the push, when it comes, is a second silent copy of that same code sent straight to the app.
+
+```
+request a code ─┬─ method you chose  →  reaches a human   (SMS, a call, the existing WhatsApp)
+                └─ push_token line   →  reaches the app    (silent, auto-filled — if WhatsApp sends it)
+```
+
+Registration fetches a real token and sends it, in three plain HTTPS calls to Google:
 
 | Step | Endpoint | Yields |
 |---|---|---|
@@ -2509,24 +2521,39 @@ It runs once per number. The Firebase identity is cached on the session, because
 
 Turn it off with `WA_FCM_PUSH=0`.
 
-### Receiving the code over push, without an SMS
+### Receiving the code over push, without typing it
 
-A real phone does not always wait for an SMS: WhatsApp can deliver the six-digit verification code as a silent Firebase push, straight into the app. `receivePushCode(store, device)` opens the same connection the phone keeps to Google — a long-lived TLS stream to `mtalk.google.com:5228` speaking the MCS protocol — logs in with the Firebase identity, and resolves with the code the moment it arrives.
+This is the receiving end of job 2 above. When WhatsApp sends the code as a silent push, something has to be listening on the Firebase line to catch it — the same long-lived connection every Android phone keeps open to Google. `receivePushCode(store, device)` opens it: a TLS stream to `mtalk.google.com:5228` speaking the MCS protocol, logged in with the Firebase identity, resolving with the code the moment a push carrying it arrives.
+
+The order matters. Open the listener **first**, so the line is live before the code is requested; then request the code by whatever method; then await it.
 
 ```js
 const { receivePushCode, requestSmsCode, verifyCode } = require('whalibmob')
 
-// open the listener first, so the push has somewhere to land
-const codePromise = receivePushCode(store, store.device, { timeoutMs: 120000 })
-await requestSmsCode(store, 'sms')          // WhatsApp may answer over push
-const code = await codePromise              // arrives with no SMS, no typing
+// 1. open the listener first, so the push has somewhere to land
+const codePromise = receivePushCode(store, store.device, { timeoutMs: 180000 })
+
+// 2. request the code — any method. The push, if it comes, is a copy of it.
+await requestSmsCode(store, 'sms')          // or 'voice', 'wa_old', …
+
+// 3. if the push arrives, the code is here with nothing typed
+const code = await codePromise
 if (code) await verifyCode(store, code)
+else      { /* no push — read the code from SMS / the existing WhatsApp, then verifyCode */ }
 ```
 
-The connection carries a heartbeat and tracks message ids so a reconnect does not re-see what it already read, exactly as the native client does. It resolves `null` on timeout, a refused login, or any failure — at which point the ordinary SMS flow still applies. Like the token, it routes through the configured SOCKS proxy.
+From the CLI the whole sequence is one command:
 
-> [!NOTE]
-> Whether WhatsApp delivers the code over push to a given request depends on the server, and may require valid attestation alongside. This receives the push correctly when one is sent; it does not force WhatsApp to choose that channel. It never replaces SMS — it runs beside it.
+```
+/reg push <phone> [sms|voice]
+```
+
+It opens the listener, waits until it is logged in, requests the code, and confirms automatically if the push arrives — falling back to `/reg confirm <phone> <code>` when it does not.
+
+The connection carries a heartbeat and remembers the message ids it has seen, so a reconnect does not re-read a delivered code, the way the native client does. It resolves `null` on timeout, a refused login, or any failure — at which point you simply read the code the ordinary way and verify it. Like the token, it routes through the configured SOCKS proxy.
+
+> [!IMPORTANT]
+> Receiving the push is not the same as making WhatsApp send it. Whether WhatsApp pushes the code for a given request is the server's decision, and on a client shipping empty attestation it will often send the code only by the method you asked for (SMS, `wa_old`, a call) and no silent push. This listener catches the push correctly **when one is sent**; it cannot force that channel, and it never replaces the chosen method — it runs beside it. With a valid Play Integrity attestation in the request (`WA_FRIDA_HOST`), the server is more likely to include the silent push.
 
 ## Routing Traffic Through a Proxy
 
