@@ -61,6 +61,10 @@ module.exports = {
   checkIfRegistered,
   requestSmsCode,
   verifyCode,
+  // Receive the verification code as a silent Firebase push, without an SMS —
+  // opens the MCS listener the native client keeps to Google. See "Receiving
+  // the code over push" in the README.
+  receivePushCode: (store, device, opts) => require('./lib/fcm').receivePushCode(store, device, opts),
   assertRegistrationKeys,
   // Version fetch — use fetchWaVersion for device-aware (iOS or Android) fetching.
   // fetchIosVersion is kept for backward compatibility.
