@@ -1668,6 +1668,27 @@ if (result.status === 'ok') {
 }
 ```
 
+**Optional — let the code arrive by itself.** The two steps above are the whole flow, and nothing about them changes if you do nothing else. But because registration now sends a Firebase push token (see [The Push Token](#the-push-token)), WhatsApp *may* also deliver the six-digit code as a silent push. Open a listener for it before requesting the code, and the code can come back with nothing typed:
+
+```js
+const { receivePushCode } = require('whalibmob')
+
+// open the listener FIRST, so the push has somewhere to land
+const codePromise = receivePushCode(store, store.device, { timeoutMs: 180000 })
+
+await requestSmsCode(store, 'sms')        // any method; the push is a copy of the code
+const code = await codePromise            // the six digits, or null if no push came
+
+if (code) {
+  const result = await verifyCode(store, code)
+  if (result.status === 'ok') saveStore(result.store, sessFile)
+} else {
+  // no push this time — read the code the ordinary way and call verifyCode(store, code)
+}
+```
+
+This is purely additive: `receivePushCode` resolves `null` on a timeout or any failure, so the plain `requestSmsCode` / `verifyCode` path always stands behind it. Whether WhatsApp sends the silent push is the server's decision — see [Receiving the code over push](#receiving-the-code-over-push-without-typing-it) for what governs it. From the CLI the same thing is one command, `/reg push <phone>`.
+
 **When the code is not the end of it.** The server can answer a submitted code with a CAPTCHA, or with a demand for the account's two-step verification PIN. Neither is something the library can work out on its own, so both come back to you through optional handlers:
 
 ```js
