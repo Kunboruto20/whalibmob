@@ -2509,6 +2509,25 @@ It runs once per number. The Firebase identity is cached on the session, because
 
 Turn it off with `WA_FCM_PUSH=0`.
 
+### Receiving the code over push, without an SMS
+
+A real phone does not always wait for an SMS: WhatsApp can deliver the six-digit verification code as a silent Firebase push, straight into the app. `receivePushCode(store, device)` opens the same connection the phone keeps to Google — a long-lived TLS stream to `mtalk.google.com:5228` speaking the MCS protocol — logs in with the Firebase identity, and resolves with the code the moment it arrives.
+
+```js
+const { receivePushCode, requestSmsCode, verifyCode } = require('whalibmob')
+
+// open the listener first, so the push has somewhere to land
+const codePromise = receivePushCode(store, store.device, { timeoutMs: 120000 })
+await requestSmsCode(store, 'sms')          // WhatsApp may answer over push
+const code = await codePromise              // arrives with no SMS, no typing
+if (code) await verifyCode(store, code)
+```
+
+The connection carries a heartbeat and tracks message ids so a reconnect does not re-see what it already read, exactly as the native client does. It resolves `null` on timeout, a refused login, or any failure — at which point the ordinary SMS flow still applies. Like the token, it routes through the configured SOCKS proxy.
+
+> [!NOTE]
+> Whether WhatsApp delivers the code over push to a given request depends on the server, and may require valid attestation alongside. This receives the push correctly when one is sent; it does not force WhatsApp to choose that channel. It never replaces SMS — it runs beside it.
+
 ## Routing Traffic Through a Proxy
 
 Two reasons to want this. Registration is the part of the protocol most likely to be refused from a datacenter IP, so a residential exit helps with security blocks and undeterminable number statuses. And on a network that cannot reach WhatsApp at all, nothing works without one.
