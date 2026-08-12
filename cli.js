@@ -663,6 +663,7 @@ const HELP = `
     /reg check   <phone>                              check if number has WhatsApp
     /reg code    <phone> [sms|voice|wa_old]           request verification code
     /reg code    <phone> email <address>              request code via email
+    /reg push    <phone> [sms|voice]                  request code and receive it over Firebase push
     /reg confirm <phone> <code>                       complete registration
 
   Connection
@@ -2329,8 +2330,76 @@ async function handleLine(line) {
             fail('verification failed  ' + JSON.stringify(r));
           }
         }
+        else if (sub === 'push') {
+          // Full push flow: open the MCS listener, request the code, and wait
+          // for it to arrive over Firebase instead of by SMS. Falls back to the
+          // ordinary code path automatically when no push comes.
+          const ph = normalizePhone(p[2]);
+          if (!ph) {
+            fail('usage: /reg push <phone> [sms|voice] [--name "Your Name"]');
+            out('  opens the Firebase push listener, requests a code, and waits for');
+            out('  it to arrive over push. If it does, registration is confirmed');
+            out('  automatically. If no push comes, request the code normally with');
+            out('  /reg code and confirm it with /reg confirm.');
+            break;
+          }
+          const method = (p[3] && !p[3].startsWith('--')) ? p[3] : 'sms';
+          const { receivePushCode } = require('./lib/fcm');
+
+          sessionDirFor(_sessDir, ph, { create: true });
+          const sessFile = storeFileFor(_sessDir, ph);
+          let store = loadStore(sessFile);
+          if (!store) { store = initAuthCreds(ph, { name: regName }); saveStore(store, sessFile); }
+          if (!store.device) store.device = getDeviceConfig();
+
+          out('opening Firebase push listener (this can take a moment)...');
+          // Open the listener first so the push has somewhere to land. onReady
+          // fires once MCS is logged in — only then is it safe to ask for the
+          // code.
+          let ready = false;
+          const codePromise = receivePushCode(store, store.device, {
+            timeoutMs: 180000,
+            onReady: () => { ready = true; out('  push listener ready — requesting code'); }
+          });
+
+          // Give the listener a few seconds to log in before requesting. If it
+          // has not, request anyway — SMS still works, and the push may yet come.
+          const waitReady = async () => {
+            for (let i = 0; i < 40 && !ready; i++) await new Promise(r => setTimeout(r, 250));
+          };
+          await waitReady();
+          if (!ready) out('  listener not ready yet — requesting code anyway (SMS fallback stands)');
+
+          out('requesting ' + method + ' code for +' + ph + '...');
+          const r = await requestSmsCode(store, method, { onProgress: out, name: regName });
+          store.codePending = true;
+          saveStore(store, sessFile);
+          out('  status  ' + (r && r.status));
+
+          out('waiting for the code over push (up to 3 min; Ctrl-C to stop and use /reg confirm)...');
+          const code = await codePromise;
+          if (!code) {
+            out('no code arrived over push — WhatsApp likely sent it by SMS.');
+            out('  read the SMS and run:  /reg confirm ' + ph + ' <code>');
+            saveStore(store, sessFile);
+            break;
+          }
+          out('code received over push: ' + code + ' — confirming...');
+          const v = await verifyCode(store, code,
+            Object.assign(registrationPrompts(), { onProgress: out, name: regName }));
+          if (v && (v.status === 'ok' || v.status === 'sent' || v.status === 'verified')) {
+            const finalStore = v.store || store;
+            finalStore.registered = true; finalStore.codePending = false;
+            const savedPhone = String(finalStore.phoneNumber || ph);
+            saveStore(finalStore, storeFileFor(_sessDir, savedPhone));
+            out('registered via push  session saved');
+            out('now run: /connect ' + savedPhone);
+          } else {
+            fail('verification failed  ' + JSON.stringify(v));
+          }
+        }
         else {
-          fail('usage: /reg check|code|confirm ...');
+          fail('usage: /reg check|code|push|confirm ...');
         }
         break;
       }
