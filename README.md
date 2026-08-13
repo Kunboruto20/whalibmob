@@ -132,6 +132,8 @@ npm install -g whalibmob
       - [Client Options](#client-options)
   - [Linking to an Existing Account (Pairing Code or QR)](#linking-to-an-existing-account-pairing-code-or-qr)
     - [Requesting a Pairing Code](#requesting-a-pairing-code)
+    - [Linking by QR Code](#linking-by-qr-code)
+    - [After the Link — Same for Both Paths](#after-the-link--same-for-both-paths)
     - [Reconnecting a Linked Session](#reconnecting-a-linked-session)
     - [Choosing Your Own Code](#choosing-your-own-code)
     - [Options](#options)
@@ -153,13 +155,20 @@ npm install -g whalibmob
   - [The Number WhatsApp Files Your Account Under](#the-number-whatsapp-files-your-account-under)
   - [When Registration Is Refused for Consent](#when-registration-is-refused-for-consent)
   - [The Push Token](#the-push-token)
+    - [Receiving the Code over Push](#receiving-the-code-over-push-without-typing-it)
   - [Routing Traffic Through a Proxy](#routing-traffic-through-a-proxy)
+    - [What Goes Through It](#what-goes-through-it)
   - [Saving & Restoring Sessions](#saving--restoring-sessions)
+    - [Keeping the Announced Version Current](#keeping-the-announced-version-current)
+    - [One-time Pre-keys](#one-time-pre-keys)
+    - [Where the Folder Comes From](#where-the-folder-comes-from)
+    - [Working Out the Paths Yourself](#working-out-the-paths-yourself)
   - [Signal Store Utilities](#signal-store-utilities)
     - [makeCacheableSignalKeyStore](#makecacheablesignalkeystore)
     - [addTransactionCapability](#addtransactioncapability)
     - [assertMeId](#assertmeid)
     - [initAuthCreds](#initauthcreds)
+    - [Recommended Stacking Pattern](#recommended-stacking-pattern)
   - [Handling Events](#handling-events)
     - [Example to Start](#example-to-start)
     - [All Events](#all-events)
@@ -248,11 +257,13 @@ npm install -g whalibmob
     - [Query Metadata](#query-metadata)
     - [Get Request Join List](#get-request-join-list)
     - [Approve / Reject Request Join](#approve--reject-request-join)
-    - [Personal Invitations](#personal-invitations)
+    - [Personal Invitations](#personal-invitations-1)
     - [Toggle Ephemeral in Group](#toggle-ephemeral-in-group)
 - [WhatsApp IDs](#whatsapp-ids)
 - [Transport](#transport)
 - [Media Encryption](#media-encryption)
+  - [Sending (Upload Flow)](#sending-upload-flow)
+  - [Receiving (Download + Decrypt Flow)](#receiving-download--decrypt-flow)
 - [Device Emulation](#device-emulation)
   - [Quick Start](#device-quick-start)
   - [iOS Profiles](#ios-profiles)
@@ -261,6 +272,7 @@ npm install -g whalibmob
   - [Version & Token Overrides](#version--token-overrides)
   - [When the server answers 405 on connect](#when-the-server-answers-405-on-connect)
   - [Finding out what a 405 objects to](#finding-out-what-a-405-objects-to)
+- [License](#license)
 
 ---
 
@@ -1615,6 +1627,10 @@ wa> /quit
 ---
 
 ## Library API
+
+Everything the CLI does is available as a Node.js library. The sections below
+cover connecting an account, sending and receiving every message type, groups,
+communities, channels, presence, privacy, history sync, and device emulation.
 
 ## Connecting Account
 
