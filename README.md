@@ -573,7 +573,7 @@ After running `wa connect <phone>`, every feature of the library is available as
 #### Send Text
 
 ```sh
-wa> /send 919634847671@s.whatsapp.net Hello, how are you?
+wa> /send 919634847671 Hello, how are you?
 sent  3EB0ABCDEF123456
 
 # to a group
@@ -583,8 +583,8 @@ wa> /send 120363000000000000@g.us Hello everyone!
 #### Send Image
 
 ```sh
-wa> /image 919634847671@s.whatsapp.net ./photo.jpg
-wa> /image 919634847671@s.whatsapp.net ./photo.jpg Look at this!
+wa> /image 919634847671 ./photo.jpg
+wa> /image 919634847671 ./photo.jpg Look at this!
 ```
 
 The second argument is the file path. The optional third argument is the caption.
@@ -592,8 +592,8 @@ The second argument is the file path. The optional third argument is the caption
 #### Send Video
 
 ```sh
-wa> /video 919634847671@s.whatsapp.net ./clip.mp4
-wa> /video 919634847671@s.whatsapp.net ./clip.mp4 Watch this
+wa> /video 919634847671 ./clip.mp4
+wa> /video 919634847671 ./clip.mp4 Watch this
 ```
 
 #### Send Audio
@@ -601,7 +601,7 @@ wa> /video 919634847671@s.whatsapp.net ./clip.mp4 Watch this
 Sends the file as a regular audio attachment:
 
 ```sh
-wa> /audio 919634847671@s.whatsapp.net ./song.mp3
+wa> /audio 919634847671 ./song.mp3
 ```
 
 #### Send Voice Note
@@ -609,14 +609,14 @@ wa> /audio 919634847671@s.whatsapp.net ./song.mp3
 Sends the file as a push-to-talk voice note with waveform:
 
 ```sh
-wa> /ptt 919634847671@s.whatsapp.net ./voice.ogg
+wa> /ptt 919634847671 ./voice.ogg
 ```
 
 #### Send Document
 
 ```sh
-wa> /doc 919634847671@s.whatsapp.net ./report.pdf
-wa> /doc 919634847671@s.whatsapp.net ./report.pdf "Q1 Report.pdf"
+wa> /doc 919634847671 ./report.pdf
+wa> /doc 919634847671 ./report.pdf "Q1 Report.pdf"
 ```
 
 The optional third argument overrides the displayed filename.
@@ -626,7 +626,7 @@ The optional third argument overrides the displayed filename.
 The file must be in WebP format:
 
 ```sh
-wa> /sticker 919634847671@s.whatsapp.net ./sticker.webp
+wa> /sticker 919634847671 ./sticker.webp
 ```
 
 #### Send Poll (CLI)
@@ -635,7 +635,7 @@ Separate the question from the options using `|`. At least two options are requi
 
 ```sh
 # single-choice poll (selectable=1)
-wa> /poll 919634847671@s.whatsapp.net Best language? | JavaScript | Python | Rust | selectable=1
+wa> /poll 919634847671 Best language? | JavaScript | Python | Rust | selectable=1
 
 # unlimited-choice poll (default)
 wa> /poll 120363000000000000@g.us Pick your favourites | Red | Green | Blue
@@ -644,10 +644,10 @@ wa> /poll 120363000000000000@g.us Pick your favourites | Red | Green | Blue
 #### React to a Message
 
 ```sh
-wa> /react 919634847671@s.whatsapp.net 3EB0ABCDEF123456 👍
+wa> /react 919634847671 3EB0ABCDEF123456 👍
 
 # remove a reaction — pass a space or empty string
-wa> /react 919634847671@s.whatsapp.net 3EB0ABCDEF123456 " "
+wa> /react 919634847671 3EB0ABCDEF123456 " "
 ```
 
 The message ID is shown in the incoming message display as `id`.
@@ -658,17 +658,17 @@ The message ID is shown in the incoming message display as `id`.
 > Editing is only possible within 15 minutes of the original send.
 
 ```sh
-wa> /edit 919634847671@s.whatsapp.net 3EB0ABCDEF123456 Corrected text here
+wa> /edit 919634847671 3EB0ABCDEF123456 Corrected text here
 ```
 
 #### Delete a Message
 
 ```sh
 # delete for yourself only
-wa> /delete 919634847671@s.whatsapp.net 3EB0ABCDEF123456
+wa> /delete 919634847671 3EB0ABCDEF123456
 
 # delete for everyone (revoke)
-wa> /delete 919634847671@s.whatsapp.net 3EB0ABCDEF123456 all
+wa> /delete 919634847671 3EB0ABCDEF123456 all
 ```
 
 #### Post a Status / Story
@@ -684,7 +684,7 @@ wa> /status Good morning everyone!
 Sends a message with the forwarded flag set:
 
 ```sh
-wa> /forward 919634847671@s.whatsapp.net This message was forwarded
+wa> /forward 919634847671 This message was forwarded
 ```
 
 #### Reply to a Message (CLI)
@@ -693,10 +693,10 @@ Quote and reply to a specific message. You need the message ID (shown as `id:` i
 
 ```sh
 # DM — senderJid is the same as the chat JID
-wa> /reply 919634847671@s.whatsapp.net 3EB0XXXXXXXX 919634847671@s.whatsapp.net Got it, thanks!
+wa> /reply 919634847671 3EB0XXXXXXXX 919634847671 Got it, thanks!
 
 # Group — senderJid is the member who sent the original message
-wa> /reply 120363000000000000@g.us 3EB0XXXXXXXX 919634847671@s.whatsapp.net Agreed!
+wa> /reply 120363000000000000@g.us 3EB0XXXXXXXX 919634847671 Agreed!
 ```
 
 The message ID is printed when a message arrives:
@@ -710,13 +710,13 @@ Send a GPS location pin. Latitude and longitude are required; name and address (
 
 ```sh
 # lat/lon only
-wa> /location 919634847671@s.whatsapp.net 48.8566 2.3522
+wa> /location 919634847671 48.8566 2.3522
 
 # with name
-wa> /location 919634847671@s.whatsapp.net 48.8566 2.3522 Eiffel Tower
+wa> /location 919634847671 48.8566 2.3522 Eiffel Tower
 
 # with name and address (separate with |)
-wa> /location 919634847671@s.whatsapp.net 48.8566 2.3522 Eiffel Tower | Champ de Mars, Paris
+wa> /location 919634847671 48.8566 2.3522 Eiffel Tower | Champ de Mars, Paris
 
 # to a group
 wa> /location 120363000000000000@g.us 51.5074 -0.1278 London
@@ -727,7 +727,7 @@ wa> /location 120363000000000000@g.us 51.5074 -0.1278 London
 Send a contact card. The vCard string must follow the vCard v3 format. Wrap it in quotes in the shell:
 
 ```sh
-wa> /vcard 919634847671@s.whatsapp.net "Alice Smith" "BEGIN:VCARD\nVERSION:3.0\nFN:Alice Smith\nTEL;TYPE=CELL:+919634847671\nEND:VCARD"
+wa> /vcard 919634847671 "Alice Smith" "BEGIN:VCARD\nVERSION:3.0\nFN:Alice Smith\nTEL;TYPE=CELL:+919634847671\nEND:VCARD"
 ```
 
 For multi-line vCards it is easiest to store the string in a shell variable:
@@ -740,7 +740,7 @@ TEL;TYPE=CELL:+919634847671
 EMAIL:alice@example.com
 END:VCARD"
 
-wa> /vcard 919634847671@s.whatsapp.net "Alice Smith" "$VCARD"
+wa> /vcard 919634847671 "Alice Smith" "$VCARD"
 ```
 
 ---
@@ -758,13 +758,13 @@ wa> /offline
 
 ```sh
 # show "typing…" in a chat
-wa> /typing 919634847671@s.whatsapp.net
+wa> /typing 919634847671
 
 # show "recording audio…" in a chat
-wa> /recording 919634847671@s.whatsapp.net
+wa> /recording 919634847671
 
 # stop the indicator
-wa> /stop 919634847671@s.whatsapp.net
+wa> /stop 919634847671
 ```
 
 #### Subscribe to a Contact's Presence
@@ -772,7 +772,7 @@ wa> /stop 919634847671@s.whatsapp.net
 Subscribes to online/offline events for a contact. The shell will print presence updates as they arrive:
 
 ```sh
-wa> /subscribe 919634847671@s.whatsapp.net
+wa> /subscribe 919634847671
 subscribed to 919634847671@s.whatsapp.net
 
 # when they come online:
@@ -852,7 +852,7 @@ wa> /whatsapp 919634847671 12345678901
 Returns the CDN URL for a contact's or group's profile picture:
 
 ```sh
-wa> /picture 919634847671@s.whatsapp.net
+wa> /picture 919634847671
   https://mmg.whatsapp.net/v/...
 
 wa> /picture 120363000000000000@g.us
@@ -864,7 +864,7 @@ wa> /picture 120363000000000000@g.us
 Fetches the bio / about text for a contact:
 
 ```sh
-wa> /contact about 919634847671@s.whatsapp.net
+wa> /contact about 919634847671
   Available 24/7
 ```
 
@@ -881,42 +881,42 @@ send the request a primary makes for itself; `/pin`, `/archive` and `/star`
 update this session only. The command says which happened:
 
 ```sh
-wa> /pin 919634847671@s.whatsapp.net
+wa> /pin 919634847671
 pinned  (this session only — no app state key)
 ```
 
 #### Mark Read / Unread
 
 ```sh
-wa> /read   919634847671@s.whatsapp.net
-wa> /unread 919634847671@s.whatsapp.net
+wa> /read   919634847671
+wa> /unread 919634847671
 ```
 
 #### Mute / Unmute
 
 ```sh
 # mute for 60 minutes
-wa> /mute 919634847671@s.whatsapp.net 60
+wa> /mute 919634847671 60
 
 # mute indefinitely
-wa> /mute 919634847671@s.whatsapp.net
+wa> /mute 919634847671
 
 # unmute
-wa> /unmute 919634847671@s.whatsapp.net
+wa> /unmute 919634847671
 ```
 
 #### Pin / Unpin
 
 ```sh
-wa> /pin   919634847671@s.whatsapp.net
-wa> /unpin 919634847671@s.whatsapp.net
+wa> /pin   919634847671
+wa> /unpin 919634847671
 ```
 
 #### Archive / Unarchive
 
 ```sh
-wa> /archive   919634847671@s.whatsapp.net
-wa> /unarchive 919634847671@s.whatsapp.net
+wa> /archive   919634847671
+wa> /unarchive 919634847671
 ```
 
 #### Star / Unstar a Message (CLI)
@@ -925,8 +925,8 @@ Add `me` when the message is one you sent — it is part of how the star is file
 so leaving it off on your own message stars the wrong thing.
 
 ```sh
-wa> /star   919634847671@s.whatsapp.net 3EB0ABCDEF123456 me
-wa> /unstar 919634847671@s.whatsapp.net 3EB0ABCDEF123456
+wa> /star   919634847671 3EB0ABCDEF123456 me
+wa> /unstar 919634847671 3EB0ABCDEF123456
 ```
 
 <a id="cli-app-state"></a>
@@ -1051,13 +1051,13 @@ shell prints the change as it happens:
 
 ```sh
 # set 1-day timer on a DM
-wa> /ephemeral 919634847671@s.whatsapp.net 86400
+wa> /ephemeral 919634847671 86400
 
 # set 1-week timer on a group
 wa> /ephemeral 120363000000000000@g.us 604800
 
 # turn off
-wa> /ephemeral 919634847671@s.whatsapp.net 0
+wa> /ephemeral 919634847671 0
 ```
 
 #### Default Disappearing Timer
@@ -1078,10 +1078,10 @@ Accepts the same values as `/ephemeral`: 0, 86400, 604800, 7776000.
 #### Block / Unblock
 
 ```sh
-wa> /block   919634847671@s.whatsapp.net
+wa> /block   919634847671
 blocked  919634847671@s.whatsapp.net
 
-wa> /unblock 919634847671@s.whatsapp.net
+wa> /unblock 919634847671
 unblocked  919634847671@s.whatsapp.net
 ```
 
@@ -1101,7 +1101,7 @@ wa> /blocklist
 #### CLI Create a Group
 
 ```sh
-wa> /group create MyGroup 919634847671@s.whatsapp.net 12345678901@s.whatsapp.net
+wa> /group create MyGroup 919634847671 12345678901
 creating group...
 created  120363000000000000@g.us
   subject  MyGroup
@@ -1119,12 +1119,12 @@ left  120363000000000000@g.us
 
 ```sh
 # add participants
-wa> /group add 120363000000000000@g.us 919634847671@s.whatsapp.net 12345678901@s.whatsapp.net
+wa> /group add 120363000000000000@g.us 919634847671 12345678901
   added  919634847671@s.whatsapp.net
   failed  12345678901@s.whatsapp.net  — their privacy settings do not allow it (403)  · can be invited instead
 
 # remove participants
-wa> /group remove 120363000000000000@g.us 919634847671@s.whatsapp.net
+wa> /group remove 120363000000000000@g.us 919634847671
   removed  919634847671@s.whatsapp.net
 ```
 
@@ -1135,10 +1135,10 @@ reported on its own line, because the server decides each one separately.
 
 ```sh
 # promote to admin
-wa> /group promote 120363000000000000@g.us 919634847671@s.whatsapp.net
+wa> /group promote 120363000000000000@g.us 919634847671
 
 # demote from admin
-wa> /group demote 120363000000000000@g.us 919634847671@s.whatsapp.net
+wa> /group demote 120363000000000000@g.us 919634847671
 ```
 
 #### Change Group Name
@@ -1285,11 +1285,11 @@ wa> /group pending 120363000000000000@g.us
 
 ```sh
 # approve one or more pending members
-wa> /group approve 120363000000000000@g.us 919634847671@s.whatsapp.net
+wa> /group approve 120363000000000000@g.us 919634847671
   approved  919634847671@s.whatsapp.net
 
 # reject one or more pending members
-wa> /group reject 120363000000000000@g.us 919634847671@s.whatsapp.net
+wa> /group reject 120363000000000000@g.us 919634847671
   rejected  919634847671@s.whatsapp.net
 ```
 
@@ -1304,7 +1304,7 @@ For someone whose privacy settings do not let them be added to a group directly,
 `add-invite` adds whoever it can and sends the rest a personal invitation:
 
 ```sh
-wa> /group add-invite 120363000000000000@g.us 919634847671@s.whatsapp.net 12345678901@s.whatsapp.net
+wa> /group add-invite 120363000000000000@g.us 919634847671 12345678901
   added  919634847671@s.whatsapp.net
   failed  12345678901@s.whatsapp.net  — their privacy settings do not allow it (403)  · can be invited instead  · invitation sent
 ```
@@ -1320,17 +1320,17 @@ An invitation that arrives for you shows the command that accepts it:
 
 ```sh
 # look at the group without joining it
-wa> /group preview-invite 120363000000000000@g.us 919634847671@s.whatsapp.net AbCdEfGh 1790000000
+wa> /group preview-invite 120363000000000000@g.us 919634847671 AbCdEfGh 1790000000
 
 # join
-wa> /group accept-invite 120363000000000000@g.us 919634847671@s.whatsapp.net AbCdEfGh 1790000000
+wa> /group accept-invite 120363000000000000@g.us 919634847671 AbCdEfGh 1790000000
 joined 120363000000000000@g.us
 
 # send one by hand
-wa> /group send-invite 120363000000000000@g.us 12345678901@s.whatsapp.net AbCdEfGh 1790000000
+wa> /group send-invite 120363000000000000@g.us 12345678901 AbCdEfGh 1790000000
 
 # take one back before it is used
-wa> /group revoke-invite 120363000000000000@g.us 12345678901@s.whatsapp.net
+wa> /group revoke-invite 120363000000000000@g.us 12345678901
 ```
 
 #### Group Settings
@@ -1413,7 +1413,7 @@ wa> /newsletter post 120363000000000004@newsletter Breaking: WhatsApp adds polls
 Query the public business profile of any WhatsApp Business account:
 
 ```sh
-wa> /biz 919634847671@s.whatsapp.net
+wa> /biz 919634847671
   ────────────────────────────────────────────────────────
   jid           919634847671@s.whatsapp.net
   category      Software & IT Services
@@ -2162,7 +2162,7 @@ Everything after the scan is identical to the pairing-code path: `paired`, a str
 A few seconds after the code is accepted (or the QR is scanned) you will see `paired`, the server restarts the stream, and `connected` fires on the new connection. From that point on everything else in this document applies unchanged:
 
 ```js
-await client.sendText('919876543210@s.whatsapp.net', 'sent from a linked device')
+await client.sendText('919876543210', 'sent from a linked device')
 ```
 
 ### Reconnecting a Linked Session
@@ -3129,7 +3129,7 @@ async function connect() {
 
   client.on('connected', async () => {
     console.log('connected')
-    await client.sendText('919634847671@s.whatsapp.net', 'Hello!')
+    await client.sendText('919634847671', 'Hello!')
   })
 
   client.on('disconnected', () => {
@@ -3668,7 +3668,7 @@ match the message all say so.
 ### Text Message
 
 ```js
-await client.sendText('919634847671@s.whatsapp.net', 'Hello!')
+await client.sendText('919634847671', 'Hello!')
 ```
 
 ### Quote Message
@@ -3704,10 +3704,10 @@ await client.sendText(
 
 ```js
 // react to a message
-await client.sendReaction('919634847671@s.whatsapp.net', 'MSGID123', '👍')
+await client.sendReaction('919634847671', 'MSGID123', '👍')
 
 // remove a reaction — pass empty string
-await client.sendReaction('919634847671@s.whatsapp.net', 'MSGID123', '')
+await client.sendReaction('919634847671', 'MSGID123', '')
 ```
 
 ### Edit Message
@@ -3727,10 +3727,10 @@ await client.editMessage(
 
 ```js
 // delete for yourself only
-await client.deleteMessage('MSGID123', '919634847671@s.whatsapp.net', true, false)
+await client.deleteMessage('MSGID123', '919634847671', true, false)
 
 // delete for everyone (revoke)
-await client.deleteMessage('MSGID123', '919634847671@s.whatsapp.net', true, true)
+await client.deleteMessage('MSGID123', '919634847671', true, true)
 ```
 
 ### Forward Message
@@ -3740,12 +3740,12 @@ re-uploading.  Pass a decoded message object from the `message` event to forward
 
 ```js
 // Forward text
-await client.forwardMessage('919634847671@s.whatsapp.net', 'text to forward')
+await client.forwardMessage('919634847671', 'text to forward')
 
 // Forward any received message (full media, no re-upload)
 client.on('message', async (msg) => {
   if (msg.decoded && msg.decoded.type !== 'text') {
-    await client.forwardMessage('919634847671@s.whatsapp.net', msg)
+    await client.forwardMessage('919634847671', msg)
   }
 })
 ```
@@ -3795,10 +3795,10 @@ Send a GPS location pin. `name` and `address` are optional labels shown below th
 
 ```js
 // minimal — lat/lon only
-await client.sendLocation('919634847671@s.whatsapp.net', 48.8566, 2.3522)
+await client.sendLocation('919634847671', 48.8566, 2.3522)
 
 // with name and address
-await client.sendLocation('919634847671@s.whatsapp.net', 48.8566, 2.3522, {
+await client.sendLocation('919634847671', 48.8566, 2.3522, {
   name:    'Eiffel Tower',
   address: 'Champ de Mars, 5 Av. Anatole France, Paris'
 })
@@ -3809,7 +3809,7 @@ await client.sendLocation('120363000000000000@g.us', 51.5074, -0.1278, {
 })
 
 // with a map image for the bubble — WhatsApp draws a blank card without one
-await client.sendLocation('919634847671@s.whatsapp.net', 48.8566, 2.3522, {
+await client.sendLocation('919634847671', 48.8566, 2.3522, {
   name: 'Eiffel Tower',
   thumbnail: jpegBuffer
 })
@@ -3829,7 +3829,7 @@ const vcard = [
   'END:VCARD'
 ].join('\n')
 
-await client.sendContact('919634847671@s.whatsapp.net', 'Alice Smith', vcard)
+await client.sendContact('919634847671', 'Alice Smith', vcard)
 ```
 
 ### Call Link
@@ -3848,7 +3848,7 @@ const audio = await client.createCallLink()
 await client.createCallLink('video', { startTime: 1800000000 })
 
 // create it and send it in one step
-await client.sendCallLink('919634847671@s.whatsapp.net', 'video', {
+await client.sendCallLink('919634847671', 'video', {
   text: 'Join me here:'
 })
 ```
@@ -3869,10 +3869,10 @@ the preview.
 
 ```js
 // from file path
-await client.sendImage('919634847671@s.whatsapp.net', './photo.jpg', { caption: 'Look at this' })
+await client.sendImage('919634847671', './photo.jpg', { caption: 'Look at this' })
 
 // from Buffer
-await client.sendImage('919634847671@s.whatsapp.net', buffer, {
+await client.sendImage('919634847671', buffer, {
   caption: 'Photo',
   mimetype: 'image/jpeg'
 })
@@ -3881,26 +3881,26 @@ await client.sendImage('919634847671@s.whatsapp.net', buffer, {
 ### Video Message
 
 ```js
-await client.sendVideo('919634847671@s.whatsapp.net', './clip.mp4', { caption: 'Watch this' })
+await client.sendVideo('919634847671', './clip.mp4', { caption: 'Watch this' })
 ```
 
 ### Audio Message
 
 ```js
-await client.sendAudio('919634847671@s.whatsapp.net', './song.mp3')
+await client.sendAudio('919634847671', './song.mp3')
 ```
 
 ### Voice Note
 
 ```js
 // ptt: true renders the audio as a push-to-talk voice note with waveform
-await client.sendAudio('919634847671@s.whatsapp.net', './voice.ogg', { ptt: true })
+await client.sendAudio('919634847671', './voice.ogg', { ptt: true })
 ```
 
 ### Document Message
 
 ```js
-await client.sendDocument('919634847671@s.whatsapp.net', './report.pdf', {
+await client.sendDocument('919634847671', './report.pdf', {
   fileName: 'Q1 Report.pdf'
 })
 ```
@@ -3908,7 +3908,7 @@ await client.sendDocument('919634847671@s.whatsapp.net', './report.pdf', {
 ### Sticker Message
 
 ```js
-await client.sendSticker('919634847671@s.whatsapp.net', './sticker.webp')
+await client.sendSticker('919634847671', './sticker.webp')
 ```
 
 ## Status / Stories
@@ -3931,7 +3931,7 @@ await client.sendStatus({ audio: './voice.ogg' })
 await client.sendStatus('Colorful', { backgroundArgb: 0xFF25D366, font: 3 })
 
 // post to an explicit list instead of the privacy-derived one
-await client.sendStatus('Hi', { recipients: ['919634847671@s.whatsapp.net'] })
+await client.sendStatus('Hi', { recipients: ['919634847671'] })
 ```
 
 ### Status Privacy
@@ -3956,7 +3956,7 @@ pass `recipients` in that case.
 
 ```js
 // mark all messages in a chat as read (sends IQ to server)
-await client.markChatRead('919634847671@s.whatsapp.net')
+await client.markChatRead('919634847671')
 ```
 
 ### Mark Voice Message Played
@@ -3965,7 +3965,7 @@ Send a `played` receipt for a received voice note (push-to-talk audio). This tel
 
 ```js
 // msgId: ID of the audio message, from: JID of the sender
-client.markMessagePlayed('3EB0ABCDEF123456', '919634847671@s.whatsapp.net')
+client.markMessagePlayed('3EB0ABCDEF123456', '919634847671')
 ```
 
 ### Update Presence
@@ -3976,9 +3976,9 @@ client.setOnline(true)
 client.setOnline(false)
 
 // show typing or recording in a specific chat
-client.setChatPresence('919634847671@s.whatsapp.net', 'composing')   // typing
-client.setChatPresence('919634847671@s.whatsapp.net', 'recording')   // recording audio
-client.setChatPresence('919634847671@s.whatsapp.net', 'paused')      // stopped
+client.setChatPresence('919634847671', 'composing')   // typing
+client.setChatPresence('919634847671', 'recording')   // recording audio
+client.setChatPresence('919634847671', 'paused')      // stopped
 ```
 
 ## Modifying Chats
@@ -3996,7 +3996,7 @@ They return a boolean: **whether the change reached app state**, and so whether
 other devices will see it.
 
 ```js
-const synced = await client.pinChat('919634847671@s.whatsapp.net')
+const synced = await client.pinChat('919634847671')
 if (!synced) console.log('pinned here, but your phone will not know')
 ```
 
@@ -4023,16 +4023,16 @@ if (!synced) console.log('pinned here, but your phone will not know')
 ### Archive / Unarchive a Chat
 
 ```js
-await client.archiveChat('919634847671@s.whatsapp.net')
-await client.unarchiveChat('919634847671@s.whatsapp.net')
+await client.archiveChat('919634847671')
+await client.unarchiveChat('919634847671')
 ```
 
 ### Mute / Unmute a Chat
 
 ```js
-await client.muteChat('919634847671@s.whatsapp.net', 8 * 60 * 60 * 1000)  // 8 hours
-await client.muteChat('919634847671@s.whatsapp.net', 0)                   // until unmuted
-await client.unmuteChat('919634847671@s.whatsapp.net')
+await client.muteChat('919634847671', 8 * 60 * 60 * 1000)  // 8 hours
+await client.muteChat('919634847671', 0)                   // until unmuted
+await client.unmuteChat('919634847671')
 ```
 
 ### Mark a Chat Read / Unread
@@ -4041,15 +4041,15 @@ This is the chat's own unread badge. To send read receipts (blue ticks) for
 particular messages, use `markRead()` instead.
 
 ```js
-await client.markChatRead('919634847671@s.whatsapp.net')
-await client.markChatUnread('919634847671@s.whatsapp.net')
+await client.markChatRead('919634847671')
+await client.markChatUnread('919634847671')
 ```
 
 ### Pin / Unpin a Chat
 
 ```js
-await client.pinChat('919634847671@s.whatsapp.net')
-await client.unpinChat('919634847671@s.whatsapp.net')
+await client.pinChat('919634847671')
+await client.unpinChat('919634847671')
 ```
 
 ### Star / Unstar a Message
@@ -4058,8 +4058,8 @@ The third argument says whether the message being starred is one you sent. It is
 part of how the star is filed, so getting it wrong stars a different message.
 
 ```js
-await client.starMessage('MSGID123', '919634847671@s.whatsapp.net', true)   // yours
-await client.unstarMessage('MSGID123', '919634847671@s.whatsapp.net', false) // theirs
+await client.starMessage('MSGID123', '919634847671', true)   // yours
+await client.unstarMessage('MSGID123', '919634847671', false) // theirs
 ```
 
 <a id="app-state-sync"></a>
@@ -4146,11 +4146,11 @@ client.on('app_state_mutation', ({ collection, index, action, removed }) => {
 
 ```js
 // set disappearing timer for a specific chat (DM or group)
-await client.changeEphemeralTimer('919634847671@s.whatsapp.net', 86400)
+await client.changeEphemeralTimer('919634847671', 86400)
 await client.changeEphemeralTimer('120363000000000000@g.us', 604800)
 
 // remove disappearing messages
-await client.changeEphemeralTimer('919634847671@s.whatsapp.net', 0)
+await client.changeEphemeralTimer('919634847671', 0)
 ```
 
 ## User Queries
@@ -4175,7 +4175,7 @@ const results = await client.hasWhatsapp(['919634847671', '12345678901'])
 ### Fetch Profile About
 
 ```js
-const about = await client.queryAbout('919634847671@s.whatsapp.net')
+const about = await client.queryAbout('919634847671')
 console.log(about)
 
 // your own, asked the same way
@@ -4185,7 +4185,7 @@ console.log(await client.queryOwnAbout())
 ### Fetch Profile Picture
 
 ```js
-const url = await client.queryPicture('919634847671@s.whatsapp.net')
+const url = await client.queryPicture('919634847671')
 // also works for groups
 const groupUrl = await client.queryPicture('120363000000000000@g.us')
 ```
@@ -4194,7 +4194,7 @@ const groupUrl = await client.queryPicture('120363000000000000@g.us')
 
 ```js
 // triggers 'presence' events when the contact comes online or goes offline
-client.subscribeToPresence('919634847671@s.whatsapp.net')
+client.subscribeToPresence('919634847671')
 
 client.on('presence', ({ from, available }) => {
   console.log(from, available ? 'online' : 'offline')
@@ -4303,8 +4303,8 @@ await client.changeProfilePicture(buf, { size: 640, quality: 50 })
 
 ```js
 // both return the updated block list, and throw if the server refuses
-const blocked = await client.blockContact('919634847671@s.whatsapp.net')
-await client.unblockContact('919634847671@s.whatsapp.net')
+const blocked = await client.blockContact('919634847671')
+await client.unblockContact('919634847671')
 
 // the block list is addressed by LID; a phone number is resolved to one first,
 // looking it up if it is not already known
@@ -4426,9 +4426,9 @@ for (const r of results) {
   else      console.log('failed', r.jid, r.status, r.needsInvite ? '(invite instead)' : '')
 }
 
-await client.removeGroupParticipants(groupJid,  ['919634847671@s.whatsapp.net'])
-await client.promoteGroupParticipants(groupJid, ['919634847671@s.whatsapp.net'])
-await client.demoteGroupParticipants(groupJid,  ['919634847671@s.whatsapp.net'])
+await client.removeGroupParticipants(groupJid,  ['919634847671'])
+await client.promoteGroupParticipants(groupJid, ['919634847671'])
+await client.demoteGroupParticipants(groupJid,  ['919634847671'])
 ```
 
 Each result looks like this:
@@ -4709,7 +4709,7 @@ groupName, jpegThumbnail, caption, isCommunity }`.
 To withdraw an invitation you sent before it is used:
 
 ```js
-await client.revokeGroupInviteForParticipant(groupJid, '919634847671@s.whatsapp.net')
+await client.revokeGroupInviteForParticipant(groupJid, '919634847671')
 ```
 
 An expired or already-spent invitation throws rather than resolving to nothing,
@@ -4801,7 +4801,7 @@ await client.sendNewsletterText('120363000000000004@newsletter', 'Breaking: What
 Query the public business profile of any WhatsApp Business account:
 
 ```js
-const bp = await client.queryBusinessProfile('919634847671@s.whatsapp.net')
+const bp = await client.queryBusinessProfile('919634847671')
 if (bp) {
   console.log(bp.category)     // e.g. "Software & IT Services"
   console.log(bp.email)        // business email (if set)
