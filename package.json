@@ -1,7 +1,7 @@
 {
   "name": "whalibmob",
-  "version": "5.23.0",
-  "description": "WhatsApp library for interaction with WhatsApp Mobile API and web ",
+  "version": "5.23.1",
+  "description": "Node.js library for WhatsApp — register a number over SMS, or link as a companion by QR. Signal E2E encryption, media, groups, channels.",
   "author": "Kunboruto20",
   "main": "index.js",
   "bin": {
@@ -23,13 +23,28 @@
   },
   "keywords": [
     "whatsapp",
+    "whatsapp-api",
+    "whatsapp-bot",
+    "whatsapp-client",
+    "whatsapp-web",
+    "sms-registration",
+    "pairing-code",
+    "qr-code",
+    "companion",
+    "multi-device",
     "signal-protocol",
-    "mobile",
-    "client",
-    "encryption",
     "e2e",
+    "e2ee",
+    "encryption",
+    "mobile",
+    "android",
     "ios",
-    "multi-device"
+    "messaging",
+    "chatbot",
+    "automation",
+    "media",
+    "groups",
+    "channels"
   ],
   "repository": {
     "type": "git",
