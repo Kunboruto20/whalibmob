@@ -1,5 +1,28 @@
-<div align='center'>whalibmob is a pure JavaScript Node.js library for interacting with the WhatsApp Mobile API.</div>
-<div align='center'>v5.1.14</div>
+<div align="center">
+
+# whalibmob
+
+**A Node.js library for WhatsApp that can register a phone number of its own.**
+
+Every other JavaScript library links to an account that already exists on someone's phone.
+whalibmob does that too — but it can also take a bare phone number, request the SMS or voice
+code, and bring the account into being. Both transports, one API.
+
+[![npm](https://img.shields.io/npm/v/whalibmob?style=for-the-badge&color=25D366&label=npm)](https://www.npmjs.com/package/whalibmob)
+[![node](https://img.shields.io/node/v/whalibmob?style=for-the-badge&color=339933&label=node)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/whalibmob?style=for-the-badge&color=555555)](LICENSE)
+
+### Start here
+
+[![Register a number](https://img.shields.io/badge/Register_a_number-SMS_or_voice-25D366?style=for-the-badge)](#register-a-new-number)
+[![Link an account](https://img.shields.io/badge/Link_an_account-QR_or_pairing_code-128C7E?style=for-the-badge)](#linking-to-an-existing-account-pairing-code-or-qr)
+[![Use the CLI](https://img.shields.io/badge/Use_the_CLI-no_code_needed-075E54?style=for-the-badge)](#cli--getting-started)
+
+[![Library API](https://img.shields.io/badge/Library_API-Node.js-34B7F1?style=for-the-badge)](#library-api)
+[![Send messages](https://img.shields.io/badge/Send_messages-text_media_polls-34B7F1?style=for-the-badge)](#sending-messages)
+[![Handle events](https://img.shields.io/badge/Handle_events-incoming_%26_receipts-34B7F1?style=for-the-badge)](#handling-events)
+
+</div>
 
 ##
 
@@ -26,9 +49,10 @@ If you want News about whalibmob enter this whalibmob channel: https://t.me/+sHN
 > [!IMPORTANT]
 > This project is not affiliated, associated, authorized, endorsed by, or in any way officially connected with WhatsApp or any of its subsidiaries or affiliates. "WhatsApp" and related names are registered trademarks of their respective owners. Use at your own discretion.
 
-- whalibmob does not require a browser, Selenium, or any other external runtime — it communicates directly with WhatsApp using a **TCP socket** and the **Noise Protocol** handshake.
-- The library operates as a real **iOS mobile device**, using the Mobile API endpoint, which behaves differently from the Web API.
-- It **also speaks WhatsApp Web over a WebSocket**. When a number cannot receive an SMS, or is already in use on a phone, whalibmob can link itself to that existing account with an **8-character pairing code** and run as one of its linked devices — with full message history and the account's address book. See [Linking to an Existing Account](#linking-to-an-existing-account-pairing-code-or-qr). The API is identical in both modes.
+- **It registers numbers.** Give it a phone number that has never been on WhatsApp, request the code over SMS, voice call, flash call or an old WhatsApp account, confirm it, and the account exists — as an **Android or iOS device**, on the Mobile API. No phone, no scanning, no existing account to borrow. See [Register a New Number](#register-a-new-number).
+- **It also speaks WhatsApp Web**, over a WebSocket. When a number cannot receive an SMS, or is already live on a phone, whalibmob links itself to that account by **QR code** or an **8-character pairing code** and runs as one of its linked devices — with the full message history and the account's address book. See [Linking to an Existing Account](#linking-to-an-existing-account-pairing-code-or-qr).
+- **The API is identical in both modes.** Everything below — sending, media, groups, events — reads the same whichever way the session was created.
+- No browser, no Selenium, no external runtime. It talks to WhatsApp directly over a **TCP socket** with the **Noise Protocol** handshake.
 - Signal Protocol encryption is **fully inlined** in pure JavaScript — no native binaries, no node-gyp, runs anywhere Node.js runs.
 
 ## Install
