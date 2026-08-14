@@ -181,6 +181,7 @@ npm install -g whalibmob
     - [When 463 Means the Account Is Restricted](#when-463-means-the-account-is-restricted)
     - [What Is Automatic vs What You Need to Do](#what-is-automatic-vs-what-you-need-to-do)
   - [Receiving Media](#receiving-media)
+    - [When the File Is Gone from the CDN](#when-the-file-is-gone-from-the-cdn)
   - [Sending Messages](#sending-messages)
     - [Text Message](#text-message)
     - [Quote Message](#quote-message)
@@ -2409,6 +2410,7 @@ Every event from the SMS primary API fires here too — `message`, `receipt`, `p
 | `pair_device` | `{ refs }` | the QR path produced reference strings |
 | `history_sync` | `{ syncTypeName, chats, contacts, pushNames, merged }` | a chunk of history arrived |
 | `history_sync_error` | `{ err, notification }` | a chunk could not be fetched or decrypted |
+| `media_retry` | `{ messageId, chatJid, fromMe, participant, ciphertext, iv, error }` | the sender's phone answered a `requestMediaRetry()`. Read it with `decryptMediaRetry()` and the original media key; an `error` instead of a payload means the phone no longer has the file either |
 | `client_rejected` | `{ reason, location, message }` | the server refused the client itself, not the session — `405` means the announced version is not accepted. Fires whether the refusal arrives during the handshake or once the stream is open, and the client stops retrying either way. Distinct from `auth_failure`, and there is nothing to re-pair. |
 | `version_update` | `{ from, to, source }` | the announced version was refreshed from the platform's store before a handshake. Fires on reconnects as well as the first connect |
 | `apk_material_stale` | `{ materialVersion, liveVersion, hint }` | Android only: the Play Store listing has moved past the APK the cached token material came from. Nothing is broken — registration is what reads that material — but the next number registered from this install would go out under an older build |
@@ -3662,6 +3664,50 @@ const bytes = await client.downloadMedia(d, { verify: true })
 `downloadMedia` throws with the reason rather than returning empty: a message
 with no media, no CDN location, an unsupported type, or a file that does not
 match the message all say so.
+
+### When the file is gone from the CDN
+
+Media is not carried inside the message — the message carries a URL, a hash and
+the key, and the bytes sit on WhatsApp's CDN for a limited time. A download that
+answers **404** or **410** has nothing left to fetch. This is most common for
+messages that arrive through history sync long after they were sent.
+
+The sender's phone still has the original, and can be asked to upload it again:
+
+```js
+client.on('media_retry', (notification) => {
+  const result = client.decryptMediaRetry(notification, mediaKey)
+  if (result.ok) {
+    // fresh location — download it the usual way
+    console.log('re-uploaded at', result.directPath)
+  } else {
+    // the phone no longer has it either; nothing further to try
+  }
+})
+
+try {
+  await client.downloadMedia(msg)
+} catch (err) {
+  if (/404|410/.test(err.message)) {
+    await client.requestMediaRetry({
+      id:          msg.key.id,
+      chatJid:     msg.key.remoteJid,
+      fromMe:      msg.key.fromMe,
+      // groups only — the member who sent it
+      participant: msg.key.participant
+    }, mediaKey)
+  }
+}
+```
+
+`requestMediaRetry` resolves as soon as the request is on the wire; the answer
+arrives later on the `media_retry` event, which is why the two halves are
+written separately. Keep the `mediaKey` — the reply is encrypted under a key
+derived from it, and without it the fresh location cannot be read.
+
+That derivation is also what makes the request safe to send: it proves the
+asker was a recipient of the message rather than someone who merely knows a
+message id, so no phone can be made to re-upload a file on request.
 
 ## Sending Messages
 
