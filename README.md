@@ -30,9 +30,9 @@ code, and bring the account into being. Both transports, one API.
 
 
 
-CONTACT ME ON TELEGRAM  IF YOU WANT TO WORK WITH ME AND IF YOU HAVE PROBLEM WITH WHALIBMOB : @brtyu545
 
-**Need test numbers to try whalibmob with?** Message me on Telegram at **@brtyu545** — I can provide phone numbers for receiving SMS verification codes, so you can register and test whalibmob without using your own number.
+
+
 
 If you want News about whalibmob enter this whalibmob channel: https://t.me/+sHN4MDCyB7U5OWY0
 
