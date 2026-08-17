@@ -1713,7 +1713,7 @@ if (result.status === 'ok') {
 }
 ```
 
-**Optional — let the code arrive by itself.** The two steps above are the whole flow, and nothing about them changes if you do nothing else. But because registration now sends a Firebase push token (see [The Push Token](#the-push-token)), WhatsApp *may* also deliver the six-digit code as a silent push. Open a listener for it before requesting the code, and the code can come back with nothing typed:
+**Optional — let the code arrive by itself.** The two steps above are the whole flow, and nothing about them changes if you do nothing else. But because an Android registration sends a Firebase push token (see [The Push Token](#the-push-token)), WhatsApp *may* also deliver the six-digit code as a silent push. Open a listener for it before requesting the code, and the code can come back with nothing typed — on an `WA_OS=android` profile; on iOS it resolves `null` straight away, since only Firebase is implemented:
 
 ```js
 const { receivePushCode } = require('whalibmob')
@@ -2603,7 +2603,9 @@ If that is refused too, the number has to go through the real app once, on a pho
 
 ## The Push Token
 
-Every WhatsApp on a real phone holds a Firebase push token. It is the address Google uses to wake the app, and no install exists without one — so a registration that ships no `push_token` describes a WhatsApp that cannot be notified, which is a device that does not exist.
+Every WhatsApp on a real phone holds a push token. It is the address the push network uses to wake the app, and no install exists without one — so a registration that ships no `push_token` describes a WhatsApp that cannot be notified, which is a device that does not exist.
+
+**This is an Android-profile feature.** Which push network an install uses follows from its platform: Android holds a *Firebase* token and keeps a stream open to Google, iOS holds an *APNs* token and keeps one open to Apple. They are not interchangeable, and the registration server sees both the token and the User-Agent naming the platform that sent it — an iPhone presenting a Firebase token describes a device nobody ships. Only the Firebase side is implemented here, so everything in this section applies when `WA_OS=android`. An iOS registration sends no `push_token` at all, which is the correct thing for a client with no push line, and every other part of the flow is unaffected.
 
 The token does two distinct jobs, and it is easy to conflate them:
 
@@ -2636,6 +2638,8 @@ Turn it off with `WA_FCM_PUSH=0`.
 ### Receiving the code over push, without typing it
 
 This is the receiving end of job 2 above. When WhatsApp sends the code as a silent push, something has to be listening on the Firebase line to catch it — the same long-lived connection every Android phone keeps open to Google. `receivePushCode(store, device)` opens it: a TLS stream to `mtalk.google.com:5228` speaking the MCS protocol, logged in with the Firebase identity, resolving with the code the moment a push carrying it arrives.
+
+Like the token itself, this is Android-only. On an iOS profile `receivePushCode` resolves `null` immediately rather than holding a listener open on a line no push can reach, and `/reg push` says so and stops instead of waiting out its timeout. Check with `supportsPush(store.device)` if you want to branch on it.
 
 The order matters. Open the listener **first**, so the line is live before the code is requested; then request the code by whatever method; then await it.
 

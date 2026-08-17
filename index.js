@@ -61,10 +61,21 @@ module.exports = {
   checkIfRegistered,
   requestSmsCode,
   verifyCode,
-  // Receive the verification code as a silent Firebase push, without an SMS —
-  // opens the MCS listener the native client keeps to Google. See "Receiving
-  // the code over push" in the README.
-  receivePushCode: (store, device, opts) => require('./lib/fcm').receivePushCode(store, device, opts),
+  // Receive the verification code as a silent push, without an SMS — opens the
+  // listener the native client of that platform keeps open. See "Receiving the
+  // code over push" in the README.
+  //
+  // Routed through the push client for the device's platform: Android opens the
+  // Firebase MCS stream, iOS resolves null because APNs is not implemented and
+  // an iOS session holds no Firebase identity to listen with.
+  receivePushCode: (store, device, opts) => {
+    const dev = device || (store && store.device);
+    return require('./lib/PushClient')
+      .pushClientFor(dev)
+      .receivePushCode(store, dev, opts);
+  },
+  // Whether the device profile can do push verification at all.
+  supportsPush: (device) => require('./lib/PushClient').supportsPush(device),
   assertRegistrationKeys,
   // Version fetch — use fetchWaVersion for device-aware (iOS or Android) fetching.
   // fetchIosVersion is kept for backward compatibility.
