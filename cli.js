@@ -2431,13 +2431,30 @@ async function handleLine(line) {
             break;
           }
           const method = (p[3] && !p[3].startsWith('--')) ? p[3] : 'sms';
-          const { receivePushCode } = require('./lib/fcm');
+          const { pushClientFor } = require('./lib/PushClient');
 
           sessionDirFor(_sessDir, ph, { create: true });
           const sessFile = storeFileFor(_sessDir, ph);
           let store = loadStore(sessFile);
           if (!store) { store = initAuthCreds(ph, { name: regName }); saveStore(store, sessFile); }
           if (!store.device) store.device = getDeviceConfig();
+
+          // Push verification needs a push line, and only Android has one here.
+          // An iOS session holds no Firebase identity, so the listener would sit
+          // for three minutes on a push that can never be routed to it. Say so
+          // now instead, and point at the two things that do work.
+          const pushClient = pushClientFor(store.device);
+          if (!pushClient.supportsPush) {
+            fail('push verification is not available for this device profile (' +
+                 (store.device.os || 'unknown') + ')');
+            out('  the code arrives over the push line of the platform being announced,');
+            out('  and only Android has one implemented (Firebase). iOS needs APNs.');
+            out('  either register this number on an Android profile:');
+            out('    WA_OS=android  (see /device) and re-run /reg push ' + ph);
+            out('  or use the ordinary path:  /reg code ' + ph + '  then  /reg confirm ' + ph + ' <code>');
+            break;
+          }
+          const receivePushCode = (s, d, o) => pushClient.receivePushCode(s, d, o);
 
           out('opening Firebase push listener (this can take a moment)...');
           // Open the listener first so the push has somewhere to land. onReady
