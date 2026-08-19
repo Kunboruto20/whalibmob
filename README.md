@@ -49,8 +49,8 @@ If you want to talk with me contact me on Telegram my username îs @brtyu545
 > [!CAUTION]
 > Use a dedicated phone number with this library. Connecting with a number that is already active on a real device will cause WhatsApp to log that device out.
 
-> [!CAUTION] 
-> Whalibmob now It needs to be rewritten because WhatsApp mobile and has changed the protocol lately and now whalibmob is in testing and some updates by Me Any pull request is accepted. 
+> [!NOTE]
+> **Actively developed.** WhatsApp changed the mobile protocol recently, and whalibmob is being kept in step with it release by release. Contributions are welcome — pull requests are accepted.
 
 > [!IMPORTANT]
 > This project is not affiliated, associated, authorized, endorsed by, or in any way officially connected with WhatsApp or any of its subsidiaries or affiliates. "WhatsApp" and related names are registered trademarks of their respective owners. Use at your own discretion.

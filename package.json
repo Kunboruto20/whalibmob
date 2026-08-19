@@ -4,11 +4,13 @@
   "description": "Node.js library for WhatsApp — register a number over SMS, or link as a companion by QR. Signal E2E encryption, media, groups, channels.",
   "author": "Kunboruto20",
   "main": "index.js",
+  "types": "index.d.ts",
   "bin": {
     "wa": "./cli.js"
   },
   "files": [
     "index.js",
+    "index.d.ts",
     "cli.js",
     "lib/**/*.js",
     "tools/**/*.js",
