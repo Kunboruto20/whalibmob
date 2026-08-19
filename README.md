@@ -11,6 +11,7 @@ code, and bring the account into being. Both transports, one API.
 [![npm](https://img.shields.io/npm/v/whalibmob?style=for-the-badge&color=25D366&label=npm)](https://www.npmjs.com/package/whalibmob)
 [![node](https://img.shields.io/node/v/whalibmob?style=for-the-badge&color=339933&label=node)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/whalibmob?style=for-the-badge&color=555555)](LICENSE)
+[![types](https://img.shields.io/badge/types-included-3178C6?style=for-the-badge)](index.d.ts)
 
 [![Leia em Português do Brasil](https://img.shields.io/badge/%F0%9F%87%A7%F0%9F%87%B7_Leia_em_Português-Brasil-009C3B?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/Brasil.md)
 
@@ -49,8 +50,8 @@ If you want to talk with me contact me on Telegram my username îs @brtyu545
 > [!CAUTION]
 > Use a dedicated phone number with this library. Connecting with a number that is already active on a real device will cause WhatsApp to log that device out.
 
-> [!CAUTION] 
-> Whalibmob now It needs to be rewritten because WhatsApp mobile and has changed the protocol lately and now whalibmob is in testing and some updates by Me Any pull request is accepted. 
+> [!NOTE]
+> **Actively developed.** WhatsApp changed the mobile protocol recently, and whalibmob is being kept in step with it release by release. Contributions are welcome — pull requests are accepted.
 
 > [!IMPORTANT]
 > This project is not affiliated, associated, authorized, endorsed by, or in any way officially connected with WhatsApp or any of its subsidiaries or affiliates. "WhatsApp" and related names are registered trademarks of their respective owners. Use at your own discretion.
