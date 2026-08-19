@@ -757,8 +757,11 @@ export declare class WhalibmobClient extends EventEmitter {
   // ─── Profile ─────────────────────────────────────────────────────────────
   changeName(name: string): Promise<boolean>;
   changeAbout(text: string): Promise<any>;
-  /** Pass `null` to remove. Resolves to the new picture id, or `'remove'`. */
-  changeProfilePicture(buf: Buffer | null, opts?: { raw?: boolean; size?: number; quality?: number }): Promise<string>;
+  /**
+   * Pass `null` to remove. Resolves to the new picture id, `'remove'` when the
+   * picture was taken down, or `null` when the server's reply carried no id.
+   */
+  changeProfilePicture(buf: Buffer | null, opts?: { raw?: boolean; size?: number; quality?: number }): Promise<string | null>;
 
   // ─── Privacy ─────────────────────────────────────────────────────────────
   queryPrivacySettings(opts?: { force?: boolean }): Promise<PrivacySettings>;
@@ -796,7 +799,8 @@ export declare class WhalibmobClient extends EventEmitter {
   // ─── Groups ──────────────────────────────────────────────────────────────
   createGroup(subject: string, participants: Jid[], opts?: object): Promise<GroupMetadata>;
   leaveGroup(groupJid: Jid): Promise<any>;
-  getGroupMetadata(groupJid: Jid, opts?: object): Promise<GroupMetadata>;
+  /** `null` when the server did not answer the query. */
+  getGroupMetadata(groupJid: Jid, opts?: object): Promise<GroupMetadata | null>;
   invalidateGroupMetadata(groupJid: Jid): void;
   fetchAllGroups(): Promise<GroupMetadata[]>;
   refreshGroupMembers(groupJid: Jid): Promise<any>;
@@ -809,7 +813,8 @@ export declare class WhalibmobClient extends EventEmitter {
 
   changeGroupSubject(groupJid: Jid, subject: string): Promise<any>;
   changeGroupDescription(groupJid: Jid, description: string, opts?: object): Promise<any>;
-  changeGroupPicture(groupJid: Jid, buf: Buffer | null, opts?: object): Promise<string>;
+  /** Resolves to the new picture id, `'remove'`, or `null` when the reply carried no id. */
+  changeGroupPicture(groupJid: Jid, buf: Buffer | null, opts?: object): Promise<string | null>;
   changeGroupSetting(groupJid: Jid, setting: GroupSetting, policy: GroupPolicy): Promise<any>;
   setGroupAnnounce(groupJid: Jid, announce: boolean): Promise<any>;
   setGroupLocked(groupJid: Jid, locked: boolean): Promise<any>;
@@ -823,7 +828,8 @@ export declare class WhalibmobClient extends EventEmitter {
   /** Accepts a bare code or a full URL. */
   joinGroupWithLink(inviteCodeOrUrl: string): Promise<{ jid: Jid; pendingApproval: boolean }>;
   acceptGroupInvite(inviteCodeOrUrl: string): Promise<Jid | null>;
-  queryGroupInviteInfo(inviteCodeOrUrl: string): Promise<GroupInviteInfo>;
+  /** `null` when the invite could not be resolved. */
+  queryGroupInviteInfo(inviteCodeOrUrl: string): Promise<GroupInviteInfo | null>;
 
   queryGroupPendingParticipants(groupJid: Jid): Promise<GroupJoinRequest[]>;
   approveGroupParticipants(groupJid: Jid, approve: boolean, jids: Jid[]): Promise<GroupParticipantResult[]>;
