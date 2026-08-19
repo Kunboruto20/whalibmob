@@ -12,6 +12,10 @@ código por SMS ou chamada de voz, e trazer a conta à existência. Os dois tran
 [![node](https://img.shields.io/node/v/whalibmob?style=for-the-badge&color=339933&label=node)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/whalibmob?style=for-the-badge&color=555555)](LICENSE)
 
+[![Read in English](https://img.shields.io/badge/%F0%9F%87%AC%F0%9F%87%A7_Read_in-English-555555?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/README.md)
+
+**Esta é a documentação em português do Brasil.** A versão original em inglês está em **[README.md](https://github.com/Kunboruto20/whalibmob/blob/main/README.md)**.
+
 ### Comece por aqui
 
 [![Registrar um número](https://img.shields.io/badge/Registrar_um_número-SMS_ou_voz-25D366?style=for-the-badge)](#registrar-um-novo-número)
