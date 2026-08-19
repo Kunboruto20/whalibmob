@@ -12,6 +12,10 @@ code, and bring the account into being. Both transports, one API.
 [![node](https://img.shields.io/node/v/whalibmob?style=for-the-badge&color=339933&label=node)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/whalibmob?style=for-the-badge&color=555555)](LICENSE)
 
+[![Leia em Português do Brasil](https://img.shields.io/badge/%F0%9F%87%A7%F0%9F%87%B7_Leia_em_Português-Brasil-009C3B?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/Brasil.md)
+
+**🇧🇷 Fala português?** A documentação completa está traduzida em **[Brasil.md](https://github.com/Kunboruto20/whalibmob/blob/main/Brasil.md)** — tudo o que está aqui, na sua língua.
+
 ### Start here
 
 [![Register a number](https://img.shields.io/badge/Register_a_number-SMS_or_voice-25D366?style=for-the-badge)](#register-a-new-number)
