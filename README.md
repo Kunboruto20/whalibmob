@@ -11,7 +11,6 @@ code, and bring the account into being. Both transports, one API.
 [![npm](https://img.shields.io/npm/v/whalibmob?style=for-the-badge&color=25D366&label=npm)](https://www.npmjs.com/package/whalibmob)
 [![node](https://img.shields.io/node/v/whalibmob?style=for-the-badge&color=339933&label=node)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/whalibmob?style=for-the-badge&color=555555)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/Kunboruto20/whalibmob/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/Kunboruto20/whalibmob/actions/workflows/ci.yml)
 [![types](https://img.shields.io/badge/types-included-3178C6?style=for-the-badge)](index.d.ts)
 
 [![Leia em Português do Brasil](https://img.shields.io/badge/%F0%9F%87%A7%F0%9F%87%B7_Leia_em_Português-Brasil-009C3B?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/Brasil.md)
