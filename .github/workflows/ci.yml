@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18.x', '20.x', '22.x']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No package-lock.json is committed (the package ships as a library and
+      # consumers resolve their own tree), so `npm ci` has nothing to read.
+      #
+      # --omit=dev on purpose: the suite runs on node:test and must keep
+      # working with nothing but the runtime dependencies installed.
+      - name: Install runtime dependencies only
+        run: npm install --omit=dev --no-audit --no-fund
+
+      - name: Run tests
+        run: npm test
+
+  types:
+    name: type declarations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      # Fails if index.d.ts stops compiling. The suite separately checks that
+      # it stays in step with what index.js actually exports.
+      - name: Type-check the declarations
+        run: npm run test:types
+
+  package:
+    name: package contents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      # The types can be present in git and still missing from the published
+      # tarball, which nobody notices until a consumer reports "no types".
+      - name: Verify the tarball carries what it promises
+        run: |
+          npm pack --silent > /dev/null
+          tarball=$(ls -1 whalibmob-*.tgz | head -1)
+          echo "packed: $tarball"
+          contents=$(tar -tzf "$tarball")
+          echo "$contents"
+          for required in package/index.js package/index.d.ts package/cli.js package/README.md; do
+            echo "$contents" | grep -qx "$required" \
+              || { echo "::error::$required is missing from the tarball"; exit 1; }
+          done
+          # The test suite is development-only and has no business shipping.
+          if echo "$contents" | grep -q '^package/test/'; then
+            echo "::error::test files leaked into the published package"
+            exit 1
+          fi
