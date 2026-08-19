@@ -41,6 +41,8 @@ code, and bring the account into being. Both transports, one API.
 If you want News about whalibmob enter this whalibmob channel: https://t.me/+sHN4MDCyB7U5OWY0
 
 
+If you want to talk with me contact me on Telegram my username îs @brtyu545
+
 
 
 
