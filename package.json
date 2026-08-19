@@ -19,6 +19,11 @@
     ".env.example"
   ],
   "type": "commonjs",
+  "scripts": {
+    "test": "node --test",
+    "test:types": "tsc --noEmit --strict --skipLibCheck index.d.ts",
+    "test:all": "npm test && npm run test:types"
+  },
   "license": "MIT",
   "engines": {
     "node": ">=14.0.0"
@@ -73,5 +78,9 @@
     "jimp": "^1.6.0",
     "socks": "^2.8.9",
     "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
   }
 }
