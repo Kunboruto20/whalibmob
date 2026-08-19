@@ -46,8 +46,8 @@ Se você quer Novidades sobre o whalibmob, entre neste canal do whalibmob: https
 > [!CAUTION]
 > Use um número de telefone dedicado com esta biblioteca. Conectar-se com um número que já está ativo em um aparelho real fará com que o WhatsApp desconecte aquele aparelho.
 
-> [!CAUTION] 
-> O Whalibmob agora precisa ser reescrito porque o WhatsApp mobile mudou o protocolo recentemente, e agora o whalibmob está em testes com algumas atualizações feitas por Mim. Qualquer pull request é aceito.
+> [!NOTE]
+> **Em desenvolvimento ativo.** O WhatsApp mudou o protocolo mobile recentemente, e o whalibmob está sendo mantido em dia com ele a cada versão. Contribuições são bem-vindas — pull requests são aceitos.
 
 > [!IMPORTANT]
 > Este projeto não é afiliado, associado, autorizado, endossado nem oficialmente conectado de qualquer forma ao WhatsApp ou a qualquer uma de suas subsidiárias ou afiliadas. "WhatsApp" e nomes relacionados são marcas registradas de seus respectivos proprietários. Use por sua própria conta e risco.
