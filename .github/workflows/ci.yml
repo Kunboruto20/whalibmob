@@ -23,6 +23,10 @@ jobs:
         node: ['18.x', '20.x', '22.x']
     steps:
       - uses: actions/checkout@v4
+        with:
+          # No job here pushes, so the job token has no business being left
+          # behind in .git/config where a later step could read it.
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -44,6 +48,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # No job here pushes, so the job token has no business being left
+          # behind in .git/config where a later step could read it.
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -62,6 +70,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # No job here pushes, so the job token has no business being left
+          # behind in .git/config where a later step could read it.
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:

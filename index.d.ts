@@ -67,8 +67,13 @@ export interface DeviceConfig {
 }
 
 /**
- * A registered (SMS / mobile) session. This is what `createNewStore`,
- * `initAuthCreds` and `loadStore` hand back and `saveStore` writes.
+ * A registered (SMS / mobile) session, **in memory** — what `createNewStore`,
+ * `initAuthCreds`, `loadStore` and `storeFromJson` hand back.
+ *
+ * The binary fields are `Buffer`s here. The JSON `saveStore` writes holds the
+ * same fields base64-encoded, so a value read straight out of the session file
+ * with `JSON.parse` is a string where this says `Buffer`. Go through
+ * `loadStore` / `storeFromJson` and the Buffers are restored for you.
  */
 export interface WhalibmobStore {
   phoneNumber: string;
@@ -76,21 +81,23 @@ export interface WhalibmobStore {
   identityKeyPair: KeyPair;
   signedPreKey: SignedPreKey;
   registrationId: number;
+  /** A UUID string, not bytes. */
   fdid: string;
-  deviceId: string;
-  identityId: string;
+  deviceId: Buffer;
+  identityId: Buffer;
+  /** A UUID string, not bytes. */
   advertisingId: string;
-  backupToken: string;
+  backupToken: Buffer;
   /** `true` once `verifyCode` has succeeded. */
   registered: boolean;
   /** `true` between requesting a code and confirming it. */
   codePending: boolean;
-  /** Display name announced on connect; `null` until one is set. */
-  name: string | null;
+  /** Display name announced on connect; `'User'` is the placeholder when none was given. */
+  name: string;
   version: string;
   device: DeviceConfig;
-  /** Signed device identity, `null` until the server sends it in `<success>`. */
-  advIdentity: string | null;
+  /** Signed device identity bytes, `null` until the server sends them in `<success>`. */
+  advIdentity: Buffer | null;
   [key: string]: any;
 }
 
@@ -1005,8 +1012,27 @@ export declare function getDeviceConfig(): DeviceConfig;
 // Media
 // ────────────────────────────────────────────────────────────────────────────
 
-export declare function encryptMedia(buffer: Buffer, mediaType: string): any;
-export declare function decryptMedia(buffer: Buffer, mediaKey: Buffer, mediaType: string): Buffer;
+/** What `encryptMedia` hands back. */
+export interface EncryptedMedia {
+  /** Ciphertext with the 10-byte MAC appended — the bytes that go to the CDN. */
+  encrypted: Buffer;
+  /** SHA-256 over the plaintext; the message's `fileSha256`. */
+  sha256Plain: Buffer;
+  /** SHA-256 over `encrypted`; the message's `fileEncSha256`. */
+  sha256Enc: Buffer;
+  /** The key it was encrypted under, echoed back. */
+  mediaKey: Buffer;
+}
+
+/**
+ * `keyName` is the HKDF info string, not the media type — `'WhatsApp Image
+ * Keys'`, `'WhatsApp Video Keys'`, and so on. A sticker is keyed as an image
+ * and a voice note as audio; `getMediaKeyName()` in `whalibmob/lib/MediaService`
+ * maps a media type to the right one.
+ */
+export declare function encryptMedia(plaintext: Buffer, mediaKey: Buffer, keyName: string): EncryptedMedia;
+/** Verifies the trailing MAC and throws if it does not match. */
+export declare function decryptMedia(encryptedWithMac: Buffer, mediaKey: Buffer, keyName: string): Buffer;
 export declare function uploadMedia(...args: any[]): Promise<any>;
 export declare function downloadMedia(url: string, mediaKey: Buffer, keyName: string, opts?: object): Promise<Buffer>;
 

@@ -87,10 +87,13 @@ test('every method declared on WhalibmobClient exists on the class', () => {
   const declared = declaredClientMethods(dts);
   assert.ok(declared.size > 50, `expected a substantial method list, got ${declared.size}`);
 
+  // One instance for the whole check: the filter runs per declared method, and
+  // building a client each time is ~110 constructions for no gain.
+  const probe = new lib.WhalibmobClient({ sessionDir: '/tmp/whalibmob-test-not-created' });
   const missing = [...declared].filter(name => {
     const onPrototype = typeof lib.WhalibmobClient.prototype[name] === 'function';
     // on/once/off/emit and friends come from EventEmitter.
-    const inherited = typeof new lib.WhalibmobClient({})[name] === 'function';
+    const inherited = typeof probe[name] === 'function';
     return !onPrototype && !inherited;
   }).sort();
 
