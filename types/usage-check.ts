@@ -74,6 +74,22 @@ function retry(mediaKey: Buffer, msgId: string): MediaRetryResult | null {
   return wa.Messages.MediaRetry.decryptRetryNotification(parsed, mediaKey);
 }
 
+// directPath comes back null, not undefined, when the phone declines. The
+// declaration said `directPath?: string`, so this narrowing — the one a caller
+// under --strict would reach for — compiled while being wrong at run time.
+// It only typechecks now because the declaration admits null.
+function freshLocation(r: MediaRetryResult): string | null {
+  if (r.directPath === null) return null;
+  const path: string = r.directPath;      // fails if directPath can be undefined
+  return path;
+}
+
+function retryOutcome(r: MediaRetryResult): string {
+  if (r.ok) return 're-uploaded at ' + (r.directPath ?? '?');
+  // result is nullable too: null when the phone answered with an error.
+  return r.result === null ? 'the phone errored' : 'declined with ' + r.result;
+}
+
 // ─── The untyped half is still reachable ─────────────────────────────────────
 
 function internals(): void {
@@ -99,4 +115,4 @@ function sameThing(): void {
   void viaNamespace;
 }
 
-export { media, decode, poll, retry, internals, sameThing };
+export { media, decode, poll, retry, internals, sameThing, freshLocation, retryOutcome };
