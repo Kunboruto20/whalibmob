@@ -229,6 +229,15 @@ export interface PollSendResult extends SendResult {
 
 export interface DecodedBase {
   type: string;
+  /**
+   * The message arrived inside a view-once envelope. The content is decoded
+   * normally — media included — this only records how it was sent.
+   */
+  viewOnce?: boolean;
+  /** The message belongs to a chat with disappearing messages turned on. */
+  ephemeral?: boolean;
+  /** The message is the new text of an edit. */
+  edited?: boolean;
   [key: string]: any;
 }
 
@@ -1112,3 +1121,199 @@ export declare const WEB_EVENTS: any;
 export declare const WEB_GLOBALS: any;
 export declare function decodeArgo(buf: Buffer): any;
 export declare function tryDecodeArgo(buf: Buffer): any;
+
+// ────────────────────────────────────────────────────────────────────────────
+// Namespaces
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Everything above this line is a name picked out of a module by hand.
+ * Everything below is the rest of the library: each module of `lib/`, whole,
+ * under a name of its own. Nothing above is renamed or removed by any of it.
+ *
+ * `wa.MediaService` is the object `require('whalibmob/lib/MediaService')`
+ * returns — deep requires work too, and always have. Four namespaces are
+ * gathered from the several modules of a directory rather than being one
+ * module: `Signal`, `Signal.libsignal`, `AppState` and `Image`.
+ *
+ * The members declared on each namespace below are typed. The rest of a module
+ * is reachable and untyped, the same way `MessageSender` and `SignalProtocol`
+ * are above — this file has never claimed to describe the internals, and a
+ * namespace does not change that.
+ */
+export interface LibModule {
+  [name: string]: any;
+}
+
+/**
+ * `whalibmob/lib/MediaService` — the encryption, upload and download beneath
+ * `client.downloadMedia()`. Everything it exports is typed.
+ */
+export declare const MediaService: {
+  /** Upload path and HKDF info string per media type. */
+  MEDIA_PATH: Record<string, { path: string; keyName: string }>;
+  encryptMedia(plaintext: Buffer, mediaKey: Buffer, keyName: string): EncryptedMedia;
+  decryptMedia(encryptedWithMac: Buffer, mediaKey: Buffer, keyName: string): Buffer;
+  uploadMedia(...args: any[]): Promise<any>;
+  /** `opts.fileEncSha256` checks the blob as it arrived, before decrypting. */
+  downloadMedia(
+    url: string,
+    mediaKey: Buffer,
+    keyName: string,
+    opts?: { web?: boolean; fileEncSha256?: Buffer }
+  ): Promise<Buffer>;
+  /** Plain GET, no decryption — profile pictures are served in the clear. */
+  httpGetBuffer(url: string, opts?: { web?: boolean }): Promise<Buffer>;
+  /** HKDF-SHA256 over the media key: 112 bytes of IV, cipher key and MAC key. */
+  deriveMediaKeyData(mediaKey: Buffer, keyName: string): Buffer;
+  /** `'image'` → `'WhatsApp Image Keys'`. `null` for a type it does not know. */
+  getMediaKeyName(mediaType: string): string | null;
+  /** The absolute URL, built from `directPath` when there is no `url`. */
+  resolveMediaUrl(url: string | null, directPath: string | null): string | null;
+};
+
+/** `whalibmob/lib/proto/MessageProto` — the message protobufs. */
+export declare const MessageProto: LibModule & {
+  /**
+   * Raw decrypted bytes into a `DecodedMessage`. Envelopes — view-once,
+   * ephemeral, deviceSent, documentWithCaption, edited — are opened, so what
+   * comes back is the message inside with `viewOnce` / `ephemeral` / `edited`
+   * recorded on it. `depth` is internal; leave it unset.
+   */
+  decodeMessageContainer(buf: Buffer, depth?: number): DecodedMessage;
+  /** The generic protobuf field walker, keyed by field number. */
+  decodeFields(buf: Buffer): Record<number, any>;
+  encodeMessage(...args: any[]): Buffer;
+  encodeImageMessage(opts: Record<string, any>): Buffer;
+  encodeVideoMessage(opts: Record<string, any>): Buffer;
+  encodeAudioMessage(opts: Record<string, any>): Buffer;
+  encodeDocumentMessage(opts: Record<string, any>): Buffer;
+  encodeStickerMessage(opts: Record<string, any>): Buffer;
+  encodePollCreationMessage(opts: Record<string, any>):
+    { payload: Buffer; messageSecret: Buffer; encKey: Buffer };
+};
+
+/** `whalibmob/lib/messages/` — sending, and the receipts that go with it. */
+export declare const Messages: {
+  MessageSender: LibModule;
+  /**
+   * Asking the sender's phone to upload a file again. `client
+   * .requestMediaRetry()` and `client.decryptMediaRetry()` are these, wired up.
+   */
+  MediaRetry: {
+    /** HKDF-SHA256(mediaKey, "WhatsApp Media Retry Notification"), 32 bytes. */
+    mediaRetryKey(mediaKey: Buffer): Buffer;
+    encryptRetryReceipt(msgId: string, mediaKey: Buffer):
+      { ciphertext: Buffer; iv: Buffer };
+    decryptRetryNotification(
+      notif: MediaRetryNotification, mediaKey: Buffer): MediaRetryResult;
+    buildRetryReceiptNode(
+      info: { id: string; chatJid: Jid; fromMe: boolean; participant?: Jid },
+      mediaKey: Buffer, ownJid: Jid, BinaryNode: any): any;
+    /** `null` when the node is not a media-retry notification. */
+    parseRetryNotification(node: any, helpers: {
+      findChild: (node: any, tag: string) => any;
+      getContent: (node: any) => Buffer | null;
+    }): MediaRetryNotification | null;
+    RETRY_KEY_INFO: string;
+  };
+  ReportingToken: LibModule;
+  TcTokenStore: LibModule;
+};
+
+/**
+ * `whalibmob/lib/signal/` — SignalProtocol.js, SignalStore.js and SenderKey.js
+ * gathered into one namespace, with the two vendored libraries under their own.
+ */
+export declare const Signal: LibModule & {
+  SignalProtocol: any;
+  SignalStore: any;
+  SenderKeyStore: any;
+  SenderKeyCrypto: any;
+  /** Group ciphers and sender-key records. */
+  WaSignalGroup: LibModule;
+  /**
+   * The vendored libsignal. Its own barrel leaves six modules out; they are
+   * here — `BaseKeyType`, `ChainType`, `protobufs`, `queueJob`,
+   * `FingerprintGenerator`, `textsecure`.
+   */
+  libsignal: LibModule;
+};
+
+/** `whalibmob/lib/appstate/` — the synced state a companion keeps in step. */
+export declare const AppState: LibModule & {
+  AppStateStore: any;
+  COLLECTIONS: string[];
+  AppStateSync: LibModule;
+  LTHash: LibModule;
+  Mutations: LibModule;
+  SyncdProto: LibModule;
+};
+
+/**
+ * `whalibmob/lib/image/` — the decoders behind the inline thumbnails, and the
+ * JPEG encoder that writes them. No native dependency; sharp or jimp are used
+ * when installed and this is what runs when they are not.
+ */
+export declare const Image: LibModule & {
+  /** Width and height from the file header, for every format below. */
+  decodeImage(buf: Buffer): any;
+  canDecode(buf: Buffer): boolean;
+  toSquareJpeg(...args: any[]): Buffer | null;
+  toScaledJpeg(...args: any[]): Buffer | null;
+  encodeJpeg(...args: any[]): Buffer;
+  Jpeg: LibModule;
+  JpegEncoder: LibModule;
+  Png: LibModule;
+  Gif: LibModule;
+  Bmp: LibModule;
+};
+
+/** Registration, sessions, and the device a session presents itself as. */
+export declare const Client: LibModule;
+export declare const Registration: LibModule;
+export declare const Store: LibModule;
+export declare const WebStore: LibModule;
+export declare const DeviceConfig: LibModule;
+/**
+ * `whalibmob/lib/DeviceManager` — the module, not the class. The flat
+ * `DeviceManager` export is the class; this is what it comes from, so
+ * `makeDeviceJid`, `phoneFromJid` and `jidStrToObj` can be reached too.
+ */
+export declare const Devices: LibModule;
+export declare const PlayStore: LibModule;
+export declare const PlayStoreDevice: LibModule;
+export declare const AndroidApk: LibModule;
+export declare const Attestation: LibModule;
+export declare const Tokens: LibModule;
+export declare const PushClient: LibModule;
+export declare const Fcm: LibModule;
+export declare const FcmMcs: LibModule;
+
+/** Linking to an account that already exists. */
+export declare const PairingCode: LibModule;
+export declare const CompanionPairing: LibModule;
+export declare const QrPairing: LibModule;
+export declare const WebVersion: LibModule;
+export declare const WebProto: LibModule;
+
+/** The wire. */
+export declare const BinaryNode: LibModule;
+export declare const Noise: LibModule;
+export declare const WebSocketStream: LibModule;
+export declare const Socks: LibModule;
+export declare const OfflineNodeProcessor: LibModule;
+export declare const Constants: LibModule;
+export declare const Logger: LibModule;
+/**
+ * `whalibmob/lib/proto.js` — the handshake payloads. The message protobufs are
+ * the directory of the same name, and are `MessageProto`.
+ */
+export declare const Proto: LibModule;
+
+export declare const MediaThumbnail: LibModule;
+export declare const GroupParticipant: LibModule;
+export declare const HistorySyncHandler: LibModule;
+export declare const AuthUtils: LibModule;
+export declare const Argo: LibModule;
+export declare const WAUSync: LibModule;

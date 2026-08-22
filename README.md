@@ -1664,6 +1664,82 @@ Everything the CLI does is available as a Node.js library. The sections below
 cover connecting an account, sending and receiving every message type, groups,
 communities, channels, presence, privacy, history sync, and device emulation.
 
+### What the package exports
+
+Two layers. The first is the flat one the rest of this document uses — the
+eighty-two names the common paths are built from:
+
+```js
+const { WhalibmobClient, createNewStore, requestSmsCode } = require('whalibmob')
+```
+
+The second is everything else. The library is ninety-five modules and close to
+five hundred exported names, and the flat layer picks out under a fifth of
+them. The rest are reachable as **namespaces**, each one a module of `lib/`
+under a name of its own:
+
+```js
+const wa = require('whalibmob')
+
+wa.MediaService.getMediaKeyName('ptt')        // → 'WhatsApp Audio Keys'
+wa.MessageProto.decodeMessageContainer(buf)   // raw bytes → a decoded message
+wa.Messages.MediaRetry.mediaRetryKey(key)     // the retry-receipt key
+wa.Signal.libsignal.SessionCipher             // the vendored libsignal
+wa.AppState.SyncdProto                        // app-state mutation records
+wa.Image.Jpeg                                 // the JPEG header reader
+```
+
+A namespace is named after the module it comes from, and a directory in `lib/`
+becomes one namespace rather than several — so `Signal` is all of
+`lib/signal/`, `AppState` all of `lib/appstate/`, `Messages` all of
+`lib/messages/`. Two names could not be had: **`Devices`** is
+`lib/DeviceManager.js`, because the flat `DeviceManager` is the class rather
+than the module, and **`Proto`** is `lib/proto.js` while the message protobufs
+in `lib/proto/` are **`MessageProto`**.
+
+Deep requires work as well, and always have — the package declares no `exports`
+map, so nothing is sealed off:
+
+```js
+const MediaService = require('whalibmob/lib/MediaService')
+// the same object, by a longer name
+require('whalibmob').MediaService === MediaService   // true
+```
+
+Adding the namespaces renamed and removed nothing: every name the library
+exported before is still exported, still holding what it held.
+
+> [!NOTE]
+> The namespaces are typed as far as the rest of this document goes — media,
+> the message protobufs, media retry. Past that they are `any`, which is what
+> the internals have always been in `index.d.ts`. They are reachable, not
+> described.
+
+### ES modules
+
+The package is CommonJS, and every one of its names can be imported from an ES
+module — a bot written with `"type": "module"` needs no interop dance:
+
+```js
+import { WhalibmobClient, createNewStore, requestSmsCode } from 'whalibmob'
+import { MediaService, MessageProto } from 'whalibmob'
+
+// the default import is the whole export object, if you prefer it
+import wa from 'whalibmob'
+
+// deep imports work too — ESM wants the extension, CommonJS does not
+import { downloadMedia } from 'whalibmob/lib/MediaService.js'
+```
+
+> [!NOTE]
+> `import { … }` used to fail for all but five names. Node reads a CommonJS
+> module's names statically, and the reader gives up at the first property of
+> `module.exports` whose value is not a plain identifier — an inline arrow
+> function five entries in cost the other 116. `require()` and the default
+> import were unaffected, which is why it went unnoticed. Everything is now
+> bound to a name before it is exported, and a test fails if that stops being
+> true.
+
 ## Connecting Account
 
 ### Register a New Number
@@ -3699,6 +3775,55 @@ const bytes = await client.downloadMedia(d, { verify: true })
 `downloadMedia` throws with the reason rather than returning empty: a message
 with no media, no CDN location, an unsupported type, or a file that does not
 match the message all say so.
+
+### View-once and disappearing messages
+
+Some messages arrive inside an envelope. A photo sent as **view-once** is an
+ordinary `ImageMessage` wrapped in a `ViewOnceMessage`; the same photo in a
+chat with **disappearing messages** turned on is one wrapped in an
+`EphemeralMessage`. Nothing about the photo changes — the envelope only records
+how it was sent.
+
+The decoder opens them, so nothing special is needed on your side. `msg.decoded`
+is the photo, and `downloadMedia()` works on it exactly as it does on any other:
+
+```js
+client.on('message', async (msg) => {
+  const d = msg.decoded
+  if (!d || !d.mediaKey) return
+
+  if (d.viewOnce)  console.log('sent as view-once')
+  if (d.ephemeral) console.log('from a disappearing chat')
+
+  const bytes = await client.downloadMedia(d)   // same call, wrapped or not
+})
+```
+
+Three flags say how the message was sent, and are absent otherwise:
+
+| flag | meaning |
+|---|---|
+| `d.viewOnce` | sent as view-once — `ViewOnceMessage`, `ViewOnceMessageV2` or the V2 extension a voice note uses |
+| `d.ephemeral` | from a chat with disappearing messages on |
+| `d.edited` | the new text of an edited message — the payload is the `protocol` message carrying it |
+
+They stack. A view-once photo in a disappearing chat carries both:
+
+```js
+if (d.viewOnce && d.ephemeral) { /* … */ }
+```
+
+Documents sent with a caption (`DocumentWithCaptionMessage`) are unwrapped the
+same way and decode as a plain `document`, with no flag of their own.
+
+> [!NOTE]
+> Opening the envelope is what makes this media reachable at all. Before it, a
+> view-once photo decoded as `{ type: 'unknown' }` — no `mediaKey`, no
+> `directPath` — and there was nothing for `downloadMedia()` to fetch.
+
+Nothing here changes when the message came through history sync, or when it is
+one of your own echoed back to this device from another: those envelopes nest,
+and are unwrapped down to the message inside.
 
 ### When the file is gone from the CDN
 
