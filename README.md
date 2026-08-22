@@ -1715,6 +1715,31 @@ exported before is still exported, still holding what it held.
 > the internals have always been in `index.d.ts`. They are reachable, not
 > described.
 
+### ES modules
+
+The package is CommonJS, and every one of its names can be imported from an ES
+module — a bot written with `"type": "module"` needs no interop dance:
+
+```js
+import { WhalibmobClient, createNewStore, requestSmsCode } from 'whalibmob'
+import { MediaService, MessageProto } from 'whalibmob'
+
+// the default import is the whole export object, if you prefer it
+import wa from 'whalibmob'
+
+// deep imports work too — ESM wants the extension, CommonJS does not
+import { downloadMedia } from 'whalibmob/lib/MediaService.js'
+```
+
+> [!NOTE]
+> `import { … }` used to fail for all but five names. Node reads a CommonJS
+> module's names statically, and the reader gives up at the first property of
+> `module.exports` whose value is not a plain identifier — an inline arrow
+> function five entries in cost the other 116. `require()` and the default
+> import were unaffected, which is why it went unnoticed. Everything is now
+> bound to a name before it is exported, and a test fails if that stops being
+> true.
+
 ## Connecting Account
 
 ### Register a New Number

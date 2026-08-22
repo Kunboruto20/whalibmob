@@ -204,6 +204,31 @@ test('every namespace index.d.ts declares actually exists, and the reverse', () 
   }
 });
 
+test('every export can be imported by name from an ES module', async () => {
+  // Node reads a CommonJS module's names statically when something imports it
+  // as ESM, and the reader gives up at the first property of module.exports
+  // whose value is not a plain identifier. An arrow function five entries in
+  // once cost the package a hundred and sixteen of its hundred and twenty-one
+  // names — `import { createNewStore } from 'whalibmob'` was a SyntaxError,
+  // while `require` and the default import were fine, so nothing here noticed.
+  //
+  // A dynamic import puts the same reader over the file, so this is the real
+  // check and not an approximation of one.
+  const esm = await import('../index.js');
+
+  const named   = Object.keys(esm).filter(k => k !== 'default');
+  const runtime = Object.keys(wa);
+  const missing = runtime.filter(k => !named.includes(k));
+
+  assert.deepEqual(missing, [],
+    missing.length + ' of ' + runtime.length + ' exports cannot be reached by ' +
+    '`import { … }`. Something in module.exports is not a plain identifier — ' +
+    'bind it to a const above and export the name.\n  ' + missing.join('\n  '));
+
+  // And they are the same values, not just the same names.
+  for (const name of runtime) assert.equal(esm[name], wa[name], name);
+});
+
 test('requiring the package does not cost meaningfully more than it did', () => {
   // Client.js already pulls in almost all of lib/, so naming the rest is close
   // to free. This guards against a namespace being added that drags in
