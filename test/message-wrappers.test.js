@@ -15,7 +15,8 @@ const crypto = require('node:crypto');
 const {
   decodeMessageContainer, encodeImageMessage, encodeAudioMessage,
   encodeDocumentMessage, encodePollCreationMessage, encodeMessageContextInfo,
-  encodeSenderKeyDistributionMessage, field, str, bytes, WIRE_LEN
+  encodeSenderKeyDistributionMessage, field, str, bytes, WIRE_LEN,
+  MAX_WRAPPER_DEPTH
 } = require('../lib/proto/MessageProto');
 
 // Message { <fieldNum> = <payload> }
@@ -122,12 +123,33 @@ test('our own view-once photo, echoed back to this device, still decodes', () =>
   assert.equal(d.viewOnce, true);
 });
 
-test('an envelope nested past all reason does not blow the stack', () => {
+// Nesting a fixed number of envelopes around a text message.
+const nest = (depth) => {
   let payload = textMessage('deep');
-  for (let i = 0; i < 40; i++) payload = futureProof(40, payload);
-  // Past the depth bound the envelope is left unopened rather than followed, so
-  // this reports unknown instead of throwing.
-  assert.doesNotThrow(() => decodeMessageContainer(payload));
+  for (let i = 0; i < depth; i++) payload = futureProof(40, payload);
+  return payload;
+};
+
+test('the depth bound holds exactly where it says it does', () => {
+  // Checked at the edge, and against the constant rather than a number copied
+  // out of it. Asserting only that deep nesting does not throw proves nothing:
+  // forty levels of recursion do not exhaust the stack, so such a test passes
+  // just as well with no bound at all.
+  assert.equal(decodeMessageContainer(nest(MAX_WRAPPER_DEPTH)).type, 'text',
+    'at the bound the message is still reached');
+
+  assert.equal(decodeMessageContainer(nest(MAX_WRAPPER_DEPTH + 1)).type, 'unknown',
+    'one past it the envelope is left unopened');
+});
+
+test('an envelope nested past all reason is refused, not followed', () => {
+  // The bound is what keeps a payload from driving the decoder as deep as it is
+  // long. A thousand envelopes are read as far as the bound and no further, so
+  // this costs nothing to refuse — which is the whole point of refusing it.
+  const hostile = nest(1000);
+  let decoded;
+  assert.doesNotThrow(() => { decoded = decodeMessageContainer(hostile); });
+  assert.equal(decoded.type, 'unknown');
 });
 
 // ─── documents and edits ─────────────────────────────────────────────────────

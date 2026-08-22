@@ -595,9 +595,22 @@ export interface MediaRetryNotification {
 }
 
 export interface MediaRetryResult {
+  /** `true` only when the phone actually re-uploaded the file. */
   ok: boolean;
-  directPath?: string;
-  url?: string;
+  /**
+   * `MediaRetryNotification.result` — `1` is SUCCESS. `null` when the phone
+   * answered with an error rather than a payload.
+   */
+  result: number | null;
+  /**
+   * Where the file was put back. **`null`, not absent**, whenever `ok` is
+   * false — check it against `null`, or just read `ok`.
+   */
+  directPath: string | null;
+  /** The message the retry was for. Absent when the phone answered an error. */
+  stanzaId?: string;
+  /** Set instead of a location when the phone no longer has the file either. */
+  error?: any;
   [key: string]: any;
 }
 
