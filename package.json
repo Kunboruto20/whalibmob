@@ -21,7 +21,7 @@
   "type": "commonjs",
   "scripts": {
     "test": "node --test",
-    "test:types": "tsc --noEmit --strict --skipLibCheck index.d.ts",
+    "test:types": "tsc --noEmit --strict --skipLibCheck index.d.ts && tsc --noEmit --strict --skipLibCheck --types node types/usage-check.ts",
     "test:all": "npm test && npm run test:types"
   },
   "license": "MIT",

@@ -1661,6 +1661,82 @@ Tudo o que a CLI faz está disponível como biblioteca Node.js. As seções abai
 cobrem a conexão de uma conta, o envio e o recebimento de todos os tipos de mensagem, grupos,
 comunidades, canais, presença, privacidade, sincronização de histórico e emulação de dispositivo.
 
+### O que o pacote exporta
+
+Duas camadas. A primeira é a camada plana que o resto deste documento usa — os
+oitenta e dois nomes dos quais os caminhos comuns são feitos:
+
+```js
+const { WhalibmobClient, createNewStore, requestSmsCode } = require('whalibmob')
+```
+
+A segunda é todo o resto. A biblioteca tem noventa e cinco módulos e perto de
+quinhentos nomes exportados, e a camada plana escolhe menos de um quinto deles.
+O restante é alcançável como **namespaces**, cada um um módulo de `lib/` sob um
+nome próprio:
+
+```js
+const wa = require('whalibmob')
+
+wa.MediaService.getMediaKeyName('ptt')        // → 'WhatsApp Audio Keys'
+wa.MessageProto.decodeMessageContainer(buf)   // bytes crus → mensagem decodificada
+wa.Messages.MediaRetry.mediaRetryKey(key)     // a chave do recibo de retry
+wa.Signal.libsignal.SessionCipher             // a libsignal embutida
+wa.AppState.SyncdProto                        // registros de mutação do app state
+wa.Image.Jpeg                                 // o leitor de cabeçalho JPEG
+```
+
+Um namespace leva o nome do módulo de onde vem, e um diretório em `lib/` vira um
+único namespace em vez de vários — então `Signal` é todo o `lib/signal/`,
+`AppState` todo o `lib/appstate/`, `Messages` todo o `lib/messages/`. Dois nomes
+não puderam ser usados: **`Devices`** é o `lib/DeviceManager.js`, porque o
+`DeviceManager` plano é a classe e não o módulo, e **`Proto`** é o
+`lib/proto.js` enquanto os protobufs de mensagem em `lib/proto/` são o
+**`MessageProto`**.
+
+Requires profundos também funcionam, e sempre funcionaram — o pacote não declara
+um mapa `exports`, então nada fica trancado:
+
+```js
+const MediaService = require('whalibmob/lib/MediaService')
+// o mesmo objeto, por um nome mais longo
+require('whalibmob').MediaService === MediaService   // true
+```
+
+Acrescentar os namespaces não renomeou nem removeu nada: todo nome que a
+biblioteca exportava antes continua exportado, segurando o que segurava.
+
+> [!NOTE]
+> Os namespaces são tipados até onde o resto deste documento vai — mídia, os
+> protobufs de mensagem, o media retry. Além disso são `any`, que é o que os
+> internos sempre foram no `index.d.ts`. São alcançáveis, não descritos.
+
+### Módulos ES
+
+O pacote é CommonJS, e todos os seus nomes podem ser importados de um módulo ES
+— um bot escrito com `"type": "module"` não precisa de nenhuma ginástica de
+interoperabilidade:
+
+```js
+import { WhalibmobClient, createNewStore, requestSmsCode } from 'whalibmob'
+import { MediaService, MessageProto } from 'whalibmob'
+
+// o import default é o objeto de exportação inteiro, se preferir
+import wa from 'whalibmob'
+
+// requires profundos também funcionam — o ESM quer a extensão, o CommonJS não
+import { downloadMedia } from 'whalibmob/lib/MediaService.js'
+```
+
+> [!NOTE]
+> O `import { … }` falhava para todos os nomes menos cinco. O Node lê os nomes
+> de um módulo CommonJS estaticamente, e o leitor desiste na primeira
+> propriedade de `module.exports` cujo valor não é um identificador simples —
+> uma arrow function inline na quinta entrada custava os outros 116. O
+> `require()` e o import default não eram afetados, e por isso ninguém
+> percebeu. Agora tudo recebe um nome antes de ser exportado, e um teste falha
+> se isso deixar de ser verdade.
+
 ## Conectando a Conta
 
 ### Registrar um Novo Número
@@ -3696,6 +3772,56 @@ const bytes = await client.downloadMedia(d, { verify: true })
 O `downloadMedia` lança erro com o motivo em vez de retornar vazio: uma mensagem
 sem mídia, sem localização no CDN, com um tipo não suportado, ou um arquivo que não
 corresponde à mensagem — todos dizem isso.
+
+### Visualização Única e Mensagens Temporárias
+
+Algumas mensagens chegam dentro de um envelope. Uma foto enviada como
+**visualização única** é um `ImageMessage` comum embrulhado em um
+`ViewOnceMessage`; a mesma foto em uma conversa com **mensagens temporárias**
+ligadas é um embrulhado em um `EphemeralMessage`. Nada muda na foto — o envelope
+apenas registra como ela foi enviada.
+
+O decodificador abre esses envelopes, então nada de especial é preciso do seu
+lado. O `msg.decoded` é a foto, e o `downloadMedia()` funciona nela exatamente
+como em qualquer outra:
+
+```js
+client.on('message', async (msg) => {
+  const d = msg.decoded
+  if (!d || !d.mediaKey) return
+
+  if (d.viewOnce)  console.log('enviada como visualização única')
+  if (d.ephemeral) console.log('de uma conversa temporária')
+
+  const bytes = await client.downloadMedia(d)   // a mesma chamada, embrulhada ou não
+})
+```
+
+Três marcadores dizem como a mensagem foi enviada, e ficam ausentes caso contrário:
+
+| marcador | significado |
+|---|---|
+| `d.viewOnce` | enviada como visualização única — `ViewOnceMessage`, `ViewOnceMessageV2` ou a extensão V2 que um áudio de voz usa |
+| `d.ephemeral` | de uma conversa com mensagens temporárias ligadas |
+| `d.edited` | o novo texto de uma mensagem editada — o conteúdo é a mensagem `protocol` que o carrega |
+
+Eles se acumulam. Uma foto de visualização única em uma conversa temporária carrega os dois:
+
+```js
+if (d.viewOnce && d.ephemeral) { /* … */ }
+```
+
+Documentos enviados com legenda (`DocumentWithCaptionMessage`) são desembrulhados
+da mesma forma e decodificam como um `document` comum, sem marcador próprio.
+
+> [!NOTE]
+> Abrir o envelope é o que torna essa mídia alcançável. Antes disso, uma foto de
+> visualização única decodificava como `{ type: 'unknown' }` — sem `mediaKey`,
+> sem `directPath` — e não havia nada para o `downloadMedia()` buscar.
+
+Nada disso muda quando a mensagem veio pela sincronização de histórico, ou quando
+é uma das suas devolvida a este dispositivo a partir de outro: esses envelopes se
+aninham, e são desembrulhados até a mensagem lá dentro.
 
 ### Quando o Arquivo Sumiu do CDN
 
