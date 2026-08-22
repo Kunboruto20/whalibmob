@@ -171,5 +171,130 @@ module.exports = {
   decryptHistoryBlob,
   deriveHistoryKeys,
   HistorySyncType,
-  HistorySyncTypeName
+  HistorySyncTypeName,
+
+  // ─── Namespaces ────────────────────────────────────────────────────────────
+  //
+  // Everything above is a name picked out of a module by hand — eighty-two of
+  // the four hundred and ninety-five the library actually has. What follows is
+  // the rest: every module, whole, under a name of its own. Nothing above is
+  // renamed, moved or removed by any of it.
+  //
+  // The rule is that a namespace is named after the module it comes from, and a
+  // directory in lib/ becomes one namespace rather than several. Two names
+  // could not be had and say so where they appear: DeviceManager, because the
+  // flat export of that name is the class rather than the module, and Proto,
+  // because lib/proto.js and lib/proto/ would both want it.
+  //
+  // Most are the very object a deep require returns —
+  // wa.MediaService === require('whalibmob/lib/MediaService') — which is worth
+  // knowing because deep requires work and always have: the package declares no
+  // `exports` map, so nothing here is the only way in. The four built with
+  // Object.assign (Signal, AppState, Image, Signal.libsignal) are new objects
+  // holding the same functions, gathered from the several modules of a
+  // directory. Nothing is copied out of a module and nothing is written back
+  // into one.
+  //
+  // test/public-surface.test.js walks lib/ and fails if any module has an
+  // export that none of this reaches, so the coverage is checked rather than
+  // claimed.
+
+  // Registration, sessions and the device a session presents itself as
+  Client:           require('./lib/Client'),
+  Registration:     require('./lib/Registration'),
+  Store:            require('./lib/Store'),
+  WebStore:         require('./lib/WebStore'),
+  DeviceConfig:     require('./lib/DeviceConfig'),
+  // The flat DeviceManager is the class. This is the module it comes from, so
+  // the JID helpers beside it — makeDeviceJid, phoneFromJid, jidStrToObj —
+  // have somewhere to be reached from.
+  Devices:          require('./lib/DeviceManager'),
+  PlayStore:        require('./lib/PlayStore'),
+  PlayStoreDevice:  require('./lib/playstore-device'),
+  AndroidApk:       require('./lib/AndroidApk'),
+  Attestation:      require('./lib/Attestation'),
+  Tokens:           require('./lib/tokens'),
+  PushClient:       require('./lib/PushClient'),
+  Fcm:              require('./lib/fcm'),
+  FcmMcs:           require('./lib/fcm-mcs'),
+
+  // Linking to an account that already exists
+  PairingCode:      require('./lib/PairingCode'),
+  CompanionPairing: require('./lib/CompanionPairing'),
+  QrPairing:        require('./lib/QrPairing'),
+  WebVersion:       require('./lib/WebVersion'),
+  WebProto:         require('./lib/webproto'),
+
+  // The wire
+  BinaryNode:           require('./lib/BinaryNode'),
+  Noise:                require('./lib/noise'),
+  WebSocketStream:      require('./lib/WebSocketStream'),
+  Socks:                require('./lib/socks'),
+  OfflineNodeProcessor: require('./lib/OfflineNodeProcessor'),
+  Constants:            require('./lib/constants'),
+  Logger:               require('./lib/logger'),
+  // lib/proto.js — the handshake payloads. The message protobufs are the
+  // directory of the same name, and are MessageProto below.
+  Proto:                require('./lib/proto.js'),
+
+  // Messages and media
+  MessageProto:   require('./lib/proto/MessageProto'),
+  Messages: {
+    MessageSender:  require('./lib/messages/MessageSender'),
+    MediaRetry:     require('./lib/messages/MediaRetry'),
+    ReportingToken: require('./lib/messages/ReportingToken'),
+    TcTokenStore:   require('./lib/messages/TcTokenStore')
+  },
+  MediaService:     require('./lib/MediaService'),
+  MediaThumbnail:   require('./lib/MediaThumbnail'),
+  GroupParticipant: require('./lib/GroupParticipant'),
+
+  // The decoders behind the inline thumbnails, and the encoder that makes them.
+  // lib/image/index.js is the whole story for most callers; the per-format
+  // modules are here for the rest.
+  Image: Object.assign({}, require('./lib/image'), {
+    Jpeg:        require('./lib/image/Jpeg'),
+    JpegEncoder: require('./lib/image/JpegEncoder'),
+    Png:         require('./lib/image/Png'),
+    Gif:         require('./lib/image/Gif'),
+    Bmp:         require('./lib/image/Bmp')
+  }),
+
+  HistorySyncHandler: require('./lib/HistorySyncHandler'),
+  AuthUtils:          require('./lib/auth-utils'),
+  Argo:               require('./lib/argo/ArgoDecoder'),
+  WAUSync:            require('./lib/WAUSync'),
+
+  // Signal — lib/signal/. SignalProtocol.js, SignalStore.js and SenderKey.js
+  // have no name in common, so the three are one namespace. The two vendored
+  // libraries keep theirs, being libraries.
+  Signal: Object.assign({},
+    require('./lib/signal/SignalProtocol'),
+    require('./lib/signal/SignalStore'),
+    require('./lib/signal/SenderKey'),
+    {
+      WaSignalGroup: require('./lib/signal/WaSignalGroup'),
+      // libsignal's own barrel leaves six of its modules out. They are added
+      // to a copy of it here rather than written into it, so
+      // require('whalibmob/lib/signal/libsignal') stays exactly what it was.
+      libsignal: Object.assign({}, require('./lib/signal/libsignal'), {
+        BaseKeyType: require('./lib/signal/libsignal/base_key_type'),
+        ChainType:   require('./lib/signal/libsignal/chain_type'),
+        protobufs:   require('./lib/signal/libsignal/protobufs'),
+        queueJob:    require('./lib/signal/libsignal/queue_job'),
+        FingerprintGenerator:
+          require('./lib/signal/libsignal/numeric_fingerprint').FingerprintGenerator,
+        textsecure:
+          require('./lib/signal/libsignal/WhisperTextProtocol').textsecure
+      })
+    }),
+
+  // App state — lib/appstate/. AppStateStore.js is spread because the flat
+  // AppStateStore is its class; the other three are whole.
+  AppState: Object.assign({}, require('./lib/appstate/AppStateStore'), {
+    AppStateSync: require('./lib/appstate/AppStateSync'),
+    LTHash:       require('./lib/appstate/LTHash'),
+    Mutations:    require('./lib/appstate/Mutations'),
+    SyncdProto:   require('./lib/appstate/SyncdProto')
+  })
 };
