@@ -1711,6 +1711,32 @@ biblioteca exportava antes continua exportado, segurando o que segurava.
 > protobufs de mensagem, o media retry. Além disso são `any`, que é o que os
 > internos sempre foram no `index.d.ts`. São alcançáveis, não descritos.
 
+### Módulos ES
+
+O pacote é CommonJS, e todos os seus nomes podem ser importados de um módulo ES
+— um bot escrito com `"type": "module"` não precisa de nenhuma ginástica de
+interoperabilidade:
+
+```js
+import { WhalibmobClient, createNewStore, requestSmsCode } from 'whalibmob'
+import { MediaService, MessageProto } from 'whalibmob'
+
+// o import default é o objeto de exportação inteiro, se preferir
+import wa from 'whalibmob'
+
+// requires profundos também funcionam — o ESM quer a extensão, o CommonJS não
+import { downloadMedia } from 'whalibmob/lib/MediaService.js'
+```
+
+> [!NOTE]
+> O `import { … }` falhava para todos os nomes menos cinco. O Node lê os nomes
+> de um módulo CommonJS estaticamente, e o leitor desiste na primeira
+> propriedade de `module.exports` cujo valor não é um identificador simples —
+> uma arrow function inline na quinta entrada custava os outros 116. O
+> `require()` e o import default não eram afetados, e por isso ninguém
+> percebeu. Agora tudo recebe um nome antes de ser exportado, e um teste falha
+> se isso deixar de ser verdade.
+
 ## Conectando a Conta
 
 ### Registrar um Novo Número
