@@ -1664,6 +1664,57 @@ Everything the CLI does is available as a Node.js library. The sections below
 cover connecting an account, sending and receiving every message type, groups,
 communities, channels, presence, privacy, history sync, and device emulation.
 
+### What the package exports
+
+Two layers. The first is the flat one the rest of this document uses — the
+eighty-two names the common paths are built from:
+
+```js
+const { WhalibmobClient, createNewStore, requestSmsCode } = require('whalibmob')
+```
+
+The second is everything else. The library is ninety-five modules and close to
+five hundred exported names, and the flat layer picks out under a fifth of
+them. The rest are reachable as **namespaces**, each one a module of `lib/`
+under a name of its own:
+
+```js
+const wa = require('whalibmob')
+
+wa.MediaService.getMediaKeyName('ptt')        // → 'WhatsApp Audio Keys'
+wa.MessageProto.decodeMessageContainer(buf)   // raw bytes → a decoded message
+wa.Messages.MediaRetry.mediaRetryKey(key)     // the retry-receipt key
+wa.Signal.libsignal.SessionCipher             // the vendored libsignal
+wa.AppState.SyncdProto                        // app-state mutation records
+wa.Image.Jpeg                                 // the JPEG header reader
+```
+
+A namespace is named after the module it comes from, and a directory in `lib/`
+becomes one namespace rather than several — so `Signal` is all of
+`lib/signal/`, `AppState` all of `lib/appstate/`, `Messages` all of
+`lib/messages/`. Two names could not be had: **`Devices`** is
+`lib/DeviceManager.js`, because the flat `DeviceManager` is the class rather
+than the module, and **`Proto`** is `lib/proto.js` while the message protobufs
+in `lib/proto/` are **`MessageProto`**.
+
+Deep requires work as well, and always have — the package declares no `exports`
+map, so nothing is sealed off:
+
+```js
+const MediaService = require('whalibmob/lib/MediaService')
+// the same object, by a longer name
+require('whalibmob').MediaService === MediaService   // true
+```
+
+Adding the namespaces renamed and removed nothing: every name the library
+exported before is still exported, still holding what it held.
+
+> [!NOTE]
+> The namespaces are typed as far as the rest of this document goes — media,
+> the message protobufs, media retry. Past that they are `any`, which is what
+> the internals have always been in `index.d.ts`. They are reachable, not
+> described.
+
 ## Connecting Account
 
 ### Register a New Number

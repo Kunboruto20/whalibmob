@@ -1661,6 +1661,56 @@ Tudo o que a CLI faz está disponível como biblioteca Node.js. As seções abai
 cobrem a conexão de uma conta, o envio e o recebimento de todos os tipos de mensagem, grupos,
 comunidades, canais, presença, privacidade, sincronização de histórico e emulação de dispositivo.
 
+### O que o pacote exporta
+
+Duas camadas. A primeira é a camada plana que o resto deste documento usa — os
+oitenta e dois nomes dos quais os caminhos comuns são feitos:
+
+```js
+const { WhalibmobClient, createNewStore, requestSmsCode } = require('whalibmob')
+```
+
+A segunda é todo o resto. A biblioteca tem noventa e cinco módulos e perto de
+quinhentos nomes exportados, e a camada plana escolhe menos de um quinto deles.
+O restante é alcançável como **namespaces**, cada um um módulo de `lib/` sob um
+nome próprio:
+
+```js
+const wa = require('whalibmob')
+
+wa.MediaService.getMediaKeyName('ptt')        // → 'WhatsApp Audio Keys'
+wa.MessageProto.decodeMessageContainer(buf)   // bytes crus → mensagem decodificada
+wa.Messages.MediaRetry.mediaRetryKey(key)     // a chave do recibo de retry
+wa.Signal.libsignal.SessionCipher             // a libsignal embutida
+wa.AppState.SyncdProto                        // registros de mutação do app state
+wa.Image.Jpeg                                 // o leitor de cabeçalho JPEG
+```
+
+Um namespace leva o nome do módulo de onde vem, e um diretório em `lib/` vira um
+único namespace em vez de vários — então `Signal` é todo o `lib/signal/`,
+`AppState` todo o `lib/appstate/`, `Messages` todo o `lib/messages/`. Dois nomes
+não puderam ser usados: **`Devices`** é o `lib/DeviceManager.js`, porque o
+`DeviceManager` plano é a classe e não o módulo, e **`Proto`** é o
+`lib/proto.js` enquanto os protobufs de mensagem em `lib/proto/` são o
+**`MessageProto`**.
+
+Requires profundos também funcionam, e sempre funcionaram — o pacote não declara
+um mapa `exports`, então nada fica trancado:
+
+```js
+const MediaService = require('whalibmob/lib/MediaService')
+// o mesmo objeto, por um nome mais longo
+require('whalibmob').MediaService === MediaService   // true
+```
+
+Acrescentar os namespaces não renomeou nem removeu nada: todo nome que a
+biblioteca exportava antes continua exportado, segurando o que segurava.
+
+> [!NOTE]
+> Os namespaces são tipados até onde o resto deste documento vai — mídia, os
+> protobufs de mensagem, o media retry. Além disso são `any`, que é o que os
+> internos sempre foram no `index.d.ts`. São alcançáveis, não descritos.
+
 ## Conectando a Conta
 
 ### Registrar um Novo Número
