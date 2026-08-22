@@ -229,6 +229,15 @@ export interface PollSendResult extends SendResult {
 
 export interface DecodedBase {
   type: string;
+  /**
+   * The message arrived inside a view-once envelope. The content is decoded
+   * normally — media included — this only records how it was sent.
+   */
+  viewOnce?: boolean;
+  /** The message belongs to a chat with disappearing messages turned on. */
+  ephemeral?: boolean;
+  /** The message is the new text of an edit. */
+  edited?: boolean;
   [key: string]: any;
 }
 

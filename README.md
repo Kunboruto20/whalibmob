@@ -3700,6 +3700,55 @@ const bytes = await client.downloadMedia(d, { verify: true })
 with no media, no CDN location, an unsupported type, or a file that does not
 match the message all say so.
 
+### View-once and disappearing messages
+
+Some messages arrive inside an envelope. A photo sent as **view-once** is an
+ordinary `ImageMessage` wrapped in a `ViewOnceMessage`; the same photo in a
+chat with **disappearing messages** turned on is one wrapped in an
+`EphemeralMessage`. Nothing about the photo changes — the envelope only records
+how it was sent.
+
+The decoder opens them, so nothing special is needed on your side. `msg.decoded`
+is the photo, and `downloadMedia()` works on it exactly as it does on any other:
+
+```js
+client.on('message', async (msg) => {
+  const d = msg.decoded
+  if (!d || !d.mediaKey) return
+
+  if (d.viewOnce)  console.log('sent as view-once')
+  if (d.ephemeral) console.log('from a disappearing chat')
+
+  const bytes = await client.downloadMedia(d)   // same call, wrapped or not
+})
+```
+
+Three flags say how the message was sent, and are absent otherwise:
+
+| flag | meaning |
+|---|---|
+| `d.viewOnce` | sent as view-once — `ViewOnceMessage`, `ViewOnceMessageV2` or the V2 extension a voice note uses |
+| `d.ephemeral` | from a chat with disappearing messages on |
+| `d.edited` | the new text of an edited message — the payload is the `protocol` message carrying it |
+
+They stack. A view-once photo in a disappearing chat carries both:
+
+```js
+if (d.viewOnce && d.ephemeral) { /* … */ }
+```
+
+Documents sent with a caption (`DocumentWithCaptionMessage`) are unwrapped the
+same way and decode as a plain `document`, with no flag of their own.
+
+> [!NOTE]
+> Opening the envelope is what makes this media reachable at all. Before it, a
+> view-once photo decoded as `{ type: 'unknown' }` — no `mediaKey`, no
+> `directPath` — and there was nothing for `downloadMedia()` to fetch.
+
+Nothing here changes when the message came through history sync, or when it is
+one of your own echoed back to this device from another: those envelopes nest,
+and are unwrapped down to the message inside.
+
 ### When the file is gone from the CDN
 
 Media is not carried inside the message — the message carries a URL, a hash and
