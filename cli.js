@@ -1385,7 +1385,7 @@ async function handleLine(line) {
         if (!ph) {
           fail('usage: /pair <phone> [8-char-code]');
           out('  the phone number is the account you want to link to, digits only');
-          out('  example: /pair 40756469325');
+          out('  example: /pair 919634847671');
           break;
         }
         if (_client && _client.connected) { fail('already connected — /disconnect first'); break; }
@@ -1402,7 +1402,7 @@ async function handleLine(line) {
           out('  links the number as a companion by QR instead of a pairing code');
           out('  a QR is drawn in the terminal — scan it from the phone that owns');
           out('  the number:  WhatsApp → Linked Devices → Link a device');
-          out('  example: /qrcode 40756469325');
+          out('  example: /qrcode 919634847671');
           break;
         }
         if (_client && _client.connected) { fail('already connected — /disconnect first'); break; }
