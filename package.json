@@ -1,0 +1,86 @@
+{
+  "name": "whalibmob",
+  "version": "5.24.0",
+  "description": "Node.js library for WhatsApp — register a number over SMS, or link as a companion by QR. Signal E2E encryption, media, groups, channels.",
+  "author": "Kunboruto20",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "bin": {
+    "wa": "./cli.js"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "cli.js",
+    "lib/**/*.js",
+    "tools/**/*.js",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test",
+    "test:types": "tsc --noEmit --strict --skipLibCheck index.d.ts && tsc --noEmit --strict --skipLibCheck --types node types/usage-check.ts",
+    "test:all": "npm test && npm run test:types"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "whatsapp",
+    "whatsapp-api",
+    "whatsapp-bot",
+    "whatsapp-client",
+    "whatsapp-web",
+    "sms-registration",
+    "pairing-code",
+    "qr-code",
+    "companion",
+    "multi-device",
+    "signal-protocol",
+    "e2e",
+    "e2ee",
+    "encryption",
+    "mobile",
+    "android",
+    "ios",
+    "messaging",
+    "chatbot",
+    "automation",
+    "whatsapp-mobile", 
+    "media",
+    "groups",
+    "channels"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kunboruto20/whalibmob.git"
+  },
+  "homepage": "https://github.com/Kunboruto20/whalibmob#readme",
+  "bugs": {
+    "url": "https://github.com/Kunboruto20/whalibmob/issues"
+  },
+  "dependencies": {
+    "@cacheable/node-cache": "3.1.1",
+    "@noble/hashes": "^1.7.2",
+    "async-mutex": "^0.5.0",
+    "axios": "^1.7.2",
+    "curve25519-js": "^0.0.4",
+    "dotenv": "^16.4.5",
+    "pino": "^9.0.0",
+    "protobufjs": "^6.11.4",
+    "uuid": "^11.1.0",
+    "ws": "^8.21.1"
+  },
+  "optionalDependencies": {
+    "jimp": "^1.6.0",
+    "socks": "^2.8.9",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
+}
