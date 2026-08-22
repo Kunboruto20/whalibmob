@@ -2881,7 +2881,7 @@ client.on('version_update', ({ from, to, source }) => {
   console.log('announcing', to, 'instead of', from, '—', source)
 })
 
-await client.init('40756469325')
+await client.init('919634847671')
 ```
 
 **As reconexões também estão cobertas.** A verificação roda a partir do passo de conexão do socket
@@ -2920,8 +2920,8 @@ Defina `{ refreshVersion: false }` no cliente para desligar isso.
 A ferramenta manual continua funcionando nas duas plataformas:
 
 ```bash
-wa refresh-version 40756469325                    # current build for the platform
-wa refresh-version 40756469325 --version 2.25.1.2 # or one you name
+wa refresh-version 919634847671                    # current build for the platform
+wa refresh-version 919634847671 --version 2.25.1.2 # or one you name
 ```
 
 As sessões companion nunca tiveram esse problema: o `connectWeb()` já lê a
