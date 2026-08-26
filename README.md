@@ -3575,6 +3575,14 @@ whalibmob implements the full lifecycle to prevent this:
 
 Token storage uses the **LID JID** of the contact (e.g. `112345678901234@lid`) as the key — never the phone-number JID — matching WhatsApp's internal convention.
 
+**cstoken — the companion fallback.** When there is no `<tctoken>` for a recipient, the genuine client attaches a `<cstoken>` instead. Unlike a tctoken it is not granted per contact; it is computed locally:
+
+```
+cstoken = HMAC-SHA256(nctSalt, recipient-LID)
+```
+
+The `nctSalt` is an account-wide secret the server distributes over app state, so only a **companion (QR / pairing-code) session** ever holds one — a primary (SMS) session has none and sends no cstoken, exactly as the real primary does until it has minted its own. When a companion session receives the salt it fires a `nct_salt` event and persists it; from then on, any first DM without a tctoken carries a `<cstoken>` derived for that recipient's LID. Like the rest of this section it is fully automatic — there is nothing to call.
+
 <a id="account-restriction"></a>
 
 ### When 463 Means the Account Is Restricted
