@@ -665,7 +665,7 @@ export interface WhalibmobEvents {
   privacy_settings: (p: { changes: any; settings: PrivacySettings }) => void;
 
   app_state_sync: (r: AppStateSyncResult) => void;
-  app_state_mutation: (m: { collection: string; index: any; action: any; removed: boolean }) => void;
+  app_state_mutation: (m: { collection: string; index: any; action: any; removed: boolean; version?: number }) => void;
   app_state_key_missing: (m: { collection: string; keyId: string }) => void;
   app_state_keys: (m: { keys: any[] }) => void;
 
@@ -821,6 +821,15 @@ export declare class WhalibmobClient extends EventEmitter {
   syncAppState(names?: string[] | null, opts?: { snapshot?: boolean }): Promise<AppStateSyncResult>;
   /** Whether an app-state key is available — `false` on an SMS session with no companion. */
   canSyncAppState(): boolean;
+  /**
+   * Ask the primary device for app-state keys it never shared.
+   *
+   * Sent automatically when a sync runs into a key it does not have, so calling
+   * it is rarely necessary. Ids may be base64 or hex. The same id is not asked
+   * for twice within 24 hours; resolves to `null` when everything passed was
+   * held down, or when there is no connection to send it over.
+   */
+  requestAppStateKeys(keyIds: string[]): Promise<string | null>;
 
   // ─── Account restriction ─────────────────────────────────────────────────
   fetchReachoutTimelock(): Promise<ReachoutTimelockState>;
