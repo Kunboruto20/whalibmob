@@ -688,6 +688,8 @@ export interface WhalibmobEvents {
   /** The server refused the client itself — `405` means the announced version is not accepted. */
   client_rejected: (r: { reason: string; location?: string; message?: string }) => void;
   version_update: (v: { from: string; to: string; source: string }) => void;
+  /** A companion session received the NCT salt (over app state) that cstoken is derived from. */
+  nct_salt: (s: { bytes: number }) => void;
   apk_material_stale: (m: { materialVersion: string; liveVersion: string; hint?: string }) => void;
   number_corrected: (n: { from: string; to: string }) => void;
 
