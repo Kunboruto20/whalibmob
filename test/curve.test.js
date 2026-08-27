@@ -176,3 +176,36 @@ test('no module imports curve25519-js except lib/curve.js', () => {
     'curve25519-js is 19x slower on the hot path; lib/curve.js is the one place ' +
     'that may reach for it, and only for the XEdDSA signatures Node cannot do');
 });
+
+test('the JavaScript fallback produces the same bytes as the native path', () => {
+  // A Node built without X25519 falls back, and that path had nothing
+  // exercising it — the one branch where a bug would only ever appear on
+  // someone else's machine. Hide the primitive, reload the module, compare.
+  const seed = crypto.randomBytes(32);
+  const peer = curveJs.generateKeyPair(crypto.randomBytes(32));
+  const nativeKp = curve.generateKeyPair(seed);
+  const nativeSh = curve.sharedKey(nativeKp.private, b(peer.public));
+
+  const real = crypto.diffieHellman;
+  delete crypto.diffieHellman;
+  for (const k of Object.keys(require.cache)) {
+    if (/lib[\\/]curve\.js$/.test(k)) delete require.cache[k];
+  }
+  try {
+    const fallback = require('../lib/curve');
+    assert.equal(fallback.NATIVE, false, 'the fallback is what is running');
+
+    const kp = fallback.generateKeyPair(seed);
+    assert.equal(kp.private.toString('hex'), nativeKp.private.toString('hex'));
+    assert.equal(kp.public.toString('hex'), nativeKp.public.toString('hex'));
+    assert.equal(
+      fallback.sharedKey(kp.private, b(peer.public)).toString('hex'),
+      nativeSh.toString('hex')
+    );
+  } finally {
+    crypto.diffieHellman = real;
+    for (const k of Object.keys(require.cache)) {
+      if (/lib[\\/]curve\.js$/.test(k)) delete require.cache[k];
+    }
+  }
+});
