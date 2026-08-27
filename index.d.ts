@@ -844,6 +844,17 @@ export declare class WhalibmobClient extends EventEmitter {
   setTwoStep(pin: string | number, email?: string | null): Promise<{ ok: true; raw: any }>;
   /** Turn two-step verification off. */
   removeTwoStep(): Promise<{ ok: true; raw: any }>;
+  /**
+   * Ask the server the same question several ways and report each answer.
+   *
+   * One error code says little on its own — comparing ours against a namespace
+   * that cannot exist is what tells "not allowed" apart from "not a thing".
+   * Every probe is a read; nothing changes.
+   */
+  probeTwoStep(): Promise<Array<{
+    name: string; xmlns: string; child: string | null;
+    code: string | null; text: string | null; ok: boolean;
+  }>>;
 
   changePrivacySetting(type: PrivacyType, value: PrivacyValue, excluded?: Jid[]): Promise<PrivacySettings>;
   queryStatusPrivacy(): Promise<StatusPrivacyEntry[]>;

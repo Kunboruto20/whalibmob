@@ -194,3 +194,59 @@ test('an SMS session and a companion send the identical stanza', async () => {
   assert.equal(await stanza('mobile'), await stanza('web'),
     'the setting belongs to the account, not to the device');
 });
+
+// ─── the probe: telling "not allowed" apart from "not a thing" ───────────────
+
+test('probeTwoStep asks every variant as a read', async () => {
+  const asked = [];
+  const c = Object.assign(Object.create(WhalibmobClient.prototype), {
+    _connected: true, _socket: {}, _genMsgId: () => 'IQ1',
+    _sendIq: async (n) => { asked.push(n); return okReply(); }
+  });
+
+  const rows = await c.probeTwoStep();
+  assert.equal(rows.length, 6);
+  assert.equal(asked.length, 6);
+  for (const n of asked) {
+    assert.equal(n.attrs.type, 'get', 'a probe must never write');
+  }
+  // the baselines that make the comparison mean anything
+  assert.ok(rows.some(r => r.xmlns === 'urn:xmpp:whatsapp:nonexistent'),
+    'a namespace that cannot exist');
+  assert.ok(rows.some(r => r.xmlns === 'privacy'),
+    'and one that certainly does');
+});
+
+test('the probe reports each answer separately', async () => {
+  const byNs = {
+    'urn:xmpp:whatsapp:account':     errorReply('403', 'forbidden'),
+    'urn:xmpp:whatsapp:nonexistent': errorReply('400', 'bad-request'),
+    'privacy':                       okReply()
+  };
+  const c = Object.assign(Object.create(WhalibmobClient.prototype), {
+    _connected: true, _socket: {}, _genMsgId: () => 'IQ1',
+    _sendIq: async (n) => byNs[n.attrs.xmlns]
+  });
+
+  const rows = await c.probeTwoStep();
+  const ours     = rows.find(r => r.name === 'ours');
+  const nonsense = rows.find(r => r.name === 'nonsense ns');
+  const known    = rows.find(r => r.name === 'known-good (privacy)');
+
+  assert.equal(ours.code, '403');
+  assert.equal(ours.text, 'forbidden');
+  assert.equal(nonsense.code, '400', 'a different code is the whole point');
+  assert.equal(known.ok, true, 'and the probe itself works');
+});
+
+test('the probe survives a timeout on one variant', async () => {
+  let n = 0;
+  const c = Object.assign(Object.create(WhalibmobClient.prototype), {
+    _connected: true, _socket: {}, _genMsgId: () => 'IQ1',
+    _sendIq: async () => (++n === 2 ? null : okReply())
+  });
+  const rows = await c.probeTwoStep();
+  assert.equal(rows.length, 6, 'one bad answer does not stop the rest');
+  assert.equal(rows[1].ok, false);
+  assert.match(rows[1].text, /timed out/);
+});

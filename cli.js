@@ -579,7 +579,7 @@ const HELP = `
                                                values: all contacts contact_blacklist
                                                        contact_allowlist none known
                                                        match_last_seen on_standard off
-    /2fa     [set <pin> [email] | remove]    two-step verification — show, set or clear
+    /2fa     [set <pin> [email]|remove|probe] two-step verification — show, set or clear
                                                the PIN is what WhatsApp asks for at the
                                                next registration of this number; the wire
                                                format for the writes is inferred, so the
@@ -1807,6 +1807,39 @@ async function handleLine(line) {
           break;
         }
 
+        if (action === 'probe') {
+          out('  asking the same question six ways — every one a read, nothing changes');
+          const rows = await _client.probeTwoStep();
+          out('');
+          out('    ' + 'what'.padEnd(24) + 'answer');
+          for (const r of rows) {
+            const answer = r.ok ? 'OK (result)'
+                         : r.code ? r.code + (r.text ? ' ' + r.text : '')
+                         : (r.text || 'no answer');
+            out('    ' + r.name.padEnd(24) + answer);
+          }
+          const ours     = rows.find(r => r.name === 'ours');
+          const nonsense = rows.find(r => r.name === 'nonsense ns');
+          const known    = rows.find(r => r.name === 'known-good (privacy)');
+          out('');
+          if (known && !known.ok) {
+            out('  the known-good probe failed too, so this tells us nothing about');
+            out('  two-step — something is wrong with the connection or the account.');
+          } else if (ours && nonsense && ours.code && nonsense.code) {
+            if (ours.code === nonsense.code) {
+              out('  our namespace is answered exactly like one that does not exist,');
+              out('  so ' + ours.code + ' is this server\'s word for "no such thing" —');
+              out('  the format is wrong, not the permission.');
+            } else {
+              out('  a namespace that does not exist gets ' + nonsense.code + ', ours gets ' +
+                  ours.code + '.');
+              out('  The server recognises what we sent and is refusing it — the format');
+              out('  is right and this device or account is not allowed to do it.');
+            }
+          }
+          break;
+        }
+
         if (action === 'remove') {
           try {
             const r = await _client.removeTwoStep();
@@ -1822,6 +1855,7 @@ async function handleLine(line) {
         fail('usage: /2fa                          show the current state');
         out('       /2fa set <pin> [email]       turn it on, or change the PIN');
         out('       /2fa remove                  turn it off');
+        out('       /2fa probe                   ask six ways, compare the answers');
         out('');
         out('  The wire format for the two writes is inferred rather than copied');
         out('  from a reference client — no open-source implementation has it.');
