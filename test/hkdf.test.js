@@ -122,3 +122,31 @@ test('no module imports @noble/hashes/hkdf except lib/hkdf.js', () => {
     'lib/hkdf.js is the one place that may reach for the JavaScript ' +
     'implementation, and only as a fallback for a Node without hkdfSync');
 });
+
+test('the JavaScript fallback produces the same bytes as the native path', () => {
+  const ikm  = crypto.randomBytes(32);
+  const salt = crypto.randomBytes(32);
+  const info = Buffer.from('x');
+  const native = hkdfSha256(ikm, salt, info, 112);
+
+  const real = crypto.hkdfSync;
+  delete crypto.hkdfSync;
+  for (const k of Object.keys(require.cache)) {
+    if (/lib[\\/]hkdf\.js$/.test(k)) delete require.cache[k];
+  }
+  try {
+    const fallback = require('../lib/hkdf');
+    assert.equal(fallback.NATIVE, false, 'the fallback is what is running');
+    assert.equal(
+      fallback.hkdfSha256(ikm, salt, info, 112).toString('hex'),
+      native.toString('hex')
+    );
+    assert.ok(Buffer.isBuffer(fallback.hkdfSha256(ikm, salt, info, 32)),
+      'and still a Buffer, not a Uint8Array');
+  } finally {
+    crypto.hkdfSync = real;
+    for (const k of Object.keys(require.cache)) {
+      if (/lib[\\/]hkdf\.js$/.test(k)) delete require.cache[k];
+    }
+  }
+});
