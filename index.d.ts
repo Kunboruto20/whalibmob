@@ -820,6 +820,31 @@ export declare class WhalibmobClient extends EventEmitter {
 
   // ─── Privacy ─────────────────────────────────────────────────────────────
   queryPrivacySettings(opts?: { force?: boolean }): Promise<PrivacySettings>;
+
+  // ─── Two-step verification ───────────────────────────────────────────────
+  //
+  // The write path's wire format is INFERRED, not verified against a reference
+  // client — no open-source implementation has it. A PIN that lands wrong costs
+  // the number seven days at its next registration. Every call reports the
+  // server's own reply so you can tell what actually happened.
+
+  /** Read whether two-step verification is on. Reports errors instead of throwing. */
+  queryTwoStep(): Promise<{
+    supported: boolean;
+    enabled: boolean | null;
+    email: string | null;
+    error: string | null;
+    raw: any;
+  }>;
+  /**
+   * Turn two-step verification on, or change the PIN already set.
+   * @param pin   exactly six digits
+   * @param email optional recovery address; omit to leave it alone
+   */
+  setTwoStep(pin: string | number, email?: string | null): Promise<{ ok: true; raw: any }>;
+  /** Turn two-step verification off. */
+  removeTwoStep(): Promise<{ ok: true; raw: any }>;
+
   changePrivacySetting(type: PrivacyType, value: PrivacyValue, excluded?: Jid[]): Promise<PrivacySettings>;
   queryStatusPrivacy(): Promise<StatusPrivacyEntry[]>;
   blockContact(jid: Jid): Promise<Jid[]>;

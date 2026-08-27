@@ -579,6 +579,11 @@ const HELP = `
                                                values: all contacts contact_blacklist
                                                        contact_allowlist none known
                                                        match_last_seen on_standard off
+    /2fa     [set <pin> [email] | remove]    two-step verification — show, set or clear
+                                               the PIN is what WhatsApp asks for at the
+                                               next registration of this number; the wire
+                                               format for the writes is inferred, so the
+                                               server's own reply is printed back
 
   Contacts
     /whatsapp  <phone...>                    check which numbers have WhatsApp
@@ -976,6 +981,22 @@ function resolveLoginMethod(phone) {
   if (web && !mob) return 'pairing';
   if (!mob && !web) return null;
   return web.mtime >= mob.mtime ? 'pairing' : 'sms';
+}
+
+// A binary node, short enough for one terminal line. Used where the point is to
+// show what the server actually replied rather than to interpret it.
+function briefNode(node) {
+  if (!node) return '(nothing)';
+  try {
+    const attrs = Object.entries(node.attrs || {})
+      .map(([k, v]) => k + '=' + v).join(' ');
+    const kids = Array.isArray(node.content)
+      ? node.content.filter(Boolean).map(c => c.description || c.tag).join(',')
+      : (node.content ? '<' + node.content.length + ' bytes>' : '');
+    return '<' + (node.description || node.tag || '?') +
+           (attrs ? ' ' + attrs : '') + '>' +
+           (kids ? ' ' + kids : '');
+  } catch (_) { return '(unreadable)'; }
 }
 
 // Handlers for the two things a registration can stop and ask for.
@@ -1744,6 +1765,67 @@ async function handleLine(line) {
         }
         await _client.changePrivacySetting(type, value);
         out('privacy updated  ' + type + ' = ' + value);
+        break;
+      }
+
+      case '/2fa': {
+        requireConn();
+        const [, action, arg1, arg2] = p;
+
+        if (!action) {
+          const s = await _client.queryTwoStep();
+          out('  two-step verification');
+          if (!s.supported) {
+            out('    the server did not answer this query: ' + s.error);
+            out('    the wire format for this is inferred, not verified — see below');
+          } else {
+            out('    enabled   ' + (s.enabled === null ? '(unclear)' : s.enabled ? 'yes' : 'no'));
+            out('    email     ' + (s.email || '(none)'));
+          }
+          if (s.raw) out('    raw       ' + briefNode(s.raw));
+          break;
+        }
+
+        if (action === 'set') {
+          if (!arg1) {
+            fail('usage: /2fa set <six-digit-pin> [recovery-email]');
+            break;
+          }
+          // Said plainly, once, before anything goes out: this is the PIN
+          // WhatsApp will demand the next time this number is registered.
+          out('  setting the PIN WhatsApp will ask for at the next registration');
+          out('  of this number. A PIN you cannot produce costs the number seven days.');
+          try {
+            const r = await _client.setTwoStep(arg1, arg2 || null);
+            out('two-step verification set' + (arg2 ? '  recovery email: ' + arg2 : ''));
+            out('  server said: ' + briefNode(r.raw));
+            out('  run /2fa with no arguments to see whether it actually took.');
+          } catch (e) {
+            fail(e.message);
+            if (e.raw) out('  server said: ' + briefNode(e.raw));
+          }
+          break;
+        }
+
+        if (action === 'remove') {
+          try {
+            const r = await _client.removeTwoStep();
+            out('two-step verification removed');
+            out('  server said: ' + briefNode(r.raw));
+          } catch (e) {
+            fail(e.message);
+            if (e.raw) out('  server said: ' + briefNode(e.raw));
+          }
+          break;
+        }
+
+        fail('usage: /2fa                          show the current state');
+        out('       /2fa set <pin> [email]       turn it on, or change the PIN');
+        out('       /2fa remove                  turn it off');
+        out('');
+        out('  The wire format for the two writes is inferred rather than copied');
+        out('  from a reference client — no open-source implementation has it.');
+        out('  Whatever the server answers is printed verbatim so you can tell.');
         break;
       }
 
