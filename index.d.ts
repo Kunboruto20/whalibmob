@@ -123,6 +123,14 @@ export interface WhalibmobClientOptions {
   autoFixNumber?: boolean;
   /** Send read receipts for incoming messages. Default `true`. */
   autoRead?: boolean;
+  /**
+   * Refuse every incoming call. Default `true`.
+   *
+   * Turning it off does not answer calls — nothing here can — it leaves the
+   * refusal to you, which is the only way to let some calls ring and reject the
+   * rest with `rejectCall()`.
+   */
+  autoRejectCalls?: boolean;
   /** Refresh the announced build from the platform's store before every handshake. Default `true`. */
   refreshVersion?: boolean;
   /** `true` enables debug logging; an object is handed to `pino` as-is. */
@@ -227,8 +235,24 @@ export interface PollSendResult extends SendResult {
   messageSecret: Buffer;
 }
 
+/** What a message was a reply to, and who it mentioned. */
+export interface DecodedContextInfo {
+  /** Id of the quoted message. */
+  stanzaId?: string;
+  /** Who wrote the quoted message. */
+  participant?: Jid;
+  remoteJid?: Jid;
+  mentionedJid?: Jid[];
+  /** The quoted message, decoded the same way as any other. */
+  quotedMessage?: DecodedMessage;
+  /** The quoted message's raw protobuf bytes, for re-encoding it verbatim. */
+  quotedMessageRaw?: Buffer;
+}
+
 export interface DecodedBase {
   type: string;
+  /** Present when the message quoted another or carried mentions. */
+  contextInfo?: DecodedContextInfo;
   /**
    * The message arrived inside a view-once envelope. The content is decoded
    * normally — media included — this only records how it was sent.
@@ -632,7 +656,7 @@ export interface WhalibmobEvents {
   message: (msg: IncomingMessage) => void;
   receipt: (r: { type: string; id: string; from: Jid }) => void;
   presence: (p: { from: Jid; available: boolean }) => void;
-  call: (c: { from: Jid }) => void;
+  call: (c: { from: Jid; id: string | null; status: 'offer' | 'ringing' | 'terminate' | 'unknown'; node: any }) => void;
   notification: (node: any) => void;
   decrypt_error: (e: { id: string; from: Jid; participant?: Jid; err: Error }) => void;
   session_refresh: (e: { node: any }) => void;
@@ -830,6 +854,12 @@ export declare class WhalibmobClient extends EventEmitter {
    * held down, or when there is no connection to send it over.
    */
   requestAppStateKeys(keyIds: string[]): Promise<string | null>;
+
+  /**
+   * Refuse one incoming call. Only reachable when the client was built with
+   * `autoRejectCalls: false`; the id and caller come off the `call` event.
+   */
+  rejectCall(callId: string, from: Jid): boolean;
 
   // ─── Account restriction ─────────────────────────────────────────────────
   fetchReachoutTimelock(): Promise<ReachoutTimelockState>;
