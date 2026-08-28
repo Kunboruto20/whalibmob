@@ -969,7 +969,20 @@ export declare class WhalibmobClient extends EventEmitter {
   getLIDForPN(pn: Jid): Jid | null;
 
   // ─── Lower level ─────────────────────────────────────────────────────────
-  ensureTcTokenBeforeSend(tcJid: Jid, routingToJid: Jid): Promise<any>;
+  /**
+   * Put a trusted-contact token on file *before* the next message is built, so
+   * that message carries a `<tctoken>` like every later one.
+   *
+   * The token comes from the server, not from the contact: nothing here waits
+   * on them replying, on having you in their address book, or on a conversation
+   * existing. Called automatically by every send, so you rarely need it — reach
+   * for it to warm a token ahead of time, before a burst of first messages.
+   *
+   * Returns whether a usable token is on file now. `false` is not a failure to
+   * act on: the send goes ahead without one and the issuance continues in the
+   * background for the next message.
+   */
+  ensureTcTokenBeforeSend(tcJid: Jid, routingToJid: Jid): Promise<boolean>;
   sendPeerDataOperationMessage(pdo: any): Promise<any>;
   requestPlaceholderResend(messageKey: any, msgData?: any): Promise<any>;
   fetchMessageHistory(count: number, oldestMsgKey: any, oldestMsgTimestampMs: number): Promise<any>;
