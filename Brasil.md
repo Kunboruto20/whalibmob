@@ -259,6 +259,10 @@ npm install -g whalibmob
     - [Ler as Configurações de Privacidade](#ler-as-configurações-de-privacidade)
     - [Atualizar as Configurações de Privacidade](#atualizar-as-configurações-de-privacidade)
     - [Atualizar o Modo Temporário Padrão](#atualizar-o-modo-temporário-padrão)
+  - [Estado da Conta](#estado-da-conta)
+    - [AB Props](#ab-props)
+    - [Sincronização de Contatos](#sincronização-de-contatos)
+    - [Avisos dos Termos de Serviço](#avisos-dos-termos-de-serviço)
   - [Comunidades](#comunidades)
     - [Criar uma Comunidade](#criar-uma-comunidade)
     - [Desativar / Excluir uma Comunidade](#desativar--excluir-uma-comunidade)
@@ -4594,6 +4598,207 @@ primeira mensagem.
 await client.changeNewChatsEphemeralTimer(86400)   // 1 day
 await client.changeNewChatsEphemeralTimer(0)       // off
 ```
+
+## Estado da Conta
+
+Três coisas que o aplicativo fala em toda conta e que o whalibmob não falava: as
+flags de recurso do próprio servidor, a agenda de contatos e os avisos legais
+que uma conta precisa aceitar. Cada uma é uma família de IQ; juntas, fazem parte
+do que faz uma sessão parecer um aplicativo em vez de um script.
+
+### AB Props
+
+Todo cliente do WhatsApp pergunta ao servidor quais experimentos e valores de
+configuração se aplicam a *esta* conta, e então condiciona seu comportamento à
+resposta — quantos bytes um hash de identidade é truncado, se a migração para
+LID já começou aqui, qual peso de amostragem cada evento de telemetria carrega.
+Um cliente que nunca pergunta roda com padrões adivinhados justamente onde o
+servidor tem uma opinião.
+
+Isso é sincronizado automaticamente a cada conexão. Você não precisa chamar nada.
+
+```js
+const client = new WhalibmobClient({ sessionDir: './auth' })
+await client.connect()
+
+// Já sincronizado quando 'connected' dispara. Para ler um valor:
+client.abProp(4405)              // '16'   — no fio é sempre uma string
+client.abPropInt(4405, 8)        // 16     — convertido, ou 8 se ausente/inválido
+client.abPropBool(5010, false)   // true   — entende "1"/"0" e "true"/"false"
+```
+
+Ler uma prop antes da primeira sincronização devolve o valor padrão em vez de
+lançar erro, então condicionar algo a uma flag nunca precisa de proteção:
+
+```js
+// Seguro mesmo em um cliente que ainda não conectou.
+const hashLen = client.abPropInt(4405, 8)
+```
+
+Para sincronizar manualmente, ou para ver o conjunto inteiro:
+
+```js
+const props = await client.queryAbProps({ force: true })
+
+console.log(props.hash)      // 'A1B2…' — vai junto na próxima sincronização, pedindo um delta
+console.log(props.refresh)   // 86400 — segundos que o servidor sugere esperar
+console.log(props.delta)     // false — esta resposta trouxe a tabela inteira
+console.log(props.props)     // { '4405': '16', '5010': 'true', … }
+console.log(props.sampling)  // { '1200': 100, … }  pesos de telemetria
+```
+
+O hash é o que transforma a próxima requisição em um delta. Um delta é
+**mesclado** ao que já está guardado em vez de substituí-lo — caso contrário,
+toda prop que o servidor não viu motivo para repetir seria descartada. O hash
+vive apenas durante a sessão: um processo novo pede o conjunto completo de
+novo, que é exatamente o que uma instalação nova faz.
+
+Desligue a sincronização automática se não quiser o IQ extra em uma sessão curta:
+
+```js
+new WhalibmobClient({ sessionDir: './auth', syncAbPropsOnConnect: false })
+```
+
+Sendo franco quanto ao alcance: nada dentro da biblioteca consome esses valores
+ainda. O que você ganha hoje é a capacidade de ver o que o servidor pensa sobre
+uma conta — útil quando um número se comporta diferente de outro e você
+estaria apenas adivinhando — além de mais uma requisição que um cliente real faz.
+
+### Sincronização de Contatos
+
+O envio da agenda que um celular faz na primeira execução, e as sincronizações
+delta depois disso. Responde à pergunta que vale a pena fazer antes de uma
+primeira mensagem: **este número está no WhatsApp?**
+
+```js
+const out = await client.syncContacts([
+  '5511912345678',
+  '+55 11 91234-5679',
+  '5511999999999'
+])
+
+out.registered    // ['5511912345678', '+55 11 91234-5679']  — estão no WhatsApp
+out.unregistered  // ['5511999999999']                       — não estão
+out.jids          // { '5511912345678': '5511912345678@s.whatsapp.net', … }
+```
+
+Os números voltam na mesma grafia em que foram passados, seja lá como tenham
+sido escritos — espaços, hífens e o `+` inicial são normalizados antes do envio
+e restaurados na resposta.
+
+**Um número sobre o qual o servidor não respondeu não aparece em nenhuma das
+duas listas.** Isso é proposital. Reportar um tempo esgotado como "não está no
+WhatsApp" é a única resposta errada possível aqui, porque quem chama age sobre
+ela — pulando o número, ou pior, apagando-o. Silêncio não é veredito:
+
+```js
+const perguntados = phones.length
+const conhecidos  = out.registered.length + out.unregistered.length
+if (conhecidos < perguntados) {
+  console.log(`${perguntados - conhecidos} números ficaram sem resposta — tente de novo depois`)
+}
+```
+
+Agendas grandes são divididas em lotes automaticamente, e um lote sem resposta
+não custa aos outros as respostas deles:
+
+```js
+await client.syncContacts(listaGrande, { chunkSize: 200 })   // o padrão é 500
+```
+
+O modo diz o que a sincronização afirma sobre a sua agenda. `full` é a agenda
+inteira — o que o aplicativo envia na primeira execução — e carrega o contexto
+`registration` por padrão. `delta` é o que mudou desde então. `query` é uma
+consulta simples que não afirma nada:
+
+```js
+await client.syncContacts(phones)                      // modo 'full',  contexto 'registration'
+await client.syncContacts(phones, { mode: 'delta' })   // modo 'delta', contexto 'interactive'
+await client.syncContacts(phones, { mode: 'query' })   // uma consulta, sem afirmar nada
+```
+
+Isto **não** é chamado automaticamente ao conectar. Enviar uma agenda de
+contatos é decisão sua, não um efeito colateral de conectar.
+
+Onde isso realmente vale a pena é antes de um lote de primeiras mensagens, junto
+com o caminho do token descrito em
+[tcToken](#tctoken--defesa-contra-o-erro-463):
+
+```js
+// 1. Quais destes existem de fato?
+const { registered } = await client.syncContacts(numeros)
+
+// 2. Aquecer um trusted-contact token para cada um, para a primeira mensagem levar um.
+for (const n of registered) {
+  const jid = `${n.replace(/\D/g, '')}@s.whatsapp.net`
+  await client.ensureTcTokenBeforeSend(jid, jid)
+  await new Promise(r => setTimeout(r, 300))
+}
+
+// 3. Enviar. Sem envios desperdiçados para números mortos, e sem abordagens anônimas.
+for (const n of registered) {
+  await client.sendText(`${n.replace(/\D/g, '')}@s.whatsapp.net`, 'Olá')
+  await new Promise(r => setTimeout(r, 1000))
+}
+```
+
+### Avisos dos Termos de Serviço
+
+O WhatsApp condiciona algumas funcionalidades a que a conta tenha aceitado um
+determinado aviso legal — uma atualização dos Termos, uma mudança na política de
+privacidade, um comunicado regional. O aplicativo busca o estado de aceitação,
+mostra o que está pendente e devolve o que o usuário aceitou.
+
+```js
+const out = await client.queryTosNotices(['20230324', '20240101'])
+
+out.refresh   // 86400 — segundos que o servidor sugere esperar antes de perguntar de novo
+out.notices   // [ { id: '20230324', accepted: true },
+              //   { id: '20240101', accepted: false } ]
+
+// Tudo que ainda está pendente:
+const pendentes = out.notices.filter(n => !n.accepted).map(n => n.id)
+if (pendentes.length) await client.acceptTosNotices(pendentes)
+```
+
+Consultar de novo sem perguntar ao servidor:
+
+```js
+client.isTosAccepted('20230324')   // true
+client.isTosAccepted('20240101')   // false
+client.isTosAccepted('id-qualquer') // null — esta sessão não perguntou
+```
+
+O `null` importa: significa *desconhecido*, não *não aceito*. Um código que
+decide se deve aceitar algo precisa conseguir distinguir os dois casos.
+
+Limpar uma aceitação, para o servidor voltar a pedi-la:
+
+```js
+await client.clearTosNotice('20230324')
+```
+
+Uma aceitação feita em outro aparelho chega sozinha, dentro da mesma notificação
+`account_sync` que carrega mudanças de dispositivos e de privacidade:
+
+```js
+client.on('tos_notices', ({ notices }) => {
+  for (const n of notices) {
+    console.log(n.id, n.accepted ? 'aceito' : 'pendente')
+  }
+})
+```
+
+Uma observação sobre o protocolo, porque ele se lê ao contrário do que parece: o
+atributo `state` está presente e vale `"false"` para um aviso que **não** foi
+aceito, e está **ausente** para um que foi. O whalibmob lê dessa forma. Se você
+analisar essas stanzas por conta própria, tratar um atributo ausente como
+"desconhecido" reportaria todo aviso aceito como pendente.
+
+Alcance, com honestidade: nenhuma funcionalidade específica foi comprovadamente
+bloqueada por um aviso não aceito em uma conta headless. O que isto lhe dá é algo
+para verificar em vez de adivinhar — se um número recém-registrado se recusa a
+fazer algo, agora você pode perguntar se há um aviso pendente nele.
 
 ## Grupos
 
