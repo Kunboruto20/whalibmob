@@ -131,6 +131,15 @@ export interface WhalibmobClientOptions {
    * rest with `rejectCall()`.
    */
   autoRejectCalls?: boolean;
+  /**
+   * Sync the account's AB props on every connect. Default `true`, because the
+   * app does it on every login and a client that never asks runs on guessed
+   * defaults wherever the server has an opinion.
+   *
+   * Turning it off saves one IQ per connect and costs nothing else: every
+   * reader of these has a fallback.
+   */
+  syncAbPropsOnConnect?: boolean;
   /** Refresh the announced build from the platform's store before every handshake. Default `true`. */
   refreshVersion?: boolean;
   /** `true` enables debug logging; an object is handed to `pino` as-is. */
@@ -478,6 +487,36 @@ export type PrivacyValue =
   | 'on_standard'
   | 'off';
 
+export interface AbProps {
+  /** Hash of the returned set. Sent back on the next sync to ask for a delta. */
+  hash: string | null;
+  abKey: string | null;
+  /** Seconds the server suggests waiting before syncing again. */
+  refresh: number | null;
+  refreshId: string | null;
+  /** Whether this reply named only what changed, rather than the whole table. */
+  delta: boolean;
+  /** Experiment values, keyed by their numeric config code. */
+  props: { [configCode: string]: string };
+  /** Telemetry sampling weights, keyed by their numeric event code. */
+  sampling: { [eventCode: string]: number };
+}
+
+export interface ContactSyncResult {
+  /** Numbers on WhatsApp, in the spelling they were passed in. */
+  registered: string[];
+  /** Numbers the server said are not on WhatsApp. */
+  unregistered: string[];
+  /** Each registered number mapped to the JID the server gave it. */
+  jids: { [phone: string]: string };
+}
+
+export interface TosNoticesResult {
+  /** Seconds the server suggests waiting before asking again. */
+  refresh: number | null;
+  notices: Array<{ id: string; accepted: boolean }>;
+}
+
 export interface PrivacySettings {
   lastSeen: string | null;
   profile: string | null;
@@ -820,6 +859,45 @@ export declare class WhalibmobClient extends EventEmitter {
 
   // ─── Privacy ─────────────────────────────────────────────────────────────
   queryPrivacySettings(opts?: { force?: boolean }): Promise<PrivacySettings>;
+
+  // ─── AB props ────────────────────────────────────────────────────────────
+  //
+  // The per-account feature flags the server hands out. Synced on connect
+  // unless `syncAbPropsOnConnect: false` was passed to the constructor, and
+  // held for the session — a fresh process asks for the full set again, which
+  // is what a fresh install does.
+  //
+  // Values are strings because that is what the wire carries; abPropInt and
+  // abPropBool are the two readings worth having, and both fall back rather
+  // than coerce.
+  queryAbProps(opts?: { force?: boolean; refreshId?: string }): Promise<AbProps>;
+  abProp(code: number | string, fallback?: string | null): string | null;
+  abPropInt(code: number | string, fallback?: number | null): number | null;
+  abPropBool(code: number | string, fallback?: boolean | null): boolean | null;
+
+  // ─── Contact sync ────────────────────────────────────────────────────────
+  //
+  // The address-book upload a phone does on first launch, and the delta syncs
+  // after it. Numbers the server did not answer about appear in neither list:
+  // silence is not a verdict, and reporting a timeout as "not on WhatsApp"
+  // is the one wrong answer available here.
+  syncContacts(
+    phones: string[],
+    opts?: {
+      mode?: 'full' | 'delta' | 'query';
+      context?: string;
+      chunkSize?: number;
+    }
+  ): Promise<ContactSyncResult>;
+
+  // ─── Terms-of-Service notices ────────────────────────────────────────────
+  //
+  // `isTosAccepted` answers `null` for a notice this session has not asked
+  // about, which is not the same as "not accepted".
+  queryTosNotices(noticeIds: string[]): Promise<TosNoticesResult>;
+  acceptTosNotices(noticeIds: string[]): Promise<{ ok: true; raw: any }>;
+  clearTosNotice(noticeId: string): Promise<{ ok: true; raw: any }>;
+  isTosAccepted(noticeId: string): boolean | null;
 
   // ─── Two-step verification ───────────────────────────────────────────────
   //
