@@ -129,6 +129,8 @@ const WebVersion       = require('./lib/WebVersion');
 const WebProto         = require('./lib/webproto');
 
 const BinaryNode           = require('./lib/BinaryNode');
+const Curve                = require('./lib/curve');
+const Hkdf                 = require('./lib/hkdf');
 const Noise                = require('./lib/noise');
 const WebSocketStream      = require('./lib/WebSocketStream');
 const Socks                = require('./lib/socks');
@@ -348,6 +350,11 @@ module.exports = {
   FcmMcs,
 
   // Linking to an account that already exists
+  // X25519, through Node's own OpenSSL. Drop-in for curve25519-js.
+  Curve,
+  // HKDF-SHA256, through Node's own OpenSSL.
+  Hkdf,
+
   PairingCode,
   CompanionPairing,
   QrPairing,
