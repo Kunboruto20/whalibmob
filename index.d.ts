@@ -1096,6 +1096,17 @@ export interface RegistrationOptions {
   solveCaptcha?: (challenge: { image: Buffer | null; audio: Buffer | null }) => Promise<string | null>;
   /** Called when the account has two-step verification on. Return the six-digit PIN. */
   twoFactorPin?: () => Promise<string | null>;
+  /**
+   * Check `/exist` before requesting a code, the way the app does. Default
+   * `true`. Skipped automatically once a code has already been requested on
+   * this store, or once the number is registered.
+   *
+   * When the keys have already been used to register, `requestSmsCode` throws
+   * with `err.code === 'KEYS_ALREADY_REGISTERED'` rather than spending a
+   * `/code` attempt — build a fresh store for the number and try again. Set
+   * this to `false` to send `/code` straight away.
+   */
+  checkExist?: boolean;
   onProgress?: (line: string) => void;
   [key: string]: any;
 }

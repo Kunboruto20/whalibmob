@@ -51,8 +51,6 @@ const {
   checkNumberStatus,
   requestSmsCode,
   verifyCode,
-  assertRegistrationKeys,
-  fetchWaVersion,
   getDeviceConfig,
   createNewStore,
   saveStore,
@@ -2475,24 +2473,30 @@ async function handleLine(line) {
           if (!store) {
             store = initAuthCreds(ph, { name: regName });
             saveStore(store, sessFile);
-          } else if (!store.codePending && !store.registered) {
-            // Only check /exist when keys were never used to request a code.
-            out('checking device keys...');
-            const waVersion = await fetchWaVersion(getDeviceConfig());
-            const fresh = await assertRegistrationKeys(store, waVersion);
-            if (!fresh) {
-              out('  device keys already registered — generating new keys...');
-              store = initAuthCreds(ph, { name: regName });
-              saveStore(store, sessFile);
-              out('  new keys saved — proceed with code below');
-            }
           }
           const methodLabel = method === 'email' ? ('email → ' + emailAddr) : method;
           out('requesting ' + methodLabel + ' code for +' + ph + '...');
           const codeOpts = Object.assign(method === 'email' ? { email: emailAddr } : {},
             { onProgress: out, name: regName });
           if (regName) out('  registering as "' + (store.name || regName) + '"');
-          const r = await requestSmsCode(store, method, codeOpts);
+          // requestSmsCode runs the /exist check itself now, under the same
+          // guard this block used to apply. Spent keys come back as a refusal
+          // rather than a thrown network error, so regenerate and go again —
+          // the retry is the CLI's to make, not the library's.
+          let r;
+          try {
+            r = await requestSmsCode(store, method, codeOpts);
+          } catch (err) {
+            if (err && err.code === 'KEYS_ALREADY_REGISTERED') {
+              out('  device keys already registered — generating new keys...');
+              store = initAuthCreds(ph, { name: regName });
+              saveStore(store, sessFile);
+              out('  new keys saved — requesting code again');
+              r = await requestSmsCode(store, method, codeOpts);
+            } else {
+              throw err;
+            }
+          }
           store.codePending = true;
           saveStore(store, sessFile);
           out('  status  ' + (r && r.status));
@@ -3204,28 +3208,30 @@ async function main() {
         // Brand new — generate fresh keys, save immediately, no need to check /exist
         store = initAuthCreds(ph, { name: regName });
         saveStore(store, sessFile);
-      } else if (!store.codePending && !store.registered) {
-        // Existing store but code was never sent and not registered — check if
-        // keys are already taken (e.g. leftover from a previous failed attempt).
-        // FIX: only 1 /exist call now (was 2), and skipped entirely when codePending.
-        out('checking device keys...');
-        const waVersion = await fetchWaVersion(getDeviceConfig());
-        const fresh = await assertRegistrationKeys(store, waVersion);
-        if (!fresh) {
-          out('  device keys already registered — generating new keys...');
-          store = initAuthCreds(ph, { name: regName });
-          saveStore(store, sessFile);
-        }
       }
-      // If store.codePending === true, keys were already accepted by WhatsApp in a
-      // prior /code request — reuse the exact same store without any /exist call.
+      // requestSmsCode runs the /exist check itself, under the same guard this
+      // block used to apply: skipped once codePending is set, since the keys
+      // were already accepted by WhatsApp on the earlier /code request.
       const methodLabel = method === 'email' ? ('email → ' + emailAddr) : method;
       out('requesting ' + methodLabel + ' code for +' + ph + '...');
       try {
         const codeOpts = Object.assign(method === 'email' ? { email: emailAddr } : {},
           { onProgress: out, name: regName });
         if (regName) out('  registering as "' + (store.name || regName) + '"');
-        const r = await requestSmsCode(store, method, codeOpts);
+        let r;
+        try {
+          r = await requestSmsCode(store, method, codeOpts);
+        } catch (err) {
+          if (err && err.code === 'KEYS_ALREADY_REGISTERED') {
+            out('  device keys already registered — generating new keys...');
+            store = initAuthCreds(ph, { name: regName });
+            saveStore(store, sessFile);
+            out('  new keys saved — requesting code again');
+            r = await requestSmsCode(store, method, codeOpts);
+          } else {
+            throw err;
+          }
+        }
         store.codePending = true;
         saveStore(store, sessFile);
         out('  status  ' + (r && r.status));
