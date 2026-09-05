@@ -271,7 +271,21 @@ export interface DecodedBase {
   ephemeral?: boolean;
   /** The message is the new text of an edit. */
   edited?: boolean;
+  /**
+   * Present only on a message this account sent from one of its other devices.
+   * The stanza names us as the sender, so the chat it belongs to is written
+   * here and nowhere else.
+   */
+  deviceSentMeta?: DeviceSentMeta;
   [key: string]: any;
+}
+
+/** What a `DeviceSentMessage` envelope said about the message inside it. */
+export interface DeviceSentMeta {
+  /** The chat the message was originally addressed to. */
+  destinationJid?: Jid;
+  /** Hash of the participant list the sending device used, when it set one. */
+  phash?: string;
 }
 
 export interface DecodedText extends DecodedBase {
@@ -335,6 +349,39 @@ export type DecodedMessage =
   | DecodedProtocol
   | DecodedBase;
 
+/** The stage a call is at, from the child tag inside the `<call>` stanza. */
+export type CallStatus =
+  | 'offer' | 'offer_notice' | 'ringing' | 'accept'
+  | 'preaccept' | 'transport' | 'terminate' | 'reject' | 'unknown';
+
+/** The payload of the `call` event. */
+export interface CallEvent {
+  /** Who the stanza came from. Equals `creator` on a one-to-one call. */
+  from: Jid;
+  /** The call id — what `rejectCall` needs. `null` on a stanza that names none. */
+  id: string | null;
+  /** `'ringing'` is the `relaylatency` stanza, under the name it has always had. */
+  status: CallStatus;
+  /** The child tag verbatim, so a stage not in `CallStatus` is still readable. */
+  tag: string;
+  /** The account that placed the call. Differs from `from` in a group. */
+  creator: Jid;
+  /** The creator's other name — phone JID for a LID creator, and the reverse. */
+  creatorAlt: Jid | null;
+  /** The group the call is in, when it is a group call. */
+  groupJid: Jid | null;
+  /** The caller's platform, on the stanzas that carry it. */
+  platform: string | null;
+  /** The caller's client version, on the stanzas that carry it. */
+  version: string | null;
+  /** Why the call ended, on a `terminate`. */
+  reason: string | null;
+  /** Unix timestamp, seconds. */
+  ts: number;
+  /** Raw binary node. */
+  node: any;
+}
+
 /**
  * The payload of the `message` event.
  *
@@ -361,6 +408,17 @@ export interface IncomingMessage {
   text?: string | null;
   /** `true` on a group message. */
   isGroup?: boolean;
+  /**
+   * `true` when this account sent the message from another of its devices and
+   * the server echoed it back here.
+   */
+  fromMe?: boolean;
+  /**
+   * The conversation the message belongs to, whichever direction it went. Same
+   * as `from` for anything we received; for one of our own messages it is who
+   * we sent it to, which `from` cannot say.
+   */
+  chat?: Jid;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -695,7 +753,7 @@ export interface WhalibmobEvents {
   message: (msg: IncomingMessage) => void;
   receipt: (r: { type: string; id: string; from: Jid }) => void;
   presence: (p: { from: Jid; available: boolean }) => void;
-  call: (c: { from: Jid; id: string | null; status: 'offer' | 'ringing' | 'terminate' | 'unknown'; node: any }) => void;
+  call: (c: CallEvent) => void;
   notification: (node: any) => void;
   decrypt_error: (e: { id: string; from: Jid; participant?: Jid; err: Error }) => void;
   session_refresh: (e: { node: any }) => void;
@@ -971,7 +1029,7 @@ export declare class WhalibmobClient extends EventEmitter {
 
   /**
    * Refuse one incoming call. Only reachable when the client was built with
-   * `autoRejectCalls: false`; the id and caller come off the `call` event.
+   * `autoRejectCalls: false`; pass the `id` and `creator` off the `call` event.
    */
   rejectCall(callId: string, from: Jid): boolean;
 

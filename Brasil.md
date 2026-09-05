@@ -3281,7 +3281,7 @@ connect()
 | `presence` | `{ from, available }` | Contato ficou online ou saiu |
 | `group_update` | `{ type, groupJid, actor, participants, subject, timestamp }` | Membro adicionado / removido / promovido / rebaixado, assunto ou configurações alterados |
 | `notification` | objeto de nó | Notificação de atualização de grupo ou contato |
-| `call` | `{ from }` | Evento de chamada recebida |
+| `call` | `{ from, id, status, tag, creator, creatorAlt, groupJid, platform, version, reason, ts, node }` | Uma stanza de chamada. `id` é o que `rejectCall()` precisa, `creator` é quem fez a chamada (difere de `from` em um grupo) e `status` é o estágio: `offer`, `offer_notice`, `ringing`, `accept`, `preaccept`, `transport`, `terminate`, `reject` ou `unknown` |
 | `chat_read` | `{ jid, read, remote?, synced? }` | Conversa marcada como lida (`read: true`) ou não lida (`read: false`) |
 | `chat_muted` | `{ jid, muted, until, remote?, synced? }` | Conversa silenciada ou com som reativado; `until` é em ms de epoch (−1 = indefinido) |
 | `chat_pinned` | `{ jid, pinned, remote?, synced? }` | Conversa fixada ou desafixada |
@@ -3319,8 +3319,20 @@ O objeto de mensagem contém:
   ts:          number,   // Unix timestamp (seconds)
   node:        object,   // raw XML node — node.attrs.sender_pn holds the real phone JID
   decoded:     object,   // structured payload — shape depends on message type (see below)
+  fromMe:      boolean,  // você enviou isto de outro dos seus próprios aparelhos
+  chat:        string,   // a conversa — igual a from, a menos que fromMe seja true
 }
 ```
+
+> [!NOTE]
+> Quando você envia uma mensagem pelo celular, o WhatsApp devolve uma cópia dela
+> para todos os outros aparelhos da conta, embrulhada em um `DeviceSentMessage`.
+> Nessa cópia o `from` é **o seu próprio JID** — ele nomeia quem enviou, não a
+> conversa. Use `chat`, que é a conversa em qualquer direção que a mensagem
+> tenha ido, e `fromMe` para distinguir os dois casos. Os campos do próprio
+> envelope ficam em `decoded.deviceSentMeta` (`destinationJid`, `phash`) caso
+> você precise deles em cru. Essas mensagens não recebem confirmação de leitura:
+> nada foi lido só por receber de volta a sua própria mensagem.
 
 > [!NOTE]
 > O WhatsApp Multi-Device usa **JIDs LID** internamente. O campo `from` pode ser um LID como
