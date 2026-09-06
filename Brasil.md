@@ -5706,6 +5706,24 @@ O `--dry-run` imprime os tamanhos do payload sem abrir um socket.
 o problema.** A diferença está então no que a CLI lê e esta ferramenta não —
 o `WA_VERSION`, do `.env`. Volte para o início desta seção.
 
+## Apoie este projeto
+
+Se o whalibmob te poupa tempo, você pode apoiar o seu desenvolvimento.
+
+**USDT — TRC-20 (somente rede Tron)**
+
+```
+TNxxWvAc5m5YS89uz5uSrbXC9EKPuS27aP
+```
+
+> [!WARNING]
+> Este endereço é **TRC-20 na rede Tron**. Envie **somente USDT na TRC-20** para
+> ele. USDT enviado em qualquer outra rede — ERC-20 (Ethereum), BEP-20 (BSC),
+> Polygon ou qualquer outra — será **perdido e não pode ser recuperado**. Sempre
+> confira a rede na sua carteira antes de enviar, e copie o endereço por inteiro.
+
+O botão **Sponsor** no topo do repositório leva de volta para cá.
+
 ## Licença
 
 MIT

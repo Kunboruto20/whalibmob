@@ -1,0 +1,11 @@
+# GitHub renders a "Sponsor" button at the top of the repo from this file.
+#
+# GitHub Sponsors and the named platforms take a username; `custom` takes URLs.
+# A crypto address is not a URL and cannot be a button on its own, so the button
+# points at the README's "Support this project" section, which carries the
+# USDT (TRC-20) address.
+#
+# To add GitHub Sponsors once the account is approved, uncomment and set:
+# github: [Kunboruto20]
+custom:
+  - "https://github.com/Kunboruto20/whalibmob#support-this-project"
