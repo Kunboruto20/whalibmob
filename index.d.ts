@@ -272,12 +272,45 @@ export interface DecodedBase {
   /** The message is the new text of an edit. */
   edited?: boolean;
   /**
+   * On a text message that quoted a link, the downloadable preview image.
+   * Fetch it with `downloadThumbnail()`.
+   */
+  thumbnail?: LinkThumbnail;
+  /**
    * Present only on a message this account sent from one of its other devices.
    * The stanza names us as the sender, so the chat it belongs to is written
    * here and nowhere else.
    */
   deviceSentMeta?: DeviceSentMeta;
   [key: string]: any;
+}
+
+/** The downloadable preview image on a message that quoted a link. */
+export interface LinkThumbnail {
+  directPath: string;
+  mediaKey: Buffer;
+  thumbnailSha256: Buffer | null;
+  thumbnailEncSha256: Buffer | null;
+}
+
+export interface PollVoteOptions {
+  /** The poll's 32-byte message secret — what `sendPoll` returned. */
+  encKey: Buffer;
+  /** Who cast the vote. Defaults to the message's `participant`, then `from`. */
+  voter?: Jid;
+  /** Who sent the poll. Defaults to what the vote's message key names. */
+  pollSender?: Jid;
+  /** The poll's options, so the choices come back as text rather than hashes. */
+  options?: string[];
+}
+
+export interface PollVoteResult {
+  /** The chosen options as text. Empty unless `options` was passed. */
+  selected: string[];
+  /** SHA-256 of each chosen option, always present. */
+  selectedHashes: Buffer[];
+  /** When the vote was cast, in ms, when the sender said. */
+  votedAt: number | null;
 }
 
 /** What a `DeviceSentMessage` envelope said about the message inside it. */
@@ -856,6 +889,15 @@ export declare class WhalibmobClient extends EventEmitter {
   /** Ask for an 8-character pairing code. Throws if the session is already linked. */
   requestPairingCode(phoneNumber?: string, customCode?: string): Promise<string>;
   disconnect(opts?: DisconnectOptions): void;
+  /**
+   * Unlink this device from the account, the way the Linked Devices screen on
+   * the phone does, then close the connection.
+   *
+   * Web only. Nothing on disk is deleted — the session it describes no longer
+   * exists, so the next `connectWeb()` pairs afresh. Resolves to whether the
+   * server accepted the removal; the connection drops either way.
+   */
+  logout(): Promise<boolean>;
 
   /** Ask the server whether this session still logs in, and under which number. */
   checkSessionAlive(): Promise<SessionAliveProbe>;
@@ -882,8 +924,30 @@ export declare class WhalibmobClient extends EventEmitter {
   createCallLink(type?: 'audio' | 'video', opts?: { startTime?: number }): Promise<CallLink>;
 
   // ─── Receiving ───────────────────────────────────────────────────────────
-  /** Download and decrypt a media message. Accepts `msg` or `msg.decoded`. */
+  /**
+   * Download and decrypt a media message. Accepts `msg` or `msg.decoded`.
+   *
+   * Both digests the message carried are checked by default, on top of the MAC
+   * that always is. `verify: false` skips the digests only.
+   */
   downloadMedia(decoded: DecodedMessage | IncomingMessage, opts?: { verify?: boolean }): Promise<Buffer>;
+  /**
+   * Download the full-size preview image of a message that quoted a link.
+   *
+   * A link preview's thumbnail is a media file of its own, encrypted under its
+   * own key name, so `downloadMedia` cannot reach it. The small inline preview
+   * needs no download — it is already on the message as `jpegThumbnail`.
+   */
+  downloadThumbnail(decoded: DecodedMessage | IncomingMessage, opts?: { verify?: boolean }): Promise<Buffer>;
+  /**
+   * Read a vote on a poll.
+   *
+   * The ballot is encrypted under a key derived from the poll's message secret:
+   * the `encKey` `sendPoll` returned, or `decoded.encKey` on a poll somebody
+   * else sent. Pass the poll's `options` to get the choices back as text —
+   * without them only the SHA-256 of each choice is available.
+   */
+  decryptPollVote(vote: DecodedMessage | IncomingMessage, opts: PollVoteOptions): PollVoteResult;
   /** Ask the sender's phone to re-upload a file the CDN no longer has. */
   requestMediaRetry(info: { id: string; chatJid: Jid; fromMe: boolean; participant?: Jid }, mediaKey: Buffer): Promise<void>;
   decryptMediaRetry(notification: MediaRetryNotification, mediaKey: Buffer): MediaRetryResult;
@@ -980,6 +1044,15 @@ export declare class WhalibmobClient extends EventEmitter {
 
   /** Pull pins/archives/mutes/stars/contact names changed elsewhere. */
   syncAppState(names?: string[] | null, opts?: { snapshot?: boolean }): Promise<AppStateSyncResult>;
+  /**
+   * Acknowledge a dirty bit so the server stops announcing it.
+   *
+   * Done for you on every `<ib><dirty>` the server sends; this is here for a
+   * bit you want to clear yourself. Pass the `timestamp` the announcement
+   * carried — without it nothing in particular is acknowledged and the server
+   * re-announces on the next connection.
+   */
+  markNotDirty(type: string, timestamp?: number | string): boolean;
   /** Whether an app-state key is available — `false` on an SMS session with no companion. */
   canSyncAppState(): boolean;
   /**
