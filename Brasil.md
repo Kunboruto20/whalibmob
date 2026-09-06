@@ -5498,6 +5498,30 @@ Estas variáveis sobrescrevem campos individuais por cima do perfil selecionado:
 | `WA_DEVICE_OS_VERSION` | String da versão do SO (ex.: `14`) |
 | `WA_DEVICE_BUILD` | Fingerprint da build (ex.: `UP1A.231005.007`) |
 | `WA_DEVICE_MODEL_ID` | Slug do ID do modelo (ex.: `samsung-sm-s928b`) |
+| `WA_DEVICE_RAM` | RAM utilizável em GiB, como o Android reporta (ex.: `7.53`). Cada perfil nomeado carrega a sua; defina isto só para uma variante de memória diferente do mesmo modelo. |
+
+### Declarando o seu SIM
+
+O registro envia `sim_mcc` / `sim_mnc` para dizer a que rede o SIM pertence. A
+tabela embutida só consegue nomear **uma operadora por país** — a Romênia é
+sempre Orange, o Brasil sempre Vivo — e não dá para fazer melhor, porque a
+portabilidade numérica quebrou a ligação prefixo→operadora anos atrás. Adivinhar
+pelo número erraria mais vezes do que a tabela erra.
+
+Então diga qual SIM está no aparelho:
+
+```js
+const store = createNewStore('5511999999999', { simMcc: '724', simMnc: '05' })
+```
+
+| Variável | Descrição |
+|---|---|
+| `WA_SIM_MCC` | Código de país móvel do SIM (ex.: `724`) |
+| `WA_SIM_MNC` | Código de rede móvel. **A largura importa** — `10` e `010` são redes diferentes para o servidor, então escreva exatamente como a sua operadora escreve. |
+
+Qualquer uma das metades pode ser dada sozinha; a outra mantém o valor da
+tabela, e o idioma e a localidade do país não são afetados de todo jeito. Deixe
+ambas sem definir e nada muda em relação a antes.
 
 ### Sobrescritas de Versão e Token
 
