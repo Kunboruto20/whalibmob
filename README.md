@@ -3284,7 +3284,7 @@ connect()
 | `presence` | `{ from, available }` | Contact came online or went offline |
 | `group_update` | `{ type, groupJid, actor, participants, subject, timestamp }` | Member added / removed / promoted / demoted, subject or settings changed |
 | `notification` | node object | Group or contact update notification |
-| `call` | `{ from }` | Incoming call event |
+| `call` | `{ from, id, status, tag, creator, creatorAlt, groupJid, platform, version, reason, ts, node }` | A call stanza. `id` is what `rejectCall()` needs, `creator` is who placed the call (it differs from `from` in a group), and `status` is the stage: `offer`, `offer_notice`, `ringing`, `accept`, `preaccept`, `transport`, `terminate`, `reject` or `unknown` |
 | `chat_read` | `{ jid, read, remote?, synced? }` | Chat marked read (`read: true`) or unread (`read: false`) |
 | `chat_muted` | `{ jid, muted, until, remote?, synced? }` | Chat muted or unmuted; `until` is epoch ms (−1 = indefinite) |
 | `chat_pinned` | `{ jid, pinned, remote?, synced? }` | Chat pinned or unpinned |
@@ -3322,8 +3322,20 @@ The message object contains:
   ts:          number,   // Unix timestamp (seconds)
   node:        object,   // raw XML node — node.attrs.sender_pn holds the real phone JID
   decoded:     object,   // structured payload — shape depends on message type (see below)
+  fromMe:      boolean,  // you sent this from another of your own devices
+  chat:        string,   // the conversation — equals from unless fromMe is true
 }
 ```
+
+> [!NOTE]
+> When you send a message from your phone, WhatsApp echoes a copy of it to every
+> other device on the account, wrapped in a `DeviceSentMessage`. On that copy
+> `from` is **your own JID** — it names the sender, not the chat. Use `chat`,
+> which is the conversation whichever direction the message went, and `fromMe`
+> to tell the two apart. The envelope's own fields are on
+> `decoded.deviceSentMeta` (`destinationJid`, `phash`) if you need them raw.
+> These messages are not answered with a read receipt: nothing was read by
+> receiving your own message back.
 
 > [!NOTE]
 > WhatsApp Multi-Device uses **LID JIDs** internally. The `from` field may be a LID like
