@@ -5715,6 +5715,24 @@ registered, no code is requested, and the session is never written to.
 the problem.** The difference is then in what the CLI reads and this tool does
 not — `WA_VERSION`, from `.env`. Go back to the top of this section.
 
+## Support this project
+
+If whalibmob saves you time, you can support its development.
+
+**USDT — TRC-20 (Tron network only)**
+
+```
+TNxxWvAc5m5YS89uz5uSrbXC9EKPuS27aP
+```
+
+> [!WARNING]
+> This address is **TRC-20 on the Tron network**. Send **only USDT on TRC-20** to
+> it. USDT sent on any other network — ERC-20 (Ethereum), BEP-20 (BSC), Polygon,
+> or anything else — will be **lost and cannot be recovered**. Always double-check
+> the network in your wallet before sending, and copy the address in full.
+
+The **Sponsor** button at the top of the repository leads back here.
+
 ## License
 
 MIT
