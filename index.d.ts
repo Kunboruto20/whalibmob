@@ -1228,7 +1228,17 @@ export declare function fetchWaWebVersion(): Promise<{ version: [number, number,
 // Stores
 // ────────────────────────────────────────────────────────────────────────────
 
-export declare function createNewStore(phoneNumber: string, opts?: { name?: string }): WhalibmobStore;
+export declare function createNewStore(phoneNumber: string, opts?: {
+  name?: string;
+  /**
+   * The MCC of the SIM actually in the phone. Without it the country table's
+   * one-operator-per-country guess stands — number portability means the
+   * number's prefix cannot tell you. Also settable as `WA_SIM_MCC`.
+   */
+  simMcc?: string;
+  /** The matching MNC. Width matters: `10` and `010` are different networks. */
+  simMnc?: string;
+}): WhalibmobStore;
 /** What the CLI uses for every new SMS session; prefer it over `createNewStore`. */
 export declare function initAuthCreds(phoneNumber: string, opts?: { name?: string }): WhalibmobStore;
 export declare function saveStore(store: WhalibmobStore, filePath: string): void;
