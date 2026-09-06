@@ -5507,6 +5507,30 @@ These variables override individual fields on top of the selected profile:
 | `WA_DEVICE_OS_VERSION` | OS version string (e.g. `14`) |
 | `WA_DEVICE_BUILD` | Build fingerprint (e.g. `UP1A.231005.007`) |
 | `WA_DEVICE_MODEL_ID` | Model ID slug (e.g. `samsung-sm-s928b`) |
+| `WA_DEVICE_RAM` | Usable RAM in GiB, as Android reports it (e.g. `7.53`). Each named profile carries its own; set this only for a different memory variant of the same model. |
+
+### Declaring your SIM
+
+Registration sends `sim_mcc` / `sim_mnc` to say which network the SIM belongs
+to. The built-in table can only name **one operator per country** — Romania is
+always Orange, Brazil always Vivo — and it cannot do better, because number
+portability broke the prefix→operator link years ago. Guessing from the number
+would be wrong more often than the table is.
+
+So say which SIM is in the phone:
+
+```js
+const store = createNewStore('40712345678', { simMcc: '226', simMnc: '01' })
+```
+
+| Variable | Description |
+|---|---|
+| `WA_SIM_MCC` | Mobile country code of the SIM (e.g. `226`) |
+| `WA_SIM_MNC` | Mobile network code. **Width matters** — `10` and `010` are different networks to the server, so write it exactly as your operator does. |
+
+Either half can be given on its own; the other keeps the table's value, and the
+country's language and locale are unaffected either way. Leave both unset and
+nothing changes from before.
 
 ### Version & Token Overrides
 
