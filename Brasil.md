@@ -2470,6 +2470,7 @@ Rode uma vez, digite o código no celular, e ele estará vinculado. Rode de novo
 | `client.connectWeb(phone, opts?)` | Abre a conexão companion. Resolve assim que o canal criptografado está de pé quando não vinculado, ou após o `<success>` quando já vinculado. |
 | `client.requestPairingCode(phone?, customCode?)` | Pede um código de 8 caracteres. Retorna imediatamente; o vínculo se completa depois. Lança um erro se a sessão já estiver vinculada. |
 | `client.disconnect()` | Fecha a conexão. O vínculo sobrevive — reconecte com `connectWeb()`. |
+| `client.logout()` | Desvincula este aparelho da conta, do jeito que a tela de Aparelhos Conectados faz, e então desconecta. O vínculo **não** sobrevive — o próximo `connectWeb()` faz um pareamento novo. Nada em disco é apagado; remova o diretório da sessão você mesmo se quiser as chaves fora. |
 
 Opções do `connectWeb(phone, opts)`:
 
@@ -3767,13 +3768,36 @@ O objeto de mensagem inteiro é aceito tanto quanto a metade `decoded` dele, ent
 
 **Verificando o arquivo**
 
-Passe `{ verify: true }` para conferir o download contra o `fileEncSha256` da
-mensagem antes de descriptografá-lo. O MAC já prova que o texto claro não foi
-adulterado; isso pega um download truncado ou substituído mais cedo, e
-nomeia essa falha separadamente de uma falha de descriptografia.
+Três coisas são conferidas, e todas as três por padrão — a mensagem diz o que o
+arquivo deve ser, então não há motivo para acreditar na palavra do CDN:
+
+| conferência | o que cobre |
+|---|---|
+| `fileEncSha256` | o blob como chegou, antes de gastar qualquer trabalho descriptografando |
+| o MAC | o texto cifrado, sob uma chave derivada da `mediaKey` — este é o que autentica |
+| `fileSha256` | o arquivo descriptografado |
 
 ```js
-const bytes = await client.downloadMedia(d, { verify: true })
+const bytes = await client.downloadMedia(d)                    // as três
+const raw   = await client.downloadMedia(d, { verify: false }) // só o MAC
+```
+
+`verify: false` pula os dois digests para quem quer os bytes sejam eles quais
+forem. O MAC é conferido de todo jeito e nunca é opcional.
+
+**Miniaturas de pré-visualização de link**
+
+Uma mensagem de texto que citou um link carrega a pré-visualização que o cliente
+do remetente montou. A imagem pequena embutida já vem na mensagem como
+`jpegThumbnail` e não precisa de download. A de tamanho real é um arquivo de
+mídia por si só — `directPath` próprio, `mediaKey` própria, criptografada sob um
+nome de chave próprio — então `downloadMedia` não a alcança:
+
+```js
+if (d.thumbnail) {
+  const preview = await client.downloadThumbnail(d)
+  // d.title, d.description e d.matchedText são o resto da pré-visualização
+}
 ```
 
 **O que acontece por baixo**
@@ -3981,9 +4005,36 @@ const { id, encKey } = await client.sendPoll(
   ['JavaScript', 'Python', 'Rust'],
   1            // voters may pick 1 option (0 = unlimited)
 )
-// encKey (32-byte Buffer) is needed to decrypt incoming poll votes
-// (also returned as `messageSecret`, which is the name the protocol uses)
+// encKey (Buffer de 32 bytes) é o que lê os votos — guarde-o
+// (também retornado como `messageSecret`, o nome que o protocolo usa)
 ```
+
+**Lendo os votos**
+
+Um voto chega como uma mensagem própria e a cédula dentro dele é criptografada,
+então nada sobre quem escolheu o quê fica visível na stanza. `decryptPollVote()`
+a abre com o `encKey` da enquete:
+
+```js
+const options = ['JavaScript', 'Python', 'Rust']
+
+client.on('message', (msg) => {
+  if (msg.decoded?.type !== 'pollVote') return
+  if (msg.decoded.pollKey.id !== id) return      // um voto em outra enquete
+
+  const { selected, votedAt } = client.decryptPollVote(msg, { encKey, options })
+  console.log(msg.participant, 'votou em', selected)   // [ 'Rust' ]
+})
+```
+
+Passe `options` e as escolhas voltam como texto. Sem elas você recebe
+`selectedHashes` — o SHA-256 de cada opção escolhida, que é como a cédula as
+nomeia na rede — e faz a correspondência você mesmo.
+
+A chave é derivada do id da enquete, de quem a enviou e de quem votou, então um
+voto na enquete de outra pessoa precisa do `encKey` dela, que só chega se ela
+enviou a enquete para você: leia-o em `msg.decoded.encKey` na própria mensagem
+da enquete.
 
 ### Resposta com Citação
 

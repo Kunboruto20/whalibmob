@@ -2473,6 +2473,7 @@ Run it once, type the code into the phone, and it is linked. Run it again and it
 | `client.connectWeb(phone, opts?)` | Open the companion connection. Resolves as soon as the encrypted channel is up when unlinked, or after `<success>` when already linked. |
 | `client.requestPairingCode(phone?, customCode?)` | Ask for an 8-character code. Returns it immediately; the link completes later. Throws if the session is already linked. |
 | `client.disconnect()` | Close the connection. The link survives — reconnect with `connectWeb()`. |
+| `client.logout()` | Unlink this device from the account, the way the Linked Devices screen does, then disconnect. The link does **not** survive — the next `connectWeb()` pairs afresh. Nothing on disk is deleted; remove the session directory yourself if you want the keys gone. |
 
 `connectWeb(phone, opts)` options:
 
@@ -3778,13 +3779,36 @@ The whole message object is accepted as well as its `decoded` half, so
 
 **Verifying the file**
 
-Pass `{ verify: true }` to check the download against the message's
-`fileEncSha256` before decrypting it. The MAC already proves the plaintext was
-not tampered with; this catches a truncated or substituted download earlier, and
-names that failure separately from a decryption one.
+Three things are checked, and all three by default — the message says what the
+file should be, so there is no reason to take the CDN's word for it:
+
+| check | what it covers |
+|---|---|
+| `fileEncSha256` | the blob as it arrived, before any work is spent decrypting it |
+| the MAC | the ciphertext, under a key derived from `mediaKey` — this is the one that authenticates |
+| `fileSha256` | the decrypted file |
 
 ```js
-const bytes = await client.downloadMedia(d, { verify: true })
+const bytes = await client.downloadMedia(d)                    // all three
+const raw   = await client.downloadMedia(d, { verify: false }) // MAC only
+```
+
+`verify: false` skips the two digests for a caller that wants the bytes whatever
+they are. The MAC is checked either way and is never optional.
+
+**Link preview thumbnails**
+
+A text message that quoted a link carries the preview the sender's client built.
+The small inline image is already on the message as `jpegThumbnail` and needs no
+download. The full-size one is a media file of its own — its own `directPath`,
+its own `mediaKey`, encrypted under a key name of its own — so `downloadMedia`
+cannot reach it:
+
+```js
+if (d.thumbnail) {
+  const preview = await client.downloadThumbnail(d)
+  // d.title, d.description and d.matchedText are the rest of the preview
+}
 ```
 
 **What happens underneath**
@@ -3991,9 +4015,35 @@ const { id, encKey } = await client.sendPoll(
   ['JavaScript', 'Python', 'Rust'],
   1            // voters may pick 1 option (0 = unlimited)
 )
-// encKey (32-byte Buffer) is needed to decrypt incoming poll votes
+// encKey (32-byte Buffer) is what reads the votes — keep it
 // (also returned as `messageSecret`, which is the name the protocol uses)
 ```
+
+**Reading the votes**
+
+A vote arrives as its own message and the ballot inside it is encrypted, so
+nothing about who chose what is visible in the stanza. `decryptPollVote()` opens
+it with the poll's `encKey`:
+
+```js
+const options = ['JavaScript', 'Python', 'Rust']
+
+client.on('message', (msg) => {
+  if (msg.decoded?.type !== 'pollVote') return
+  if (msg.decoded.pollKey.id !== id) return      // a vote on some other poll
+
+  const { selected, votedAt } = client.decryptPollVote(msg, { encKey, options })
+  console.log(msg.participant, 'voted for', selected)   // [ 'Rust' ]
+})
+```
+
+Pass `options` and the choices come back as text. Without them you get
+`selectedHashes` — the SHA-256 of each chosen option, which is how the ballot
+names them on the wire — and match them yourself.
+
+The key is derived from the poll id, the poll's sender and the voter, so a vote
+on someone else's poll needs their `encKey`, which only arrives if they sent the
+poll to you: read it off `msg.decoded.encKey` on the poll message itself.
 
 ### Quoted Reply
 
