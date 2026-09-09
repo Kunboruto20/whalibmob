@@ -2833,6 +2833,16 @@ async function main() {
   // first question land in the wrong prompt.
   _sessDir = await askSessionDir(cmd, flags.session);
 
+  // One source of truth for the rest of the run. The library resolves the files
+  // that belong to the installation rather than to a number — the Android token
+  // material above all — through SessionPaths.defaultBaseDir(), which reads
+  // WA_SESSION_DIR. The CLI, though, can arrive at its directory three other
+  // ways: --session, the folder remembered from the setup prompt, or the home
+  // default. Without publishing the answer here, `wa apk-material` wrote into
+  // the resolved directory while registration went looking in ~/.waSession and
+  // reported no material at all.
+  process.env.WA_SESSION_DIR = _sessDir;
+
   await askDebugMode(cmd);
   await askDonation(cmd);
 
