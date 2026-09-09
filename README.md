@@ -1866,9 +1866,19 @@ requesting sms code for +919634847671...
   status  sent
 ```
 
-It happens once. Every later registration reads the file. `WA_NO_APK_DOWNLOAD=1`
-turns the fetch off if you would rather it never pulled a hundred megabytes
-unasked, and `wa apk-material` below does the same job by hand.
+It happens once. Every later registration reads the file — from the session
+directory you are using, wherever that is. `WA_NO_APK_DOWNLOAD=1` turns the
+fetch off if you would rather it never pulled a hundred megabytes unasked, and
+`wa apk-material` below does the same job by hand.
+
+> [!NOTE]
+> The download goes through the Aurora OSS token dispenser, a free third-party
+> service that mints an anonymous Play account. It refuses with **HTTP 403**
+> when it is rate limiting and **5xx** when it is having a bad minute, so the
+> request is retried a few times with a growing wait before giving up.
+> `WA_PLAY_RETRY_DELAY_MS` sets that wait (default `2000`, doubling each time).
+> If it still refuses, nothing is wrong with your setup — pass an APK path to
+> `wa apk-material` instead, which is the same thing without the middleman.
 
 The rest of this section is what happens behind that one command, and how to
 drive each part yourself.

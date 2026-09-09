@@ -1863,9 +1863,20 @@ requesting sms code for +919634847671...
   status  sent
 ```
 
-Isso acontece uma vez. Todo registro posterior lê o arquivo. `WA_NO_APK_DOWNLOAD=1`
-desliga o download, caso você prefira que ele nunca baixe cem megabytes
-sem ser pedido, e o `wa apk-material` abaixo faz o mesmo trabalho manualmente.
+Isso acontece uma vez. Todo registro posterior lê o arquivo — do diretório de
+sessão que você está usando, onde quer que ele esteja. `WA_NO_APK_DOWNLOAD=1`
+desliga o download, caso você prefira que ele nunca baixe cem megabytes sem ser
+pedido, e o `wa apk-material` abaixo faz o mesmo trabalho manualmente.
+
+> [!NOTE]
+> O download passa pelo dispensador de tokens do Aurora OSS, um serviço
+> gratuito de terceiros que cria uma conta Play anônima. Ele recusa com
+> **HTTP 403** quando está limitando a taxa e **5xx** quando está tendo um mau
+> minuto, então a requisição é repetida algumas vezes com uma espera crescente
+> antes de desistir. `WA_PLAY_RETRY_DELAY_MS` define essa espera (padrão
+> `2000`, dobrando a cada tentativa). Se ainda assim recusar, não há nada de
+> errado com a sua configuração — passe um caminho de APK para
+> `wa apk-material`, que é a mesma coisa sem o intermediário.
 
 O resto desta seção é o que acontece por trás daquele único comando, e como
 conduzir cada parte você mesmo.
