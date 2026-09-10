@@ -5,8 +5,7 @@ uses to obtain the hardware attestation tokens WhatsApp's registration server
 expects from a genuine mobile client (Android Play Integrity / Keystore
 attestation and iOS App Attest).
 
-> **Attribution**: these reverse-engineering scripts are derived from
-> [Auties00/cobalt](https://github.com/Auties00/cobalt)'s `tools/mobile`
+
 > folder. They are reference material — kept here so whalibmob users who own a
 > rooted Android phone or a jailbroken iPhone can reproduce the same
 > device-bound attestation the native app produces. They are **not** required
