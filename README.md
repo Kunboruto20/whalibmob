@@ -1845,6 +1845,9 @@ Both are optional and both keep working when omitted — you get an error naming
 > [!NOTE]
 > Registration reports the screens it passes through to WhatsApp's `/client_log`, the way the phone clients do — a client that registers in total silence does something no real installation does. It is fire-and-forget and every failure is swallowed, so it can never take a registration down. Set `WA_FUNNEL_LOG=0` to send none of it.
 
+> [!NOTE]
+> Those events carry timestamps, and registration waits between them the way a person would: a few seconds to type the number in, a moment on the confirmation sheet, longer before asking again after a refusal. Without the waits the whole funnel leaves inside one millisecond, which no handset does. It adds a handful of seconds to a registration. Set `WA_REG_PACING=0` to remove them.
+
 ### Registering as Android
 
 **There is nothing to do first.** Name the platform and register:
