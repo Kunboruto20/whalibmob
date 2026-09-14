@@ -1842,6 +1842,9 @@ Os dois são opcionais e os dois continuam funcionando quando omitidos — você
 > [!NOTE]
 > O registro reporta as telas pelas quais passa ao `/client_log` do WhatsApp, do jeito que os clientes de celular fazem — um cliente que registra em silêncio total faz algo que nenhuma instalação real faz. É "dispare e esqueça" e toda falha é engolida, então isso nunca pode derrubar um registro. Defina `WA_FUNNEL_LOG=0` para não enviar nada disso.
 
+> [!NOTE]
+> Esses eventos carregam horários, e o registro espera entre eles como uma pessoa esperaria: alguns segundos para digitar o número, um momento na tela de confirmação, mais tempo antes de pedir de novo depois de uma recusa. Sem as esperas o funil inteiro sai dentro de um milissegundo, o que nenhum aparelho faz. Isso acrescenta alguns segundos a um registro. Defina `WA_REG_PACING=0` para removê-las.
+
 ### Registrando como Android
 
 **Não há nada a fazer antes.** Informe a plataforma e registre:
