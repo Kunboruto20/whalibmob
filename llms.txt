@@ -28,6 +28,11 @@ is available too when a number cannot receive an SMS.
 - **No browser, no native binaries.** No Selenium, no Puppeteer, no node-gyp. The
   Signal Protocol encryption is inlined in pure JavaScript, so it runs anywhere
   Node.js runs, including Termux on a phone.
+- **Session storage is pluggable.** A session is 834 files by default —
+  `FileBackend`, unchanged and needing nothing. `SqliteBackend` puts the same
+  state in one database, over Node's built-in `node:sqlite` (22.5+) or
+  `better-sqlite3`; `MemoryBackend` keeps it only for the run. `copySession`
+  moves a session between any two of them without touching the source.
 - **A CLI as well as a library.** `npm install -g whalibmob` gives a `wa` command
   with an interactive shell — register, connect and send without writing code.
 - MIT licensed · Node.js >= 18 · TypeScript definitions included · 391 tests.
@@ -126,6 +131,9 @@ await client.requestPairingCode('40712345678');    // first run only; or listen 
 ## Sessions, transport and account
 
 - [Saving & Restoring Sessions](https://github.com/Kunboruto20/whalibmob#saving--restoring-sessions): where the files live and how to move them
+- [Where a Session Is Kept](https://github.com/Kunboruto20/whalibmob#where-a-session-is-kept): the storage backend contract, and the three implementations
+- [One Database Instead of 834 Files](https://github.com/Kunboruto20/whalibmob#one-database-instead-of-834-files): SQLite, over `node:sqlite` or `better-sqlite3`
+- [Moving a Session Between Backends](https://github.com/Kunboruto20/whalibmob#moving-a-session-between-backends): `copySession` and `compareSessions`
 - [Signal Store Utilities](https://github.com/Kunboruto20/whalibmob#signal-store-utilities): `makeCacheableSignalKeyStore`, `addTransactionCapability`, `assertMeId`
 - [Routing Traffic Through a Proxy](https://github.com/Kunboruto20/whalibmob#routing-traffic-through-a-proxy): SOCKS for both transports
 - [Transport](https://github.com/Kunboruto20/whalibmob#transport): the TCP socket and the Noise handshake
