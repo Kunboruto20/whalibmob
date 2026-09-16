@@ -1298,6 +1298,180 @@ export declare const SessionPaths: {
 };
 
 // ────────────────────────────────────────────────────────────────────────────
+// Session storage
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A key under which a piece of session state is kept — one of the fixed names
+ * (`'auth'`, `'signal'`, …) or `` `pre-key/${id}` `` for one one-time pre-key.
+ */
+export type StorageKey = string;
+
+/**
+ * Where a session's state is kept.
+ *
+ * Four synchronous operations over a flat key space. `FileBackend` is the
+ * implementation the library has always used and remains the default; anything
+ * satisfying this interface can take its place.
+ *
+ * Synchronous on purpose: the Signal store flushes from `exit` and `SIGTERM`
+ * handlers, where an awaited write does not land.
+ */
+export interface StorageBackend {
+  /** The stored text, or `null` when the key has never been written. */
+  read(key: StorageKey): string | null;
+  /** Store `value` under `key`, replacing whatever was there. */
+  write(key: StorageKey, value: string): void;
+  /** Remove `key`. A key that is not there is not an error. */
+  remove(key: StorageKey): void;
+  /** Every key present that starts with `prefix` (all of them when omitted). */
+  list(prefix?: string): StorageKey[];
+}
+
+/** Options for {@link FileBackend}. */
+export interface FileBackendOptions {
+  /** The directory this session's files live in. */
+  dir: string;
+  /** The number. Non-digits are stripped. */
+  phone: string;
+  /** The companion (Web API) half rather than the mobile one. Default `false`. */
+  web?: boolean;
+}
+
+/**
+ * The session on disk as JSON files — what whalibmob has always written, under
+ * the same names, in the same place.
+ */
+export declare class FileBackend implements StorageBackend {
+  constructor(opts: FileBackendOptions);
+  readonly dir: string;
+  readonly phone: string;
+  readonly web: boolean;
+  /** The absolute path a key is kept at, whether or not it exists yet. */
+  fileFor(key: StorageKey): string;
+  read(key: StorageKey): string | null;
+  write(key: StorageKey, value: string): void;
+  remove(key: StorageKey): void;
+  list(prefix?: string): StorageKey[];
+  /** key → the part of the file name that follows the number. */
+  static KEY_SUFFIX: Record<string, string>;
+  /** What sits between the stem and a pre-key's id. */
+  static PRE_KEY_INFIX: string;
+}
+
+/** Options for {@link SqliteBackend}. */
+export interface SqliteBackendOptions {
+  /** The database file. Created, with its directory, if missing. */
+  path: string;
+  /** The number. Non-digits are stripped. */
+  phone: string;
+  /** The companion (Web API) half rather than the mobile one. Default `false`. */
+  web?: boolean;
+  /** Demand one driver rather than taking whichever is available. */
+  driver?: 'node' | 'better-sqlite3';
+}
+
+/** One number and half of it, as held in a database file. */
+export interface SqliteSessionRow {
+  phone: string;
+  half: 'mobile' | 'web';
+  web: boolean;
+}
+
+/**
+ * The session in one database instead of 834 files.
+ *
+ * Uses Node's built-in `node:sqlite` (22.5.0 and later) when it is there, and
+ * `better-sqlite3` when it is not. Neither is a dependency of this package —
+ * on a runtime with neither, the constructor throws saying what to install,
+ * and {@link FileBackend} goes on needing nothing.
+ *
+ * One file holds any number of sessions; a backend addresses one number's one
+ * half of it. The file handle is shared between the backends opened on it and
+ * released when the last of them calls `close()`.
+ */
+export declare class SqliteBackend implements StorageBackend {
+  constructor(opts: SqliteBackendOptions);
+  readonly path: string;
+  readonly phone: string;
+  readonly web: boolean;
+  /** Which driver this backend actually opened the file with. */
+  readonly driver: 'node:sqlite' | 'better-sqlite3';
+  read(key: StorageKey): string | null;
+  write(key: StorageKey, value: string): void;
+  remove(key: StorageKey): void;
+  list(prefix?: string): StorageKey[];
+  /** Let go of the database; the file closes once nobody else holds it. */
+  close(): void;
+  /** Every number and half the database file holds. */
+  static sessionsIn(file: string, opts?: { driver?: 'node' | 'better-sqlite3' }): SqliteSessionRow[];
+  /** The schema version this release writes and understands. */
+  static SCHEMA_VERSION: number;
+  /** The table the state lives in. */
+  static TABLE: string;
+}
+
+/** What {@link copySession} did. */
+export interface CopySessionResult {
+  /** Keys written to the destination. */
+  copied: StorageKey[];
+  /** Keys left alone — already present, or gone from the source mid-copy. */
+  skipped: StorageKey[];
+  /** How much was copied, in UTF-8 bytes. */
+  bytes: number;
+}
+
+/** What {@link compareSessions} found. */
+export interface CompareSessionsResult {
+  /** True when both hold the same keys with the same values. */
+  ok: boolean;
+  /** Keys the first has and the second does not. */
+  missing: StorageKey[];
+  /** Keys both have, holding different values. */
+  differing: StorageKey[];
+  /** Keys the second has and the first does not. */
+  extra: StorageKey[];
+}
+
+/**
+ * Copy every key from one backend to another. The source is not modified, and
+ * a key the destination already holds is left alone unless `overwrite` is set —
+ * so an interrupted copy is safe to run again.
+ */
+export declare function copySession(
+  from: StorageBackend,
+  to: StorageBackend,
+  opts?: { overwrite?: boolean }
+): CopySessionResult;
+
+/**
+ * Check that two backends hold the same state, reading both sides rather than
+ * trusting that a copy said so. Worth running before deleting the original.
+ */
+export declare function compareSessions(
+  a: StorageBackend,
+  b: StorageBackend
+): CompareSessionsResult;
+
+/**
+ * A session held only for the life of the process.
+ *
+ * Nothing survives the run: a number registered against this backend cannot be
+ * recovered, because the keys that proved the registration are gone with it.
+ */
+export declare class MemoryBackend implements StorageBackend {
+  constructor();
+  read(key: StorageKey): string | null;
+  write(key: StorageKey, value: string): void;
+  remove(key: StorageKey): void;
+  list(prefix?: string): StorageKey[];
+  /** How many keys are held. Not part of the contract. */
+  readonly size: number;
+  /** Drop everything. Not part of the contract. */
+  clear(): void;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Device
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -1431,6 +1605,35 @@ export declare function tryDecodeArgo(buf: Buffer): any;
 export interface LibModule {
   [name: string]: any;
 }
+
+/**
+ * `whalibmob/lib/store/Backend` — the storage contract itself: the key names a
+ * backend has to honour, and the checks that go with them. The implementations
+ * are {@link FileBackend} and {@link MemoryBackend}, declared above.
+ */
+export declare const StoreBackend: {
+  /** Every key that is a fixed name rather than one generated per record. */
+  KEYS: readonly string[];
+  /** The prefix the per-record pre-key keys are built on: `'pre-key/'`. */
+  PRE_KEY_PREFIX: string;
+  /** The key one pre-key id is stored under. Throws on a non-integer id. */
+  preKeyKey(id: number): StorageKey;
+  /** The id back out of a pre-key key, or `null` when the key is not one. */
+  preKeyId(key: StorageKey): number | null;
+  /** Whether a string is a key every backend must accept. */
+  isValidKey(key: unknown): boolean;
+  /** Throw unless `backend` implements the contract. Returns it when it does. */
+  assertBackend<T>(backend: T, what?: string): T;
+};
+
+/**
+ * `whalibmob/lib/store/migrate` — moving a session from one backend to another
+ * and checking that it landed. Both members are also exported flat, above.
+ */
+export declare const StoreMigrate: {
+  copySession: typeof copySession;
+  compareSessions: typeof compareSessions;
+};
 
 /**
  * `whalibmob/lib/MediaService` — the encryption, upload and download beneath
