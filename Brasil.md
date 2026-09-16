@@ -191,6 +191,9 @@ npm install -g whalibmob
     - [Pré-chaves de Uso Único](#pré-chaves-de-uso-único)
     - [De Onde Vem a Pasta](#de-onde-vem-a-pasta)
     - [Descobrindo os Caminhos por Conta Própria](#descobrindo-os-caminhos-por-conta-própria)
+    - [Onde uma Sessão Fica Guardada](#onde-uma-sessão-fica-guardada)
+    - [Um Banco em Vez de 834 Arquivos](#um-banco-em-vez-de-834-arquivos)
+    - [Movendo uma Sessão Entre Backends](#movendo-uma-sessão-entre-backends)
   - [Utilitários do Signal Store](#utilitários-do-signal-store)
     - [makeCacheableSignalKeyStore](#makecacheablesignalkeystore)
     - [addTransactionCapability](#addtransactioncapability)
@@ -3061,6 +3064,175 @@ migrateSession(base, '919634847671')
 
 `SESSION_SUFFIXES` é todo arquivo por número que a biblioteca grava — a lista contra a qual
 copiar ou apagar se você estiver movendo uma conta manualmente.
+
+### Onde uma Sessão Fica Guardada
+
+Tudo acima descreve arquivos, porque arquivos são o que o whalibmob grava e o
+que ele vai continuar gravando a menos que você diga o contrário. **Nada nesta
+seção é algo que você precise fazer.** Deixe como está e as sessões continuam
+exatamente onde sempre estiveram, nos arquivos JSON nomeados acima.
+
+O que é novo é que o lugar agora é uma escolha. Um **backend** são quatro
+operações síncronas sobre um espaço plano de chaves:
+
+```js
+read(key)          // o texto guardado, ou null quando a chave nunca foi gravada
+write(key, value)  // põe lá, substituindo o que estava
+remove(key)        // tira; uma chave que não está lá não é erro
+list(prefix)       // toda chave presente que começa com prefix
+```
+
+As chaves são nomes lógicos e não nomes de arquivo — `auth`, `signal`,
+`sender-key`, `tc-token`, `device-cache`, `lid-mapping`,
+`lid-reverse-mapping`, `history`, `messages`, `app-state`, `app-state-keys`,
+e `` `pre-key/${id}` `` para cada uma das 812 pré-chaves de uso único.
+
+Três implementações vêm no pacote:
+
+| Backend | Onde o estado vai | Precisa de |
+|---|---|---|
+| `FileBackend` | arquivos JSON — o que a biblioteca sempre gravou | nada; é o padrão |
+| `SqliteBackend` | um único arquivo de banco | Node 22.5+, ou `better-sqlite3` |
+| `MemoryBackend` | lugar nenhum; some quando o processo termina | nada |
+
+```js
+const { FileBackend } = require('whalibmob')
+
+const backend = new FileBackend({
+  dir:   '/home/voce/.waSession/919634847671',
+  phone: '919634847671'
+})
+
+backend.write('auth', JSON.stringify(creds))
+backend.read('auth')          // o texto, ou null
+backend.list()                // ['auth', 'pre-key/1', 'signal', …]
+backend.list('pre-key/')      // só as pré-chaves
+backend.remove('pre-key/42')
+backend.fileFor('signal')     // …/919634847671.signal.json
+```
+
+`FileBackend` grava os mesmos nomes nos mesmos lugares que toda versão
+anterior, então uma sessão gravada pelo whalibmob 5.30 abre por ele sem ser
+tocada, e uma gravada por ele abre no 5.30. A única mudança é que as gravações
+agora vão para um arquivo temporário e são renomeadas no lugar, de modo que um
+processo que morre no meio da gravação deixa o estado anterior intacto em vez
+de meio arquivo.
+
+> [!IMPORTANT]
+> **Um número tem duas metades, e elas são sessões separadas.** A registrada
+> pela Mobile API e a companion vinculada pela Web API nunca compartilham
+> estado — em particular têm espaços de id de pré-chave separados, e misturá-los
+> entrega duas chaves diferentes sob um mesmo id e quebra a descriptografia.
+> Um backend cobre **uma** metade, escolhida por `web`:
+>
+> ```js
+> const mobile = new FileBackend({ dir, phone, web: false })  // padrão
+> const web    = new FileBackend({ dir, phone, web: true })
+> ```
+>
+> Ambos aceitam as mesmas chaves e mantêm valores inteiramente separados.
+
+> [!NOTE]
+> **O cliente ainda não aceita um backend.** `new WhalibmobClient({ … })` recebe
+> `sessionDir` e grava arquivos, como sempre fez; os módulos que guardam o
+> estado da sessão ainda fazem sua própria E/S de arquivo. Os backends são
+> utilizáveis por conta própria — para ler, inspecionar, copiar ou mover uma
+> sessão — e ligá-los ao cliente é o próximo passo. Nada aqui muda como uma
+> sessão é criada ou conectada hoje.
+
+### Um Banco em Vez de 834 Arquivos
+
+O estado de um número são 22 arquivos nomeados mais um arquivo para cada uma
+das suas 812 pré-chaves de uso único. Num notebook ninguém percebe. Num celular
+sob Termux, num contêiner com orçamento pequeno de inodes, ou com cinquenta
+números numa pasta, são 40 000 arquivos cujo diretório precisa ser lido toda
+vez que o pool de pré-chaves é contado.
+
+`SqliteBackend` é o mesmo estado como um punhado de linhas:
+
+```js
+const { SqliteBackend } = require('whalibmob')
+
+const db = new SqliteBackend({
+  path:  '/home/voce/.waSession/sessions.sqlite',
+  phone: '919634847671'
+})
+
+db.write('auth', JSON.stringify(creds))
+db.read('auth')
+db.list('pre-key/')
+db.driver          // 'node:sqlite' ou 'better-sqlite3'
+db.close()         // solta o arquivo
+```
+
+**O que ele precisa.** O Node traz um SQLite próprio a partir da **22.5.0**
+como `node:sqlite`, e é ele que é usado quando está disponível — nada para
+instalar, nada para o node-gyp falhar, e o Termux continua sendo um lugar onde
+o whalibmob roda. Em Node mais antigo ele recorre ao `better-sqlite3`, se
+estiver instalado:
+
+```sh
+npm install better-sqlite3      # apenas em Node anterior ao 22.5
+```
+
+Nenhum dos dois é dependência deste pacote. Num runtime sem nenhum deles, o
+construtor lança um erro dizendo qual dos dois buscar — e o `FileBackend`
+continua não precisando de nada.
+
+Um arquivo guarda quantos números e metades você quiser, enquanto cada backend
+enxerga apenas a sua fatia:
+
+```js
+const mobile = new SqliteBackend({ path: file, phone: '919634847671' })
+const web    = new SqliteBackend({ path: file, phone: '919634847671', web: true })
+const outro  = new SqliteBackend({ path: file, phone: '5511987654321' })
+
+SqliteBackend.sessionsIn(file)
+// [ { phone: '5511987654321', half: 'mobile', web: false },
+//   { phone: '919634847671',  half: 'mobile', web: false },
+//   { phone: '919634847671',  half: 'web',    web: true  } ]
+```
+
+O handle do arquivo é compartilhado entre os backends abertos sobre ele e
+fechado quando o último deles chama `close()`, então fechar um não puxa o
+arquivo debaixo dos outros. Chamar `close()` duas vezes é inofensivo.
+
+O banco roda em modo WAL, então um cliente descarregando seu Signal store e
+outro lendo o pool de pré-chaves não se bloqueiam. Os valores são guardados
+como blobs e não como texto: um blob de credencial carregando um byte NUL é
+truncado por um binding de texto, e a sessão então carrega com chaves erradas
+daquele byte em diante — a pior forma de um bug se apresentar.
+
+### Movendo uma Sessão Entre Backends
+
+Nada é removido e a origem nunca é modificada, então se o resultado não for o
+que você queria os arquivos antigos continuam lá para voltar:
+
+```js
+const { FileBackend, SqliteBackend, copySession, compareSessions } = require('whalibmob')
+
+const files = new FileBackend({ dir: '/home/voce/.waSession/919634847671',
+                                phone: '919634847671' })
+const db    = new SqliteBackend({ path: '/home/voce/.waSession/sessions.sqlite',
+                                  phone: '919634847671' })
+
+const movido = copySession(files, db)
+// { copied: ['auth', 'pre-key/1', …], skipped: [], bytes: 1284 }
+
+const check = compareSessions(files, db)
+// { ok: true, missing: [], differing: [], extra: [] }
+
+db.close()
+```
+
+`compareSessions` lê os dois lados de volta em vez de confiar que a cópia
+disse que deu certo — rode antes de apagar qualquer coisa. Uma chave que o
+destino já tem é deixada em paz, então uma cópia interrompida pode ser rodada
+de novo com segurança; passe `{ overwrite: true }` quando você realmente quiser
+substituir o que está lá.
+
+Faça as duas metades de um número separadamente — `web: false` e `web: true`
+são duas sessões, e uma cópia de uma não é uma cópia da outra.
 
 ## Utilitários do Signal Store
 

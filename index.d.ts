@@ -1359,6 +1359,100 @@ export declare class FileBackend implements StorageBackend {
   static PRE_KEY_INFIX: string;
 }
 
+/** Options for {@link SqliteBackend}. */
+export interface SqliteBackendOptions {
+  /** The database file. Created, with its directory, if missing. */
+  path: string;
+  /** The number. Non-digits are stripped. */
+  phone: string;
+  /** The companion (Web API) half rather than the mobile one. Default `false`. */
+  web?: boolean;
+  /** Demand one driver rather than taking whichever is available. */
+  driver?: 'node' | 'better-sqlite3';
+}
+
+/** One number and half of it, as held in a database file. */
+export interface SqliteSessionRow {
+  phone: string;
+  half: 'mobile' | 'web';
+  web: boolean;
+}
+
+/**
+ * The session in one database instead of 834 files.
+ *
+ * Uses Node's built-in `node:sqlite` (22.5.0 and later) when it is there, and
+ * `better-sqlite3` when it is not. Neither is a dependency of this package —
+ * on a runtime with neither, the constructor throws saying what to install,
+ * and {@link FileBackend} goes on needing nothing.
+ *
+ * One file holds any number of sessions; a backend addresses one number's one
+ * half of it. The file handle is shared between the backends opened on it and
+ * released when the last of them calls `close()`.
+ */
+export declare class SqliteBackend implements StorageBackend {
+  constructor(opts: SqliteBackendOptions);
+  readonly path: string;
+  readonly phone: string;
+  readonly web: boolean;
+  /** Which driver this backend actually opened the file with. */
+  readonly driver: 'node:sqlite' | 'better-sqlite3';
+  read(key: StorageKey): string | null;
+  write(key: StorageKey, value: string): void;
+  remove(key: StorageKey): void;
+  list(prefix?: string): StorageKey[];
+  /** Let go of the database; the file closes once nobody else holds it. */
+  close(): void;
+  /** Every number and half the database file holds. */
+  static sessionsIn(file: string, opts?: { driver?: 'node' | 'better-sqlite3' }): SqliteSessionRow[];
+  /** The schema version this release writes and understands. */
+  static SCHEMA_VERSION: number;
+  /** The table the state lives in. */
+  static TABLE: string;
+}
+
+/** What {@link copySession} did. */
+export interface CopySessionResult {
+  /** Keys written to the destination. */
+  copied: StorageKey[];
+  /** Keys left alone — already present, or gone from the source mid-copy. */
+  skipped: StorageKey[];
+  /** How much was copied, in UTF-8 bytes. */
+  bytes: number;
+}
+
+/** What {@link compareSessions} found. */
+export interface CompareSessionsResult {
+  /** True when both hold the same keys with the same values. */
+  ok: boolean;
+  /** Keys the first has and the second does not. */
+  missing: StorageKey[];
+  /** Keys both have, holding different values. */
+  differing: StorageKey[];
+  /** Keys the second has and the first does not. */
+  extra: StorageKey[];
+}
+
+/**
+ * Copy every key from one backend to another. The source is not modified, and
+ * a key the destination already holds is left alone unless `overwrite` is set —
+ * so an interrupted copy is safe to run again.
+ */
+export declare function copySession(
+  from: StorageBackend,
+  to: StorageBackend,
+  opts?: { overwrite?: boolean }
+): CopySessionResult;
+
+/**
+ * Check that two backends hold the same state, reading both sides rather than
+ * trusting that a copy said so. Worth running before deleting the original.
+ */
+export declare function compareSessions(
+  a: StorageBackend,
+  b: StorageBackend
+): CompareSessionsResult;
+
 /**
  * A session held only for the life of the process.
  *
@@ -1530,6 +1624,15 @@ export declare const StoreBackend: {
   isValidKey(key: unknown): boolean;
   /** Throw unless `backend` implements the contract. Returns it when it does. */
   assertBackend<T>(backend: T, what?: string): T;
+};
+
+/**
+ * `whalibmob/lib/store/migrate` — moving a session from one backend to another
+ * and checking that it landed. Both members are also exported flat, above.
+ */
+export declare const StoreMigrate: {
+  copySession: typeof copySession;
+  compareSessions: typeof compareSessions;
 };
 
 /**

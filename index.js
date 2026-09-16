@@ -108,6 +108,9 @@ const { encodeWAM, BinaryInfo, WEB_EVENTS, WEB_GLOBALS } = WAM;
 const StoreBackend    = require('./lib/store/Backend');
 const { FileBackend }   = require('./lib/store/FileBackend');
 const { MemoryBackend } = require('./lib/store/MemoryBackend');
+const { SqliteBackend } = require('./lib/store/SqliteBackend');
+const StoreMigrate      = require('./lib/store/migrate');
+const { copySession, compareSessions } = StoreMigrate;
 
 // ─── The namespaces ──────────────────────────────────────────────────────────
 //
@@ -242,6 +245,14 @@ module.exports = {
   StoreBackend,
   FileBackend,
   MemoryBackend,
+  // One database instead of 834 files. Needs Node 22.5+ for its built-in
+  // node:sqlite, or better-sqlite3 installed; neither is a dependency, and
+  // FileBackend stays the default that needs nothing.
+  SqliteBackend,
+  // Moving a session from one backend to another, and checking that it landed.
+  StoreMigrate,
+  copySession,
+  compareSessions,
   // Device config — reads WA_OS / WA_DEVICE / WA_DEVICE_* from process.env
   getDeviceConfig,
   // Store helpers
