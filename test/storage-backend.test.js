@@ -23,6 +23,7 @@ const path   = require('path');
 
 const { FileBackend }   = require('../lib/store/FileBackend');
 const { MemoryBackend } = require('../lib/store/MemoryBackend');
+const { SqliteBackend, resolveDriver } = require('../lib/store/SqliteBackend');
 const { KEYS, preKeyKey, preKeyId, isValidKey, assertBackend } =
   require('../lib/store/Backend');
 const SessionPaths = require('../lib/SessionPaths');
@@ -32,6 +33,13 @@ const PHONE = '919634847671';
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'whalib-backend-'));
 }
+
+// node:sqlite arrived in Node 22.5 and better-sqlite3 is not a dependency, so
+// on an older runtime with neither there is nothing to test. Skipping is right;
+// pretending to pass is not, so the reason is printed.
+const HAVE_SQLITE = (() => {
+  try { resolveDriver(); return true; } catch (_) { return false; }
+})();
 
 // Each factory hands back a fresh, empty backend plus the way to clean it up.
 const BACKENDS = [
@@ -45,6 +53,21 @@ const BACKENDS = [
     };
   }]
 ];
+
+if (HAVE_SQLITE) {
+  BACKENDS.push(['SqliteBackend', () => {
+    const dir = tmpDir();
+    const backend = new SqliteBackend({ path: path.join(dir, 'state.sqlite'), phone: PHONE });
+    return {
+      backend,
+      dir,
+      cleanup() {
+        backend.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    };
+  }]);
+}
 
 // ─── the contract ────────────────────────────────────────────────────────────
 
