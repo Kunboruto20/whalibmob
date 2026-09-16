@@ -102,6 +102,13 @@ const {
 
 const { encodeWAM, BinaryInfo, WEB_EVENTS, WEB_GLOBALS } = WAM;
 
+// Where a session's state goes. FileBackend is what the library has always
+// done — JSON files, same names — and is the default; anything implementing
+// the same four methods can take its place. See lib/store/Backend.js.
+const StoreBackend    = require('./lib/store/Backend');
+const { FileBackend }   = require('./lib/store/FileBackend');
+const { MemoryBackend } = require('./lib/store/MemoryBackend');
+
 // ─── The namespaces ──────────────────────────────────────────────────────────
 //
 // Every module of lib/, whole, under a name of its own — see the note at the
@@ -229,6 +236,12 @@ module.exports = {
   webStoreFileFor,
   listSessions,
   migrateSession,
+  // Where a session's state is kept. FileBackend is the default and writes the
+  // JSON files whalibmob has always written; MemoryBackend keeps a session only
+  // for the life of the process. Both satisfy the contract in StoreBackend.
+  StoreBackend,
+  FileBackend,
+  MemoryBackend,
   // Device config — reads WA_OS / WA_DEVICE / WA_DEVICE_* from process.env
   getDeviceConfig,
   // Store helpers
