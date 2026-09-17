@@ -27,6 +27,8 @@ código por SMS ou chamada de voz, e trazer a conta à existência. Os dois tran
 [![Enviar mensagens](https://img.shields.io/badge/Enviar_mensagens-texto_mídia_enquetes-34B7F1?style=for-the-badge)](#enviando-mensagens)
 [![Tratar eventos](https://img.shields.io/badge/Tratar_eventos-recebidas_%26_recibos-34B7F1?style=for-the-badge)](#tratando-eventos)
 
+[![Atestação de dispositivo](https://img.shields.io/badge/Atestação_de_dispositivo-Play_Integrity_%2B_App_Attest-8E44AD?style=for-the-badge)](#atestação-de-dispositivo--play-integrity-e-app-attest)
+
 </div>
 
 ##
@@ -58,6 +60,71 @@ Se você quer Novidades sobre o whalibmob, entre neste canal do whalibmob: https
 - **A API é idêntica nos dois modos.** Tudo abaixo — envio, mídia, grupos, eventos — funciona da mesma forma, não importa como a sessão foi criada.
 - Sem navegador, sem Selenium, sem runtime externo. Ele fala com o WhatsApp diretamente por um **socket TCP** com o handshake do **Protocolo Noise**.
 - A criptografia do Protocolo Signal está **totalmente embutida** em JavaScript puro — sem binários nativos, sem node-gyp, roda em qualquer lugar onde o Node.js roda.
+- **Ele consegue provar que é um celular de verdade.** Os scripts Frida em [`frida/`](https://github.com/Kunboruto20/whalibmob/tree/main/frida) geram, no próprio aparelho, a atestação de hardware que o servidor de registro do WhatsApp espera — Play Integrity e Keystore no Android, App Attest no iOS — e o whalibmob insere o resultado nas requisições de registro. Veja [Atestação de Dispositivo](#atestação-de-dispositivo--play-integrity-e-app-attest).
+
+## Atestação de Dispositivo — Play Integrity e App Attest
+
+Esta é a parte em que a maioria dos projetos para, então vale dizer logo o que
+está aqui e o que ela faz.
+
+Quando o app oficial do WhatsApp registra um número, ele não envia só o número e
+o código. Ele também prova ao servidor que está rodando num aparelho legítimo,
+gerando um token de atestação apoiado em hardware — **Play Integrity mais uma
+cadeia de certificados do Keystore** no Android, **DeviceCheck App Attest** no
+iOS. Esses tokens não podem ser forjados fora do aparelho: são assinados por uma
+chave que vive no hardware seguro do celular.
+
+O whalibmob traz os scripts que os obtêm. Eles rodam sob
+[Frida](https://frida.re) num **Android com root** ou num **iPhone com
+jailbreak**, sobem um pequeno servidor HTTP no aparelho, e o whalibmob o chama
+durante o registro:
+
+| Plataforma | Endpoint | O que alimenta na requisição de registro |
+|------------|--------------|-------------------------------------------|
+| Android | `/info` | hashes do APK, assinatura e chave secreta — a impressão digital do aparelho |
+| Android | `/integrity` | `gpia` e seus companheiros `_gg _gi _gp _ge _ga` — o veredito do Play Integrity |
+| Android | `/cert` | a assinatura `&H=` do corpo e a cadeia de certificados do `Authorization` |
+| iOS | `/integrity` | a asserção do App Attest e o cabeçalho `Authorization` dela |
+
+```sh
+# no seu computador — monte o bundle
+cd frida/android                                  # ou: cd frida/ios
+npm install && npm run build                      # → server_with_dependencies.js
+
+# anexe ao WhatsApp no aparelho, com o servidor Frida rodando nele
+frida -U "WhatsApp" -l server_with_dependencies.js
+
+# na máquina que roda o whalibmob — ele escuta na 1119 (WhatsApp) / 1120 (Business)
+export WA_FRIDA_HOST=192.168.1.50
+wa registration --request-code 5511987654321
+```
+
+O código, e a configuração de cada plataforma:
+
+- **[`frida/android/server.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/android/server.js)** — atestação Play Integrity + Keystore · [configuração](https://github.com/Kunboruto20/whalibmob/blob/main/frida/android/README.md)
+- **[`frida/ios/server.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/ios/server.js)** — DeviceCheck App Attest · [configuração](https://github.com/Kunboruto20/whalibmob/blob/main/frida/ios/README.md)
+- **[`frida/ios/registration/registration.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/ios/registration/registration.js)** — imprime a chave pública de registro
+- **[`frida/ios/exchange/index.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/ios/exchange/index.js)** — hook em `mbedtls_gcm_update` para ler o payload
+- **[`lib/Attestation.js`](https://github.com/Kunboruto20/whalibmob/blob/main/lib/Attestation.js)** — o cliente que conversa com o aparelho
+
+> [!NOTE]
+> **Nada disso é obrigatório.** Deixe `WA_FRIDA_HOST` sem definir e o whalibmob
+> envia os mesmos campos de atestação vazios e de baixa confiança que o cliente
+> nativo envia quando a geração de integridade dele falha — o que o servidor
+> tolera. O registro funciona sem nenhum celular com root por perto. Anexar um
+> aparelho aumenta a pontuação de confiança, que é o que ajuda quando um número
+> fica batendo em `no_routes` ou numa tela de bloqueio.
+
+> [!IMPORTANT]
+> **Os scripts Frida em si são material de referência, não um recurso mantido.**
+> Eles estão publicados para que qualquer pessoa com um aparelho com root ou
+> jailbreak consiga reproduzir o que o app nativo faz, e para que o método fique
+> registrado. Eles também exigem o app oficial instalado **pela Play Store / App
+> Store** — um APK de fora não atesta, porque o token é vinculado à build
+> assinada pela loja. O `lib/Attestation.js`, o lado cliente dentro do
+> whalibmob, é mantido como parte da biblioteca.
+
+Passo a passo completo, com os pré-requisitos do aparelho: [Atestação de Dispositivo com Frida](#atestação-de-dispositivo-com-frida-opcional).
 
 ## Instalação
 
@@ -73,6 +140,7 @@ npm install -g whalibmob
 
 ## Índice
 
+- [Atestação de Dispositivo — Play Integrity e App Attest](#atestação-de-dispositivo--play-integrity-e-app-attest)
 - [CLI — Primeiros Passos](#cli--primeiros-passos)
   - [Instalar a CLI](#instalar-a-cli)
   - [Configuração Inicial: Registrar um Número](#configuração-inicial-registrar-um-número)
