@@ -2819,7 +2819,7 @@ O fluxo da Apple não é o do Google, mas chega ao mesmo lugar:
 
 O passo 1 roda uma vez por número e o resultado fica em cache na sessão: o certificado que a Apple emite vale um ano, e a identidade por trás dele é o que faz o mesmo push token voltar na próxima execução. Um token que o WhatsApp já registrou deixa de ser entregável se essa identidade for jogada fora, que é a mesma razão pela qual o android id do Firebase é guardado.
 
-A conexão com o courier é um stream TLS com ALPN `apns-security-v3` — o dispositivo se prova com uma assinatura sobre um nonce novo no primeiro frame, em vez de um certificado de cliente TLS. Uma rede que termina o TLS no meio do caminho não consegue carregá-lo, e a falha diz isso pelo nome em vez de parecer uma conexão caída.
+A conexão com o courier é um stream TLS que oferece ALPN `apns-security-v3` — o dispositivo se prova com uma assinatura sobre um nonce novo no primeiro frame, em vez de um certificado de cliente TLS. A Apple aceita a oferta sem ecoá-la de volta, então a ausência do eco é normal e não é tratada como falha. Uma rede que termina o TLS no meio do caminho não consegue carregar o stream; o que a denuncia é o certificado, já que um intermediário precisa apresentar um assinado pela própria CA, e não pela da Apple. A falha nomeia esse emissor, em vez de parecer uma conexão caída.
 
 Desligue com `WA_APNS_PUSH=0`.
 
