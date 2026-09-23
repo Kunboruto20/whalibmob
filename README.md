@@ -2821,7 +2821,7 @@ Apple's flow is not Google's, but it lands in the same place:
 
 Step 1 runs once per number and its result is cached on the session: the certificate Apple issues is good for a year, and the identity behind it is what makes the same push token come back on the next run. A token WhatsApp has already recorded stops being deliverable if that identity is thrown away, which is the same reason the Firebase android id is kept.
 
-The courier connection is a TLS stream with ALPN `apns-security-v3` — the device proves itself with a signature over a fresh nonce in the first frame rather than with a TLS client certificate. A network that terminates TLS in the middle cannot carry it, and the failure says so by name instead of looking like a dropped connection.
+The courier connection is a TLS stream that offers ALPN `apns-security-v3` — the device proves itself with a signature over a fresh nonce in the first frame rather than with a TLS client certificate. Apple accepts the offer without echoing it back, so a missing echo is normal and is not treated as a failure. A network that terminates TLS in the middle cannot carry the stream; what gives it away is the certificate, since a middlebox has to present one its own CA signed rather than Apple's. The failure names that issuer, instead of looking like a dropped connection.
 
 Turn it off with `WA_APNS_PUSH=0`.
 
