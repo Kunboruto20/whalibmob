@@ -2819,7 +2819,7 @@ Apple's flow is not Google's, but it lands in the same place:
 | 2 | `init-p01st.push.apple.com/bag` | which courier hosts to dial |
 | 3 | `<n>-courier.push.apple.com:443` | the device token, then `GET_TOKEN` for `net.whatsapp.WhatsApp` — the per-topic token that *is* `push_token` |
 
-Step 1 runs once per number and its result is cached on the session: the certificate is good for about three years, and the identity behind it is what makes the same push token come back on the next run. A token WhatsApp has already recorded stops being deliverable if that identity is thrown away, which is the same reason the Firebase android id is kept.
+Step 1 runs once per number and its result is cached on the session: the certificate Apple issues is good for a year, and the identity behind it is what makes the same push token come back on the next run. A token WhatsApp has already recorded stops being deliverable if that identity is thrown away, which is the same reason the Firebase android id is kept.
 
 The courier connection is a TLS stream with ALPN `apns-security-v3` — the device proves itself with a signature over a fresh nonce in the first frame rather than with a TLS client certificate. A network that terminates TLS in the middle cannot carry it, and the failure says so by name instead of looking like a dropped connection.
 
