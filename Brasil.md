@@ -251,6 +251,8 @@ npm install -g whalibmob
   - [O Número sob o Qual o WhatsApp Arquiva sua Conta](#o-número-sob-o-qual-o-whatsapp-arquiva-sua-conta)
   - [Quando o Registro É Recusado por Falta de Consentimento](#quando-o-registro-é-recusado-por-falta-de-consentimento)
   - [O Push Token](#o-push-token)
+    - [No Android: Firebase](#no-android-firebase)
+    - [No iOS: APNs](#no-ios-apns)
     - [Recebendo o Código por Push (sem digitá-lo)](#recebendo-o-código-por-push-sem-digitá-lo)
   - [Roteando o Tráfego por um Proxy](#roteando-o-tráfego-por-um-proxy)
     - [O que Passa por Ele](#o-que-passa-por-ele)
@@ -1868,7 +1870,7 @@ if (result.status === 'ok') {
 }
 ```
 
-**Opcional — deixe o código chegar sozinho.** Os dois passos acima são o fluxo inteiro, e nada neles muda se você não fizer mais nada. Mas como um registro Android envia um token push do Firebase (veja [O Push Token](#o-push-token)), o WhatsApp *pode* também entregar o código de seis dígitos como um push silencioso. Abra um listener para ele antes de solicitar o código, e o código pode voltar sem que nada seja digitado — em um perfil `WA_OS=android`; no iOS ele resolve `null` de imediato, já que só o Firebase está implementado:
+**Opcional — deixe o código chegar sozinho.** Os dois passos acima são o fluxo inteiro, e nada neles muda se você não fizer mais nada. Mas como um registro envia um push token (veja [O Push Token](#o-push-token)), o WhatsApp *pode* também entregar o código de seis dígitos como um push silencioso. Abra um listener para ele antes de solicitar o código, e o código pode voltar sem que nada seja digitado — em um perfil Android pelo Firebase, em um iOS pelo APNs:
 
 ```js
 const { receivePushCode } = require('whalibmob')
@@ -2775,7 +2777,7 @@ Se isso também for recusado, o número precisa passar pelo app real uma vez, em
 
 Todo WhatsApp em um celular real tem um push token. Ele é o endereço que a rede de push usa para acordar o app, e nenhuma instalação existe sem um — então um registro que não envia `push_token` descreve um WhatsApp que não pode ser notificado, ou seja, um dispositivo que não existe.
 
-**Este é um recurso do perfil Android.** Qual rede de push uma instalação usa decorre da plataforma dela: o Android tem um token do *Firebase* e mantém um stream aberto com o Google, o iOS tem um token do *APNs* e mantém um aberto com a Apple. Eles não são intercambiáveis, e o servidor de registro vê tanto o token quanto o User-Agent nomeando a plataforma que o enviou — um iPhone apresentando um token do Firebase descreve um dispositivo que ninguém fabrica. Só o lado do Firebase está implementado aqui, então tudo nesta seção se aplica quando `WA_OS=android`. Um registro iOS não envia nenhum `push_token`, o que é o correto para um cliente sem linha de push, e todo o resto do fluxo não é afetado.
+**Qual token você recebe decorre do perfil.** Qual rede de push uma instalação usa decorre da plataforma dela: o Android tem um token do *Firebase* e mantém um stream aberto com o Google, o iOS tem um token do *APNs* e mantém um aberto com a Apple. Eles não são intercambiáveis, e o servidor de registro vê tanto o token quanto o User-Agent nomeando a plataforma que o enviou — um iPhone apresentando um token do Firebase descreve um dispositivo que ninguém fabrica. Os dois lados estão implementados, e o certo é escolhido a partir de `WA_OS` sem você precisar pedir. Um perfil que não é nenhum dos dois não envia `push_token` algum, o que é o correto para um cliente sem linha de push.
 
 O token faz dois trabalhos distintos, e é fácil confundi-los:
 
@@ -2789,6 +2791,8 @@ request a code ─┬─ method you chose  →  reaches a human   (SMS, a call, 
                 └─ push_token line   →  reaches the app    (silent, auto-filled — if WhatsApp sends it)
 ```
 
+### No Android: Firebase
+
 O registro busca um token real e o envia, em três chamadas HTTPS simples ao Google:
 
 | Passo | Endpoint | Produz |
@@ -2801,15 +2805,36 @@ Sem root, sem Frida, sem celular. Isso não tem relação com a atestação do P
 
 Isso roda uma vez por número. A identidade do Firebase fica em cache na sessão, porque o Google emite um android id uma vez e espera recebê-lo de volta; buscar um novo a cada passo do registro criaria um dispositivo fantasma novo a cada vez.
 
-**A falha é silenciosa por design.** Uma rede bloqueada, uma recusa do Google, uma resposta malformada — tudo termina com o campo omitido e o registro seguindo exatamente como seguia antes de os push tokens existirem aqui. Um push token ajuda; ele nunca é um pré-requisito.
-
 Desligue com `WA_FCM_PUSH=0`.
+
+### No iOS: APNs
+
+O fluxo da Apple não é o do Google, mas chega ao mesmo lugar:
+
+| Passo | Endpoint | Produz |
+|---|---|---|
+| 1 | `albert.apple.com` | um certificado de dispositivo que a Apple assina para um par de chaves gerado aqui — a ativação que todo dispositivo Apple roda no primeiro boot |
+| 2 | `init-p01st.push.apple.com/bag` | quais hosts do courier discar |
+| 3 | `<n>-courier.push.apple.com:443` | o token do dispositivo e, em seguida, `GET_TOKEN` para `net.whatsapp.WhatsApp` — o token por tópico que *é* o `push_token` |
+
+O passo 1 roda uma vez por número e o resultado fica em cache na sessão: o certificado vale cerca de três anos, e a identidade por trás dele é o que faz o mesmo push token voltar na próxima execução. Um token que o WhatsApp já registrou deixa de ser entregável se essa identidade for jogada fora, que é a mesma razão pela qual o android id do Firebase é guardado.
+
+A conexão com o courier é um stream TLS com ALPN `apns-security-v3` — o dispositivo se prova com uma assinatura sobre um nonce novo no primeiro frame, em vez de um certificado de cliente TLS. Uma rede que termina o TLS no meio do caminho não consegue carregá-lo, e a falha diz isso pelo nome em vez de parecer uma conexão caída.
+
+Desligue com `WA_APNS_PUSH=0`.
+
+**A falha é silenciosa por design, nas duas plataformas.** Uma rede bloqueada, uma recusa do Google ou da Apple, uma resposta malformada — tudo termina com o campo omitido e o registro seguindo exatamente como seguia antes de os push tokens existirem aqui. Um push token ajuda; ele nunca é um pré-requisito.
 
 ### Recebendo o Código por Push (sem digitá-lo)
 
-Esta é a ponta receptora do trabalho 2 acima. Quando o WhatsApp envia o código como um push silencioso, algo precisa estar escutando na linha do Firebase para capturá-lo — a mesma conexão de longa duração que todo celular Android mantém aberta com o Google. O `receivePushCode(store, device)` a abre: um stream TLS para `mtalk.google.com:5228` falando o protocolo MCS, autenticado com a identidade do Firebase, resolvendo com o código no momento em que um push que o carrega chega.
+Esta é a ponta receptora do trabalho 2 acima. Quando o WhatsApp envia o código como um push silencioso, algo precisa estar escutando na linha de push para capturá-lo — a mesma conexão de longa duração que todo celular mantém aberta com a sua rede de push. O `receivePushCode(store, device)` abre a que corresponde ao perfil:
 
-Assim como o token em si, isso é somente Android. Em um perfil iOS o `receivePushCode` resolve `null` imediatamente, em vez de manter um listener aberto em uma linha que nenhum push alcança, e o `/reg push` avisa e para em vez de esperar o timeout. Verifique com `supportsPush(store.device)` se quiser ramificar seu código com base nisso.
+| Perfil | Conexão | Onde está o código |
+|---|---|---|
+| `WA_OS=android` | `mtalk.google.com:5228`, o protocolo MCS, autenticado com a identidade do Firebase | uma entrada de `appData` com a chave `registration_code` |
+| `WA_OS=ios` | `<n>-courier.push.apple.com:443`, o courier do APNs, autenticado com o certificado de ativação | o campo `regcode` do payload JSON da notificação |
+
+De um jeito ou de outro, a chamada resolve com o código no momento em que um push que o carrega chega. Um perfil que não é nenhum dos dois resolve `null` imediatamente, em vez de manter um listener aberto em uma linha que nenhum push alcança, e o `/reg push` avisa e para em vez de esperar o timeout. Verifique com `supportsPush(store.device)` se quiser ramificar seu código com base nisso.
 
 A ordem importa. Abra o listener **primeiro**, para que a linha esteja ativa antes de o código ser solicitado; depois solicite o código por qualquer método; depois aguarde por ele.
 
@@ -2836,7 +2861,7 @@ Pela CLI a sequência inteira é um comando:
 
 Ele abre o listener, espera até estar autenticado, solicita o código e confirma automaticamente se o push chegar — caindo para `/reg confirm <phone> <code>` quando não chega.
 
-A conexão carrega um heartbeat e lembra os ids de mensagem que já viu, então uma reconexão não relê um código já entregue, do jeito que o cliente nativo faz. Ela resolve `null` em timeout, login recusado ou qualquer falha — momento em que você simplesmente lê o código do jeito comum e o verifica. Como o token, ela também passa pelo proxy SOCKS configurado.
+Qualquer uma das duas conexões carrega um heartbeat e confirma o que já leu, então uma reconexão não relê um código já entregue, do jeito que o cliente nativo faz. Ela resolve `null` em timeout, login recusado ou qualquer falha — momento em que você simplesmente lê o código do jeito comum e o verifica. Como o token, ela também passa pelo proxy SOCKS configurado.
 
 > [!IMPORTANT]
 > Receber o push não é a mesma coisa que fazer o WhatsApp enviá-lo. Se o WhatsApp envia ou não o código por push em uma dada requisição é decisão do servidor, e em um cliente que envia atestação vazia ele frequentemente manda o código apenas pelo método que você pediu (SMS, `wa_old`, uma chamada) e nenhum push silencioso. Este listener captura o push corretamente **quando um é enviado**; ele não pode forçar esse canal, e nunca substitui o método escolhido — ele roda ao lado dele. Com uma atestação válida do Play Integrity na requisição (`WA_FRIDA_HOST`), é mais provável que o servidor inclua o push silencioso.
