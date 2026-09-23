@@ -1779,6 +1779,12 @@ export declare const Tokens: LibModule;
 export declare const PushClient: LibModule;
 export declare const Fcm: LibModule;
 export declare const FcmMcs: LibModule;
+/** `whalibmob/lib/apns` — the iOS push line: activation, token, push code. */
+export declare const Apns: LibModule;
+/** `whalibmob/lib/apns-courier` — the APNs stream the push code arrives on. */
+export declare const ApnsCourier: LibModule;
+/** `whalibmob/lib/plist` — Apple property lists, as APNs speaks them. */
+export declare const Plist: LibModule;
 
 /**
  * X25519 through Node's own OpenSSL — a drop-in for `curve25519-js`, roughly
