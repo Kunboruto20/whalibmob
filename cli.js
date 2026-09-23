@@ -663,7 +663,7 @@ const HELP = `
     /reg check   <phone>                              check if number has WhatsApp
     /reg code    <phone> [sms|voice|wa_old]           request verification code
     /reg code    <phone> email <address>              request code via email
-    /reg push    <phone> [sms|voice]                  request code and receive it over Firebase push
+    /reg push    <phone> [sms|voice]                  request code and receive it over push
     /reg confirm <phone> <code>                       complete registration
 
   Connection
