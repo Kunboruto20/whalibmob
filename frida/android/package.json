@@ -1,7 +1,7 @@
 {
   "name": "whalibmob-frida-android",
   "version": "1.0.0",
-  "description": "Android Play Integrity / Keystore attestation server for whalibmob registration (derived from Auties00/cobalt)",
+  "description": "Android Play Integrity / Keystore attestation server for whalibmob registration ()",
   "private": true,
   "main": "demo.js",
   "scripts": {
