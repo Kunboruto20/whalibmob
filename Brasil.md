@@ -2817,7 +2817,7 @@ O fluxo da Apple não é o do Google, mas chega ao mesmo lugar:
 | 2 | `init-p01st.push.apple.com/bag` | quais hosts do courier discar |
 | 3 | `<n>-courier.push.apple.com:443` | o token do dispositivo e, em seguida, `GET_TOKEN` para `net.whatsapp.WhatsApp` — o token por tópico que *é* o `push_token` |
 
-O passo 1 roda uma vez por número e o resultado fica em cache na sessão: o certificado vale cerca de três anos, e a identidade por trás dele é o que faz o mesmo push token voltar na próxima execução. Um token que o WhatsApp já registrou deixa de ser entregável se essa identidade for jogada fora, que é a mesma razão pela qual o android id do Firebase é guardado.
+O passo 1 roda uma vez por número e o resultado fica em cache na sessão: o certificado que a Apple emite vale um ano, e a identidade por trás dele é o que faz o mesmo push token voltar na próxima execução. Um token que o WhatsApp já registrou deixa de ser entregável se essa identidade for jogada fora, que é a mesma razão pela qual o android id do Firebase é guardado.
 
 A conexão com o courier é um stream TLS com ALPN `apns-security-v3` — o dispositivo se prova com uma assinatura sobre um nonce novo no primeiro frame, em vez de um certificado de cliente TLS. Uma rede que termina o TLS no meio do caminho não consegue carregá-lo, e a falha diz isso pelo nome em vez de parecer uma conexão caída.
 

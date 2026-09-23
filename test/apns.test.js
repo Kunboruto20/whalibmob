@@ -263,6 +263,19 @@ test('a notification is acknowledged and its code handed on', () => {
   assert.equal(sent[0].tag, courier.TAG.ACK, 'an unacknowledged push is redelivered forever');
 });
 
+test('ALPN is treated as a symptom to report, never as a reason to refuse', () => {
+  // The first version of this hung up when the server did not echo the ALPN
+  // name back, on the theory that only an intercepting middlebox stays silent.
+  // A server is free to accept the protocol without echoing it, and refusing
+  // to speak to one that does turns a working connection into a failure for
+  // the sake of a diagnostic. It starts true so that a failure occurring
+  // before any socket exists carries no misleading note.
+  const connection = new courier.ApnsCourierConnection({
+    privateKeyDer: Buffer.alloc(0), publicKeyDer: Buffer.alloc(0), deviceCertificate: Buffer.alloc(0)
+  });
+  assert.equal(connection.alpnNegotiated, true);
+});
+
 test('a lost connection is reported, so nobody waits out a timeout on a dead socket', () => {
   const lost = [];
   const connection = new courier.ApnsCourierConnection({
@@ -348,12 +361,16 @@ test('the bag is never asked for around a configured proxy', () => {
     delete process.env.SOCKS_PROXY;
     delete process.env.TOR_PROXY;
     const direct = courier.bagUrls();
-    assert.equal(direct.length, 2, 'https, then the canonical http url');
-    assert.ok(direct[0].startsWith('https://'));
+    assert.equal(direct.length, 2, 'the canonical http url, then https');
+    // The bag host serves a certificate for images.apple.com rather than its
+    // own name, so HTTPS fails the hostname check every time. Asking over the
+    // canonical URL first is what actually answers.
+    assert.ok(direct[0].startsWith('http://'), 'plain http leads when nothing has to be routed');
 
     process.env.SOCKS_PROXY = 'socks5://127.0.0.1:9050';
     const proxied = courier.bagUrls();
-    assert.deepEqual(proxied, [direct[0]], 'only the routable one is tried');
+    assert.equal(proxied.length, 1, 'only the routable one is tried');
+    assert.ok(proxied[0].startsWith('https://'), 'and it is the one the agent can carry');
   } finally {
     if (previous === undefined) delete process.env.SOCKS_PROXY;
     else process.env.SOCKS_PROXY = previous;
