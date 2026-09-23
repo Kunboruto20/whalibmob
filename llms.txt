@@ -110,7 +110,7 @@ await client.requestPairingCode('40712345678');    // first run only; or listen 
 - [Frida scripts](https://github.com/Kunboruto20/whalibmob/tree/main/frida): the on-device servers themselves, Android and iOS
 - [Device Emulation](https://github.com/Kunboruto20/whalibmob#device-emulation): choosing the handset the session presents itself as
 - [When Registration Is Refused for Consent](https://github.com/Kunboruto20/whalibmob#when-registration-is-refused-for-consent): what a refusal means and what to do
-- [The Push Token](https://github.com/Kunboruto20/whalibmob#the-push-token): FCM registration, and receiving the code over push instead of typing it
+- [The Push Token](https://github.com/Kunboruto20/whalibmob#the-push-token): FCM on Android and APNs on iOS, and receiving the code over push instead of typing it
 
 ## Messaging
 
