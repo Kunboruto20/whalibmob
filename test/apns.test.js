@@ -263,17 +263,45 @@ test('a notification is acknowledged and its code handed on', () => {
   assert.equal(sent[0].tag, courier.TAG.ACK, 'an unacknowledged push is redelivered forever');
 });
 
-test('ALPN is treated as a symptom to report, never as a reason to refuse', () => {
-  // The first version of this hung up when the server did not echo the ALPN
-  // name back, on the theory that only an intercepting middlebox stays silent.
-  // A server is free to accept the protocol without echoing it, and refusing
-  // to speak to one that does turns a working connection into a failure for
-  // the sake of a diagnostic. It starts true so that a failure occurring
-  // before any socket exists carries no misleading note.
+// The first is the issuer Apple's courier presents, exactly as seen on a clean
+// network. The second stands for any middlebox that terminates TLS — a
+// corporate proxy, an antivirus, a gateway — which has to present a certificate
+// its own CA signed because it cannot hold Apple's key. Apple answers without
+// an ALPN echo, and so did the intercepting gateway it was compared against,
+// which is why ALPN cannot tell them apart and the issuer has to.
+const APPLE_COURIER_ISSUER = {
+  CN: 'Apple Server Authentication CA', OU: 'Certification Authority', O: 'Apple Inc.', C: 'US'
+};
+const INTERCEPTING_GATEWAY_ISSUER = {
+  O: 'Corporate Proxy Inc.', CN: 'TLS Inspection Root CA'
+};
+
+test('the real courier is told from a middlebox by who signed its certificate', () => {
+  assert.equal(courier.isApplePeer(APPLE_COURIER_ISSUER), true, 'Apple\'s own courier');
+  assert.equal(courier.isApplePeer(INTERCEPTING_GATEWAY_ISSUER), false, 'a gateway in front of it');
+
+  // Node reports a repeated field as an array rather than a string.
+  assert.equal(courier.isApplePeer({ O: ['Apple Inc.', 'Something Else'] }), true);
+  assert.equal(courier.isApplePeer(null), false);
+  assert.equal(courier.isApplePeer({}), false);
+});
+
+test('the issuer is named in a way a person can act on', () => {
+  assert.equal(courier.describeIssuer(INTERCEPTING_GATEWAY_ISSUER),
+    '"TLS Inspection Root CA"');
+  assert.equal(courier.describeIssuer({ O: 'Some Antivirus' }), '"Some Antivirus"',
+    'the organisation stands in when there is no common name');
+  assert.equal(courier.describeIssuer(null), 'an unnamed issuer');
+});
+
+test('no interception note is possible before a socket exists', () => {
+  // The note is attached only when a certificate was seen and Apple did not
+  // sign it. A failure before any socket — the bag, the dial — must not be
+  // blamed on interception it had no way to observe.
   const connection = new courier.ApnsCourierConnection({
     privateKeyDer: Buffer.alloc(0), publicKeyDer: Buffer.alloc(0), deviceCertificate: Buffer.alloc(0)
   });
-  assert.equal(connection.alpnNegotiated, true);
+  assert.equal(connection.peerIssuer, null);
 });
 
 test('a lost connection is reported, so nobody waits out a timeout on a dead socket', () => {
