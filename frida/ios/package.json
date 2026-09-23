@@ -1,7 +1,7 @@
 {
   "name": "whalibmob-frida-ios",
   "version": "1.0.0",
-  "description": "iOS App Attest attestation server for whalibmob registration (derived from Auties00/cobalt)",
+  "description": "iOS App Attest attestation server for whalibmob registration ()",
   "private": true,
   "main": "demo.js",
   "scripts": {
