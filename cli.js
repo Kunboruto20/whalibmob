@@ -2424,7 +2424,8 @@ async function handleLine(line) {
           const ph = normalizePhone(p[2]);
           if (!ph) {
             fail('usage: /reg push <phone> [sms|voice] [--name "Your Name"]');
-            out('  opens the Firebase push listener, requests a code, and waits for');
+            out('  opens the push listener this device profile keeps open — Firebase');
+            out('  on Android, APNs on iOS — requests a code, and waits for');
             out('  it to arrive over push. If it does, registration is confirmed');
             out('  automatically. If no push comes, request the code normally with');
             out('  /reg code and confirm it with /reg confirm.');
@@ -2439,24 +2440,25 @@ async function handleLine(line) {
           if (!store) { store = initAuthCreds(ph, { name: regName }); saveStore(store, sessFile); }
           if (!store.device) store.device = getDeviceConfig();
 
-          // Push verification needs a push line, and only Android has one here.
-          // An iOS session holds no Firebase identity, so the listener would sit
-          // for three minutes on a push that can never be routed to it. Say so
-          // now instead, and point at the two things that do work.
+          // Push verification needs a push line, and it has to be the one the
+          // announced platform actually keeps open. Android and iOS both have
+          // one; a profile that is neither would sit for three minutes on a push
+          // that can never be routed to it, so say so now instead.
           const pushClient = pushClientFor(store.device);
           if (!pushClient.supportsPush) {
             fail('push verification is not available for this device profile (' +
                  (store.device.os || 'unknown') + ')');
             out('  the code arrives over the push line of the platform being announced,');
-            out('  and only Android has one implemented (Firebase). iOS needs APNs.');
-            out('  either register this number on an Android profile:');
-            out('    WA_OS=android  (see /device) and re-run /reg push ' + ph);
+            out('  and only android and ios have one (Firebase and APNs).');
+            out('  either register this number on one of those profiles:');
+            out('    WA_OS=android  or  WA_OS=ios  (see /device) and re-run /reg push ' + ph);
             out('  or use the ordinary path:  /reg code ' + ph + '  then  /reg confirm ' + ph + ' <code>');
             break;
           }
           const receivePushCode = (s, d, o) => pushClient.receivePushCode(s, d, o);
 
-          out('opening Firebase push listener (this can take a moment)...');
+          out('opening the ' + (pushClient.platform === 'ios' ? 'APNs' : 'Firebase') +
+              ' push listener (this can take a moment)...');
           // Open the listener first so the push has somewhere to land. onReady
           // fires once MCS is logged in — only then is it safe to ask for the
           // code.

@@ -81,8 +81,9 @@ const {
 // code over push" in the README.
 //
 // Routed through the push client for the device's platform: Android opens the
-// Firebase MCS stream, iOS resolves null because APNs is not implemented and
-// an iOS session holds no Firebase identity to listen with.
+// Firebase MCS stream, iOS the APNs courier. Either way the code arrives over
+// the line the announced platform actually keeps open, and a profile with no
+// push transport resolves null rather than listening on somebody else's.
 const receivePushCode = (store, device, opts) => {
   const dev = device || (store && store.device);
   return require('./lib/PushClient')
@@ -131,6 +132,9 @@ const Tokens           = require('./lib/tokens');
 const PushClient       = require('./lib/PushClient');
 const Fcm              = require('./lib/fcm');
 const FcmMcs           = require('./lib/fcm-mcs');
+const Apns             = require('./lib/apns');
+const ApnsCourier      = require('./lib/apns-courier');
+const Plist            = require('./lib/plist');
 
 const PairingCode      = require('./lib/PairingCode');
 const CompanionPairing = require('./lib/CompanionPairing');
@@ -372,6 +376,9 @@ module.exports = {
   PushClient,
   Fcm,
   FcmMcs,
+  Apns,
+  ApnsCourier,
+  Plist,
 
   // Linking to an account that already exists
   // X25519, through Node's own OpenSSL. Drop-in for curve25519-js.
