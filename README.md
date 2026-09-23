@@ -254,6 +254,8 @@ npm install -g whalibmob
   - [The Number WhatsApp Files Your Account Under](#the-number-whatsapp-files-your-account-under)
   - [When Registration Is Refused for Consent](#when-registration-is-refused-for-consent)
   - [The Push Token](#the-push-token)
+    - [On Android: Firebase](#on-android-firebase)
+    - [On iOS: APNs](#on-ios-apns)
     - [Receiving the Code over Push](#receiving-the-code-over-push-without-typing-it)
   - [Routing Traffic Through a Proxy](#routing-traffic-through-a-proxy)
     - [What Goes Through It](#what-goes-through-it)
@@ -1871,7 +1873,7 @@ if (result.status === 'ok') {
 }
 ```
 
-**Optional — let the code arrive by itself.** The two steps above are the whole flow, and nothing about them changes if you do nothing else. But because an Android registration sends a Firebase push token (see [The Push Token](#the-push-token)), WhatsApp *may* also deliver the six-digit code as a silent push. Open a listener for it before requesting the code, and the code can come back with nothing typed — on an `WA_OS=android` profile; on iOS it resolves `null` straight away, since only Firebase is implemented:
+**Optional — let the code arrive by itself.** The two steps above are the whole flow, and nothing about them changes if you do nothing else. But because a registration sends a push token (see [The Push Token](#the-push-token)), WhatsApp *may* also deliver the six-digit code as a silent push. Open a listener for it before requesting the code, and the code can come back with nothing typed — on an Android profile over Firebase, on an iOS one over APNs:
 
 ```js
 const { receivePushCode } = require('whalibmob')
