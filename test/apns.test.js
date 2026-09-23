@@ -263,6 +263,47 @@ test('a notification is acknowledged and its code handed on', () => {
   assert.equal(sent[0].tag, courier.TAG.ACK, 'an unacknowledged push is redelivered forever');
 });
 
+// The first is the issuer Apple's courier presents, exactly as seen on a clean
+// network. The second stands for any middlebox that terminates TLS — a
+// corporate proxy, an antivirus, a gateway — which has to present a certificate
+// its own CA signed because it cannot hold Apple's key. Apple answers without
+// an ALPN echo, and so did the intercepting gateway it was compared against,
+// which is why ALPN cannot tell them apart and the issuer has to.
+const APPLE_COURIER_ISSUER = {
+  CN: 'Apple Server Authentication CA', OU: 'Certification Authority', O: 'Apple Inc.', C: 'US'
+};
+const INTERCEPTING_GATEWAY_ISSUER = {
+  O: 'Corporate Proxy Inc.', CN: 'TLS Inspection Root CA'
+};
+
+test('the real courier is told from a middlebox by who signed its certificate', () => {
+  assert.equal(courier.isApplePeer(APPLE_COURIER_ISSUER), true, 'Apple\'s own courier');
+  assert.equal(courier.isApplePeer(INTERCEPTING_GATEWAY_ISSUER), false, 'a gateway in front of it');
+
+  // Node reports a repeated field as an array rather than a string.
+  assert.equal(courier.isApplePeer({ O: ['Apple Inc.', 'Something Else'] }), true);
+  assert.equal(courier.isApplePeer(null), false);
+  assert.equal(courier.isApplePeer({}), false);
+});
+
+test('the issuer is named in a way a person can act on', () => {
+  assert.equal(courier.describeIssuer(INTERCEPTING_GATEWAY_ISSUER),
+    '"TLS Inspection Root CA"');
+  assert.equal(courier.describeIssuer({ O: 'Some Antivirus' }), '"Some Antivirus"',
+    'the organisation stands in when there is no common name');
+  assert.equal(courier.describeIssuer(null), 'an unnamed issuer');
+});
+
+test('no interception note is possible before a socket exists', () => {
+  // The note is attached only when a certificate was seen and Apple did not
+  // sign it. A failure before any socket — the bag, the dial — must not be
+  // blamed on interception it had no way to observe.
+  const connection = new courier.ApnsCourierConnection({
+    privateKeyDer: Buffer.alloc(0), publicKeyDer: Buffer.alloc(0), deviceCertificate: Buffer.alloc(0)
+  });
+  assert.equal(connection.peerIssuer, null);
+});
+
 test('a lost connection is reported, so nobody waits out a timeout on a dead socket', () => {
   const lost = [];
   const connection = new courier.ApnsCourierConnection({
@@ -348,12 +389,16 @@ test('the bag is never asked for around a configured proxy', () => {
     delete process.env.SOCKS_PROXY;
     delete process.env.TOR_PROXY;
     const direct = courier.bagUrls();
-    assert.equal(direct.length, 2, 'https, then the canonical http url');
-    assert.ok(direct[0].startsWith('https://'));
+    assert.equal(direct.length, 2, 'the canonical http url, then https');
+    // The bag host serves a certificate for images.apple.com rather than its
+    // own name, so HTTPS fails the hostname check every time. Asking over the
+    // canonical URL first is what actually answers.
+    assert.ok(direct[0].startsWith('http://'), 'plain http leads when nothing has to be routed');
 
     process.env.SOCKS_PROXY = 'socks5://127.0.0.1:9050';
     const proxied = courier.bagUrls();
-    assert.deepEqual(proxied, [direct[0]], 'only the routable one is tried');
+    assert.equal(proxied.length, 1, 'only the routable one is tried');
+    assert.ok(proxied[0].startsWith('https://'), 'and it is the one the agent can carry');
   } finally {
     if (previous === undefined) delete process.env.SOCKS_PROXY;
     else process.env.SOCKS_PROXY = previous;
