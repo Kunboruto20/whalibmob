@@ -29,6 +29,8 @@ código por SMS ou chamada de voz, e trazer a conta à existência. Os dois tran
 
 [![Atestação de dispositivo](https://img.shields.io/badge/Atestação_de_dispositivo-Play_Integrity_%2B_App_Attest-8E44AD?style=for-the-badge)](#atestação-de-dispositivo--play-integrity-e-app-attest)
 
+[![Por que o registro pode ser bloqueado](https://img.shields.io/badge/Por_que_o_registro_pode_ser_bloqueado-antiabuso_%26_detecção_de_cliente_não--oficial-C0392B?style=for-the-badge)](#por-que-o-registro-pode-ser-bloqueado--o-cenário-de-antiabuso)
+
 </div>
 
 ##
@@ -2772,6 +2774,50 @@ Se isso também for recusado, o número precisa passar pelo app real uma vez, em
 
 > [!NOTE]
 > O campo `login` naquela resposta vale ser lido. Os celulares brasileiros ganharam um nono dígito que o WhatsApp nunca adotou, então `+5571976034186` é arquivado como `+557176034186`. O whalibmob adota a forma do servidor automaticamente em um registro bem-sucedido e salva a sessão sob ela — a diferença de dígito não é, em si, a falha.
+
+## Por que o Registro Pode Ser Bloqueado — O Cenário de Antiabuso
+
+Se o registro funciona em alguns números e falha em outros com o mesmo código, a falha quase nunca é um bug no whalibmob. São duas defesas **separadas** que o WhatsApp mantém, construídas em épocas diferentes, por razões diferentes. Distinguir uma da outra é praticamente todo o trabalho de diagnosticar um bloqueio, então esta seção explica o que cada uma é, de onde veio e o que de fato faz diferença.
+
+### Dois muros diferentes
+
+**Muro 1 — "você é o app oficial?" (detecção de cliente não-oficial).**
+Este é o muro construído contra os **clientes WhatsApp modificados** — GB WhatsApp, FM WhatsApp, YoWhatsApp, WhatsApp Plus e o resto dessa família, mods que reempacotam o APK oficial para adicionar temas, contas duplas e opções de privacidade. O WhatsApp brigou com eles por anos e, por volta de 2024, baniu dezenas de milhões das contas que os usavam em uma única onda. A detecção que saiu dessa briga verifica três coisas em cada conexão: a **assinatura do APK** (é assinado pela WhatsApp Inc. ou pelo autor de um mod?), a **atestação de integridade** (o Play Integrity / App Attest garante que é o app genuíno em um dispositivo real?) e o **comportamento**.
+
+O whalibmob não é um mod — mas, do ponto de vista do servidor, uma requisição do whalibmob com **atestação vazia** dá a mesma resposta a essas perguntas que um mod dá: *"não consigo provar que sou o app oficial."* O WhatsApp não lê o nome do seu projeto; ele lê sinais, e nesse sinal o whalibmob e um mod se parecem. É por isso que as mesmas telas que um mod dispara podem aparecer aqui:
+
+- **`"reason":"blocked"` com um `custom_block_screen`** — *"Por motivos de segurança, não podemos conectar você agora."* A requisição é recusada antes mesmo de o código ser roteado.
+- **"Não conseguimos confirmar que você está usando o app oficial do WhatsApp,"** muitas vezes com um link para baixá-lo.
+- Em uma sessão **vinculada/companion**, **"Use o WhatsApp Web oficial para continuar"** — a mesma ideia, uma camada acima, voltada para dispositivos vinculados de classe web.
+
+Essas telas tendem a aparecer em números que já foram **sinalizados antes** (banidos anteriormente, ou vistos antes em um cliente não-oficial). Um número limpo geralmente recebe o benefício da dúvida e passa com atestação vazia; um número sinalizado já gastou esse benefício e é obrigado a *provar* que é o app oficial — o que a atestação vazia não consegue.
+
+**Muro 2 — "você está fazendo spam?" (antiabuso / reputação de IP).**
+Este muro é **mais antigo que os mods** e não tem relação com eles. O WhatsApp pontua o **endereço IP** de onde a requisição vem, e se ele pertence a um datacenter, a uma faixa de VPN conhecida ou a um endereço já em uma lista de spam, é recusado por mais genuíno que o cliente pareça. É isto que faz **muitos números falharem de uma vez a partir do mesmo servidor**: o fator comum não são os números, é o IP. É também o que uma resposta `no_routes` (com todos os `*_wait` em `3600`) costuma significar — uma recusa de roteamento/limite; espere uma hora e vá mais devagar.
+
+A distinção importa porque as correções são diferentes, e porque **o Muro 2 existiria mesmo que os mods nunca tivessem existido**. Mesmo num mundo sem GB WhatsApp, o WhatsApp ainda impediria a criação em massa de contas — esse é um problema de spam que ele combate desde antes de qualquer mod existir. Não há configuração que transforme um servidor headless em "números ilimitados": esse é exatamente o resultado que o sistema de antiabuso foi feito para impedir.
+
+### Lendo a resposta
+
+| O que o servidor devolve | Qual muro | O que significa |
+|---|---|---|
+| `"reason":"no_routes"`, todos os `*_wait: 3600` | Antiabuso | Não dá para rotear o código agora; normalmente o IP ou o ritmo. Espere o cooldown, use um IP mais limpo. |
+| `"reason":"blocked"` + `custom_block_screen` | Cliente não-oficial / reputação | Recusado por "segurança"; o IP e/ou o número são desconfiados. |
+| "não está usando o app oficial" / link de download | Cliente não-oficial | O número está sinalizado e sendo obrigado a provar que é o app genuíno. |
+| `"reason":"consent"`, `"pending":"app_store_age"` | Consentimento (separado) | Veja [Quando o Registro É Recusado por Falta de Consentimento](#quando-o-registro-é-recusado-por-falta-de-consentimento). |
+
+### O que ajuda de verdade — e o que não ajuda
+
+Honesto, em ordem de efeito:
+
+- **Um IP limpo é o que mais ajuda.** Um IP residencial ou móvel, que não esteja em uma blocklist, resolve o Muro 2 melhor do que qualquer outra coisa. IPs de datacenter/VPS são a causa isolada mais comum de uma resposta `blocked` em muitos números. Roteie por um bom proxy residencial/móvel (veja [Roteando o Tráfego por um Proxy](#roteando-o-tráfego-por-um-proxy)) e não empurre dezenas de números pelo mesmo endereço.
+- **Números limpos e não usados.** Um número que nunca foi sinalizado passa com atestação vazia. Um número que já mostra a tela de "app não-oficial" foi marcado, e normalmente não vale a pena insistir — um número novo e limpo é o melhor uso do tempo.
+- **O perfil Android** (`WA_OS=android`) carrega mais dos campos que o servidor quer do que o de iOS, e é a primeira coisa a tentar quando um número é recusado.
+- **Atestação real** responde ao Muro 1 diretamente. Os scripts Frida em [`frida/`](https://github.com/Kunboruto20/whalibmob/tree/main/frida) geram um token genuíno de Play Integrity / App Attest **a partir de um aparelho real com o app da Play Store** e o incorporam — esta é a forma honesta de responder "prove que você é o app oficial", porque *é* um dispositivo real provando isso. Exige um Android com root ou um iPhone com jailbreak (veja [Atestação de Dispositivo com Frida](#atestação-de-dispositivo-com-frida-opcional)), então nem sempre é prático; números limpos não precisam dele, e nenhum truque só de software o substitui.
+
+### A conclusão honesta
+
+Isto é um alvo em movimento, não um problema resolvido. O WhatsApp muda essas verificações continuamente — os mods passaram de sobreviver *meses* para sobreviver *horas* sob a mesma pressão — e o whalibmob é mantido em sintonia versão a versão, mas nada aqui é permanente e não existe atalho mágico. O registro no protocolo móvel é uma capacidade real que funciona, de forma mais confiável em **números limpos a partir de IPs limpos**; quanto mais você se afasta disso, mais forte o sistema de antiabuso empurra de volta, por design.
 
 ## O Push Token
 
