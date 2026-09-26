@@ -83,9 +83,11 @@ function enableWireTrace() {
   const { configureLogger } = require('./lib/logger');
   const https = require('https');
 
-  const C = process.stdout.isTTY
-    ? { out:'\x1b[36m', in:'\x1b[32m', http:'\x1b[35m', dim:'\x1b[2m', tag:'\x1b[33m', off:'\x1b[0m' }
-    : { out:'', in:'', http:'', dim:'', tag:'', off:'' };
+  // Logs are printed without ANSI colour, so the output is plain text wherever
+  // it is read — a terminal, a file, a pipe, or a log collector. The structure
+  // (timestamp, level, SENT/RECV markers, XML) is unchanged; only the colour
+  // escape codes are gone.
+  const C = { out:'', in:'', http:'', dim:'', tag:'', off:'' };
 
   // pino writes newline-delimited JSON to stdout. That is the right shape for a
   // log collector and the wrong one for someone watching a live session, so
