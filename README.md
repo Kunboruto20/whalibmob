@@ -35,21 +35,17 @@ code, and bring the account into being. Both transports, one API.
 
 ##
 
-> [!IMPORTANT]
+<div align="center">
 
+### 💬 Need help? Talk to me on Telegram
 
+[![whalibmob channel](https://img.shields.io/badge/whalibmob_channel-News_%26_updates-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/+sHN4MDCyB7U5OWY0)
 
+[![Contact me on Telegram](https://img.shields.io/badge/Contact_me-%40brtyu545-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/brtyu545)
 
+**I'm waiting for you — message me on Telegram at [@brtyu545](https://t.me/brtyu545) if you want help with whalibmob, or if you need anything related to features such as WhatsApp or Instagram. I'm at your disposal.**
 
-
-
-If you want News about whalibmob enter this whalibmob channel: https://t.me/+sHN4MDCyB7U5OWY0
-
-
-If you want to talk with me contact me on Telegram my username îs @brtyu545
-
-
-
+</div>
 
 > [!CAUTION]
 > Use a dedicated phone number with this library. Connecting with a number that is already active on a real device will cause WhatsApp to log that device out.

@@ -35,14 +35,17 @@ código por SMS ou chamada de voz, e trazer a conta à existência. Os dois tran
 
 ##
 
-> [!IMPORTANT]
+<div align="center">
 
+### 💬 Precisa de ajuda? Fale comigo no Telegram
 
+[![canal whalibmob](https://img.shields.io/badge/canal_whalibmob-Novidades_%26_atualizações-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/+sHN4MDCyB7U5OWY0)
 
+[![Fale comigo no Telegram](https://img.shields.io/badge/Fale_comigo-%40brtyu545-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/brtyu545)
 
+**Estou à sua espera — me chame no Telegram em [@brtyu545](https://t.me/brtyu545) se você quiser ajuda com o whalibmob, ou se precisar de algo relacionado a funcionalidades como WhatsApp ou Instagram. Estou à sua disposição.**
 
-
-Se você quer Novidades sobre o whalibmob, entre neste canal do whalibmob: https://t.me/+sHN4MDCyB7U5OWY0
+</div>
 
 
 
