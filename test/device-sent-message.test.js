@@ -13,14 +13,13 @@
 // Sending: the message's messageContextInfo stayed buried inside the envelope.
 // It is a field of Message, and a recipient reads it from the outer Message —
 // so a poll echoed to our own devices reached them with no message secret and
-// none of them could decrypt a vote. whatsmeow copies it up beside the envelope
-// (`MessageContextInfo: message.MessageContextInfo` in marshalMessage) and so
-// does Baileys. This one did not.
+// none of them could decrypt a vote. The reference clients copy it up beside
+// the envelope. This one did not.
 //
 // Receiving: the envelope was opened and discarded. destinationJid never
 // reached the caller, so a message sent from the phone arrived with no way to
-// tell which conversation it belonged to. whatsmeow keeps both fields as
-// Info.DeviceSentMeta.
+// tell which conversation it belonged to. The reference client keeps both
+// fields on its device-sent metadata.
 
 const test   = require('node:test');
 const assert = require('node:assert/strict');
@@ -102,7 +101,7 @@ test("a poll's message secret is lifted beside the envelope, not left inside it"
     'carrying the same secret the poll was sent with');
 
   // Still inside as well — the copy is a duplicate, not a move, exactly as
-  // whatsmeow and Baileys write it.
+  // the reference clients write it.
   assert.ok(fields(fields(top[31])[2])[35], 'the inner copy is untouched');
 });
 

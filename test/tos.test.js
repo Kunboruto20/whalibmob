@@ -2,9 +2,9 @@
 
 // Terms-of-Service notices.
 //
-// The wire shapes are Cobalt's IqQueryTosRequest, IqUpdateTosRequest and
-// IqDeleteTosRequest — read off the stanza builders rather than the javadoc,
-// which calls the namespace "w:tos" while the code writes "tos".
+// The wire shapes are the IqQueryTosRequest, IqUpdateTosRequest and
+// IqDeleteTosRequest stanzas — read off the stanza builders rather than the
+// javadoc, which calls the namespace "w:tos" while the code writes "tos".
 //
 // The one thing worth pinning hardest is the reading of `state`, because it is
 // backwards from how it looks: the attribute is present and "false" for a

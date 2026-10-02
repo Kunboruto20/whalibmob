@@ -4,8 +4,8 @@
 //
 // Three things are worth pinning: that the salt is decoded out of the
 // nctSaltSyncAction app-state mutation, that the derivation is exactly
-// HMAC-SHA256(salt, recipient-LID) the way whatsmeow computes it, and that a
-// cstoken is withheld in every case the genuine client withholds one.
+// HMAC-SHA256(salt, recipient-LID) the way the reference client computes it,
+// and that a cstoken is withheld in every case the genuine client withholds one.
 
 const test   = require('node:test');
 const assert = require('node:assert/strict');
@@ -40,7 +40,7 @@ test('the app-state index nct_salt_sync is recognised, with no jid', () => {
   assert.equal(what.jid, undefined);
 });
 
-// ─── the derivation matches whatsmeow, exactly ───────────────────────────────
+// ─── the derivation matches the reference client, exactly ────────────────────
 
 // _csTokenFor reads this._store.nctSalt and this._pnToLid, and calls crypto and
 // TcTokenStore — all reachable without a live connection, so a bare object with
