@@ -1,6 +1,6 @@
 'use strict';
 
-// App state, against whatsmeow's behaviour.
+// App state, against the reference client's behaviour.
 //
 // Three things here are worth pinning down, because getting any of them wrong
 // is silent: the shape of an app-state key request (a collection stays
@@ -119,7 +119,7 @@ test('nothing is sent with no keys, or while disconnected', async () => {
 const idx = (n) => crypto.createHash('sha256').update('index' + n).digest();
 const val = (n) => crypto.createHash('sha256').update('value' + n).digest();
 
-// whatsmeow's arithmetic, written out plainly: subtract every displaced value,
+// The reference arithmetic, written out plainly: subtract every displaced value,
 // then add every SET value. Anything the generator does has to agree with this.
 function expected(base, added, removed) {
   return PATCH_INTEGRITY.subtractThenAdd(base, added, removed);
@@ -140,8 +140,8 @@ test('a patch displacing an earlier value subtracts it', () => {
 });
 
 test('a snapshot adds every record and subtracts none', () => {
-  // Two records sharing an index. whatsmeow hands its snapshot pass a callback
-  // that always answers "no previous value", so both are added and neither
+  // Two records sharing an index. The reference client hands its snapshot pass
+  // a callback that always answers "no previous value", so both are added and neither
   // displaces the other. Displacing the first would leave us one value short
   // of the hash the snapshot is signed against.
   const gen = makeGenerator(newState(), { snapshot: true });
