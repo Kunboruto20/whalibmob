@@ -39,7 +39,7 @@ code, and bring the account into being. Both transports, one API.
 
 ### 💬 Need help? Talk to me on Telegram
 
-[![whalibmob channel](https://img.shields.io/badge/whalibmob_channel-News_%26_updates-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/+sHN4MDCyB7U5OWY0)
+[![whalibmob channel](https://img.shields.io/badge/whalibmob_channel-News_%26_updates-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/whalibmob)
 
 [![Contact me on Telegram](https://img.shields.io/badge/Contact_me-%40brtyu545-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/brtyu545)
 
