@@ -1,6 +1,6 @@
 'use strict';
 
-// Four things whatsmeow does on the web side that this did not.
+// Four things the reference client does on the web side that this did not.
 //
 //   - every media download checks both digests the message carried, not just
 //     the MAC and not only when asked
@@ -75,8 +75,8 @@ test('a blob that is not the one the message described is refused', async () => 
 
 test('a plaintext that is not the file described is refused too', async () => {
   // The MAC is over the ciphertext, so a blob that decrypts cleanly can still
-  // be the wrong file. whatsmeow calls this ErrInvalidMediaSHA256; nothing here
-  // checked it at all, though every upload writes the digest.
+  // be the wrong file. The reference client refuses this as an invalid media
+  // SHA-256; nothing here checked it at all, though every upload writes the digest.
   const { encrypted, sha256Enc } = encryptMedia(
     Buffer.from('a picture of a cat'), MEDIA_KEY, 'WhatsApp Image Keys');
 
@@ -228,7 +228,7 @@ test('a dirty bit that names no timestamp is still cleared', () => {
   assert.equal(clean.timestamp, undefined);
 });
 
-test('markNotDirty builds the node whatsmeow builds', () => {
+test('markNotDirty builds the node the reference client builds', () => {
   const c = dirtyClient();
   assert.equal(c.markNotDirty('account_sync', 1788651994), true);
 
