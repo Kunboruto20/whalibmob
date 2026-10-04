@@ -496,10 +496,13 @@ function normalizePhone(s) {
 // describe a call that is never coming.
 function printCodeNextSteps(store, phone, confirmCmd) {
   if (store && store.codeMethod === 'flash') {
+    const cc      = store.flashCliCc ? ' (from +' + store.flashCliCc + ')' : '';
+    const timeout = Number(store.flashTimeout) > 0 ? Number(store.flashTimeout) : null;
     out('  a call will ring +' + phone + ' and hang up by itself — do not answer it');
-    out('  the code is the LAST 6 DIGITS of the number that called');
-    out('  pasting the whole number works too — only its last 6 digits are sent');
-    out('  run: ' + confirmCmd + ' <last-6-digits>');
+    out('  it comes from a foreign number' + cc + ' — paste that WHOLE number here');
+    out('  whalibmob reads the code out of it for you (no need to pick out digits)');
+    if (timeout) out('  ⚠ be quick — the flash code expires about ' + timeout + 's after the call');
+    out('  run: ' + confirmCmd + ' <number-that-called>');
     return;
   }
   out('  important: enter the code within 10 minutes');
@@ -2742,7 +2745,7 @@ options:
   --pair            connect by linking to an existing account (8-digit code)
   --method          sms | voice | wa_old | flash | email  (default: sms)
                     flash: WhatsApp rings the number and hangs up; the code is
-                    the last 6 digits of the calling number (Android only)
+                    read from the calling number automatically (Android only)
   --email <address> email address (required when --method email)
   --business        register/connect as WhatsApp Business (same as WA_BUSINESS=1)
   --all             refresh-version: every session in the session directory
