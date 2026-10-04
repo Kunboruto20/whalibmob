@@ -39,7 +39,7 @@ código por SMS ou chamada de voz, e trazer a conta à existência. Os dois tran
 
 ### 💬 Precisa de ajuda? Fale comigo no Telegram
 
-[![canal whalibmob](https://img.shields.io/badge/canal_whalibmob-Novidades_%26_atualizações-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/+sHN4MDCyB7U5OWY0)
+[![canal whalibmob](https://img.shields.io/badge/canal_whalibmob-Novidades_%26_atualizações-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/whalibmob)
 
 [![Fale comigo no Telegram](https://img.shields.io/badge/Fale_comigo-%40brtyu545-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/brtyu545)
 

@@ -2,8 +2,8 @@
 
 // AB props — the per-account feature flags the server hands out.
 //
-// The wire shape here is not inferred: it is the one Cobalt's ABPropsService
-// builds and parses, which in turn is adapted from WhatsApp Web's own
+// The wire shape here is not inferred: it is the one the ABPropsService
+// builds and parses, adapted from WhatsApp Web's own
 // WAGetAbPropsProtocol. What these tests pin down is the half that is easy to
 // get subtly wrong and impossible to notice: which attribute goes on the
 // request, how a delta merges onto what is already held, and the three
