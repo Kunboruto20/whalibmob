@@ -37,7 +37,7 @@ frida/
 start on the phone. When `WA_FRIDA_HOST` (and optionally `WA_FRIDA_PORT`) is
 set in the environment, whalibmob's registration flow (`lib/Registration.js`)
 calls the endpoints below and folds their output into the `/code`,
-`/register` and `/exist` request bodies — exactly the way Cobalt does:
+`/register` and `/exist` request bodies:
 
 | Platform | Endpoint      | Feeds registration field(s)                        |
 |----------|---------------|----------------------------------------------------|

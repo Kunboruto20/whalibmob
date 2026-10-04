@@ -16,8 +16,7 @@
 // usync round-trip paid on the next send. Exactly the case it was supposed to
 // save.
 //
-// The steps are now applied one at a time and checked one at a time, as
-// whatsmeow's handleDeviceNotification does.
+// The steps are now applied one at a time and checked one at a time.
 
 const test   = require('node:test');
 const assert = require('node:assert/strict');
@@ -168,7 +167,7 @@ test('a hash that does not match drops the cache', () => {
 });
 
 test('a later step that does match puts a proven list back', () => {
-  // whatsmeow keeps mutating its local copy after dropping the cached one, so a
+  // The applier keeps mutating its local copy after dropping the cached one, so a
   // notification that goes wrong in the middle and comes right again ends up
   // with a verified list rather than nothing.
   const dm = devMgr();
