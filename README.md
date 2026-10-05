@@ -43,6 +43,10 @@ code, and bring the account into being. Both transports, one API.
 
 [![Contact me on Telegram](https://img.shields.io/badge/Contact_me-%40brtyu545-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/brtyu545)
 
+[![whalibmob support channel](https://img.shields.io/badge/whalibmob_support-Client_support-25D366?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/+V6aZiZ01u3YxM2U0)
+
+**💼 Need support for whalibmob or for any WhatsApp-related service? Enter here in the whalibmob support channel 👉 [https://t.me/+V6aZiZ01u3YxM2U0](https://t.me/+V6aZiZ01u3YxM2U0) — I offer dedicated support to clients.**
+
 **I'm waiting for you — message me on Telegram at [@brtyu545](https://t.me/brtyu545) if you want help with whalibmob, or if you need anything related to features such as WhatsApp or Instagram. I'm at your disposal.**
 
 </div>
