@@ -43,6 +43,10 @@ código por SMS ou chamada de voz, e trazer a conta à existência. Os dois tran
 
 [![Fale comigo no Telegram](https://img.shields.io/badge/Fale_comigo-%40brtyu545-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/brtyu545)
 
+[![canal de suporte whalibmob](https://img.shields.io/badge/suporte_whalibmob-Suporte_a_clientes-25D366?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/+V6aZiZ01u3YxM2U0)
+
+**💼 Precisa de suporte para o whalibmob ou para qualquer serviço relacionado ao WhatsApp? Entre aqui no canal de suporte do whalibmob 👉 [https://t.me/+V6aZiZ01u3YxM2U0](https://t.me/+V6aZiZ01u3YxM2U0) — ofereço suporte dedicado aos clientes.**
+
 **Estou à sua espera — me chame no Telegram em [@brtyu545](https://t.me/brtyu545) se você quiser ajuda com o whalibmob, ou se precisar de algo relacionado a funcionalidades como WhatsApp ou Instagram. Estou à sua disposição.**
 
 </div>
