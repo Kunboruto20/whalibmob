@@ -33,6 +33,21 @@ código por SMS ou chamada de voz, e trazer a conta à existência. Os dois tran
 
 </div>
 
+> [!TIP]
+> **O registro não funciona em alguns números? Aqui está o caminho com 100% de sucesso.**
+>
+> Em alguns números, o código por **SMS** ou **voz** simplesmente nunca chega. Isso é o antiabuso / a atestação do WhatsApp recusando um cliente não oficial — **não é um bug do whalibmob**. Quando isso acontecer, você ainda consegue registrar **qualquer** número, logo na primeira tentativa:
+>
+> 1. **Registre o número uma vez no aplicativo oficial do WhatsApp** (um celular ou um emulador). O app oficial passa pela atestação de forma nativa, então o número vira uma conta limpa e já atestada.
+> 2. **Depois rode o whalibmob com `--method wa_old`.** O código é entregue através dessa conta de WhatsApp já existente, o whalibmob confirma e assume o número na primeira tentativa. Isso funciona em qualquer número.
+>
+> ```bash
+> wa registration --request-code <número> --method wa_old
+> wa registration --register   <número> --code <código>
+> ```
+>
+> **Isso é opcional.** A maioria dos números registra normalmente com `--method sms` ou `--method voice` — tente esses primeiro. Use o caminho `wa_old` **apenas se** você quiser uma taxa de sucesso garantida de 100% em números onde SMS/voz estão bloqueados.
+
 ##
 
 <div align="center">
