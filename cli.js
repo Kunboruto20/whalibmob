@@ -2812,17 +2812,17 @@ function askDonation(cmd) {
 
   return new Promise(resolve => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question('do you want to donate USDC to support whalibmob?  [y/N] ', (answer) => {
+    rl.question('do you want to donate USDT to support whalibmob?  [y/N] ', (answer) => {
       rl.close();
       if (/^y(es)?$/i.test(String(answer).trim())) {
         out('');
         hr();
-        out('  Kunboruto20 — USDC address (Ethereum · ERC-20)');
+        out('  Kunboruto20 — USDT address (Tron · TRC-20)');
         out('  To send crypto, copy the address below:');
         out('');
-        out('  0x8AD64F47a715eC24DeF193FBb9aC64d4E857f0f3');
+        out('  TNxxWvAc5m5YS89uz5uSrbXC9EKPuS27aP');
         out('');
-        out('  Send ONLY USDC on the Ethereum (ERC-20) network to this address.');
+        out('  Send ONLY USDT on the Tron (TRC-20) network to this address.');
         out('  Every donation keeps whalibmob maintained — thank you!');
         hr();
         out('');
