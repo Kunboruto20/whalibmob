@@ -585,6 +585,13 @@ const HELP = `
                                                        contact_allowlist none known
                                                        match_last_seen on_standard off
 
+  Account email  (recovery address — bound on the connected account)
+    /email status                            show the email bound to the account
+    /email set     <address>                 bind (or change) the recovery email
+    /email request [lg] [lc]                 send a verification code to that email
+    /email verify  <code>                    submit the six-digit code from the email
+    /email confirm                           confirm ownership after verifying
+
   Contacts
     /whatsapp  <phone...>                    check which numbers have WhatsApp
     /picture   <jid> [file]                  profile picture URL; downloads it when a file is given
@@ -666,8 +673,7 @@ const HELP = `
 
   Registration
     /reg check   <phone>                              check if number has WhatsApp
-    /reg code    <phone> [sms|voice|wa_old]           request verification code
-    /reg code    <phone> email <address>              request code via email
+    /reg code    <phone> [sms|voice|wa_old|flash]     request verification code
     /reg push    <phone> [sms|voice]                  request code and receive it over push
     /reg confirm <phone> <code>                       complete registration
 
@@ -1764,6 +1770,53 @@ async function handleLine(line) {
         break;
       }
 
+      case '/email': {
+        requireConn();
+        const action = (p[1] || '').toLowerCase();
+        if (action === 'status' || action === '') {
+          const st = await _client.getEmailStatus();
+          if (!st.email) { out('  no email bound to this account'); break; }
+          out('  email      ' + st.email);
+          out('  verified   ' + (st.verified ? 'yes' : 'no'));
+          out('  confirmed  ' + (st.confirmed ? 'yes' : 'no'));
+          break;
+        }
+        if (action === 'set') {
+          const addr = p[2];
+          if (!addr) { fail('usage: /email set <address>'); break; }
+          const st = await _client.setEmail(addr, { context: 'settings' });
+          out('  email bound: ' + (st.email || addr));
+          out('  next:  /email request    then  /email verify <code>');
+          break;
+        }
+        if (action === 'request') {
+          const lg = p[2] || 'en';
+          const lc = p[3] || 'US';
+          await _client.requestEmailCode({ lg, lc });
+          out('  code sent — check the inbox, then:  /email verify <code>');
+          break;
+        }
+        if (action === 'verify') {
+          const code = p[2];
+          if (!code) { fail('usage: /email verify <code>'); break; }
+          const r = await _client.verifyEmailCode(code);
+          if (r.verified) {
+            out('  code accepted' + (r.email ? ' for ' + r.email : ''));
+            out('  finishing:  /email confirm');
+          } else {
+            out('  not verified' + (r.autoVerifyFailed ? ' (auto-verify failed — run /email confirm)' : ''));
+          }
+          break;
+        }
+        if (action === 'confirm') {
+          await _client.confirmEmail({ context: 'settings' });
+          out('  email confirmed');
+          break;
+        }
+        fail('usage: /email status|set <address>|request [lg] [lc]|verify <code>|confirm');
+        break;
+      }
+
       // ── contacts ───────────────────────────────────────────────────────────
 
       case '/whatsapp': {
@@ -2346,16 +2399,10 @@ async function handleLine(line) {
         else if (sub === 'code') {
           const ph     = normalizePhone(p[2]);
           const method = (p[3] || 'sms').toLowerCase();
-          // email method: /reg code <phone> email <address>
-          const emailAddr = method === 'email' ? (p[4] || '') : '';
           if (!ph) {
-            fail('usage: /reg code <phone> [sms|voice|wa_old|flash|email <address>] [--name "Your Name"]');
+            fail('usage: /reg code <phone> [sms|voice|wa_old|flash] [--name "Your Name"]');
             out('  --name sets the display name the account registers with — what people');
             out('  who have not saved your number see. It can be changed later with /name.');
-            break;
-          }
-          if (method === 'email' && !emailAddr) {
-            fail('email method requires an address — usage: /reg code <phone> email <address>');
             break;
           }
           sessionDirFor(_sessDir, ph, { create: true });
@@ -2376,10 +2423,8 @@ async function handleLine(line) {
               out('  new keys saved — proceed with code below');
             }
           }
-          const methodLabel = method === 'email' ? ('email → ' + emailAddr) : method;
-          out('requesting ' + methodLabel + ' code for +' + ph + '...');
-          const codeOpts = Object.assign(method === 'email' ? { email: emailAddr } : {},
-            { onProgress: out, name: regName });
+          out('requesting ' + method + ' code for +' + ph + '...');
+          const codeOpts = { onProgress: out, name: regName };
           if (regName) out('  registering as "' + (store.name || regName) + '"');
           const r = await requestSmsCode(store, method, codeOpts);
           store.codePending = true;
@@ -2743,10 +2788,9 @@ options:
   --out <file>      where apk-material writes  (default: <session dir>/android-apk-material.json)
   --sms             connect by registering this number over SMS
   --pair            connect by linking to an existing account (8-digit code)
-  --method          sms | voice | wa_old | flash | email  (default: sms)
+  --method          sms | voice | wa_old | flash  (default: sms)
                     flash: WhatsApp rings the number and hangs up; the code is
                     read from the calling number automatically (Android only)
-  --email <address> email address (required when --method email)
   --business        register/connect as WhatsApp Business (same as WA_BUSINESS=1)
   --all             refresh-version: every session in the session directory
   --version <x>     refresh-version: write this version instead of looking one up
@@ -3088,12 +3132,7 @@ async function main() {
     if (flags['request-code'] !== undefined) {
       const ph        = phone || normalizePhone(pos[0] || '');
       const method    = (flags.method || 'sms').toLowerCase();
-      const emailAddr = flags.email || '';
       if (!ph) { fail('phone number required'); process.exit(1); }
-      if (method === 'email' && !emailAddr) {
-        fail('--method email requires --email <address>');
-        process.exit(1);
-      }
       if (!fs.existsSync(_sessDir)) fs.mkdirSync(_sessDir, { recursive: true });
       // Same file the shell's /reg code writes: a number already filed loose in
       // the base directory stays there, a new one gets a directory of its own.
@@ -3120,11 +3159,9 @@ async function main() {
       }
       // If store.codePending === true, keys were already accepted by WhatsApp in a
       // prior /code request — reuse the exact same store without any /exist call.
-      const methodLabel = method === 'email' ? ('email → ' + emailAddr) : method;
-      out('requesting ' + methodLabel + ' code for +' + ph + '...');
+      out('requesting ' + method + ' code for +' + ph + '...');
       try {
-        const codeOpts = Object.assign(method === 'email' ? { email: emailAddr } : {},
-          { onProgress: out, name: regName });
+        const codeOpts = { onProgress: out, name: regName };
         if (regName) out('  registering as "' + (store.name || regName) + '"');
         const r = await requestSmsCode(store, method, codeOpts);
         store.codePending = true;
