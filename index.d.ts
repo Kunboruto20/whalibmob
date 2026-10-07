@@ -608,6 +608,24 @@ export interface TosNoticesResult {
   notices: Array<{ id: string; accepted: boolean }>;
 }
 
+export interface EmailStatus {
+  /** The bound address, or null when none is set. */
+  email: string | null;
+  /** Whether the address has been verified with a code. */
+  verified: boolean;
+  /** Whether ownership has been confirmed. */
+  confirmed: boolean;
+}
+
+export interface EmailVerifyResult {
+  /** Whether the submitted code was accepted. */
+  verified: boolean;
+  /** The server tried to auto-verify and it failed — finish with confirmEmail(). */
+  autoVerifyFailed: boolean;
+  /** The address the result refers to, when the server echoes it. */
+  email: string | null;
+}
+
 export interface PrivacySettings {
   lastSeen: string | null;
   profile: string | null;
@@ -1011,6 +1029,22 @@ export declare class WhalibmobClient extends EventEmitter {
       chunkSize?: number;
     }
   ): Promise<ContactSyncResult>;
+
+  // ─── Account email — a recovery address bound on the connected account ─────
+  //
+  // Not a registration-code channel: the address is bound on a number that is
+  // already registered and connected, then verified with a code the server
+  // emails. Primary (mobile) sessions only — a companion link is refused.
+  /** The email currently bound to the account, with its verify/confirm state. */
+  getEmailStatus(): Promise<EmailStatus>;
+  /** Bind (or rebind) an email address. Not verified until requestEmailCode(). */
+  setEmail(email: string, opts?: { context?: 'settings' | 'onboarding' }): Promise<EmailStatus>;
+  /** Ask the server to email a verification code. lg/lc only pick the language. */
+  requestEmailCode(opts?: { lg?: string; lc?: string; language?: string; locale?: string }): Promise<boolean>;
+  /** Submit the six-digit code from the email. */
+  verifyEmailCode(code: string): Promise<EmailVerifyResult>;
+  /** Confirm ownership after a successful verifyEmailCode(). */
+  confirmEmail(opts?: { context?: 'settings' | 'onboarding' }): Promise<boolean>;
 
   // ─── Terms-of-Service notices ────────────────────────────────────────────
   //
