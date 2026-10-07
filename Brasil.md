@@ -198,6 +198,7 @@ npm install -g whalibmob
     - [Alterar Texto do Recado](#cli-alterar-texto-do-recado)
     - [Alterar Foto de Perfil](#cli-alterar-foto-de-perfil)
     - [Alterar Configurações de Privacidade](#cli-alterar-configurações-de-privacidade)
+    - [E-mail da Conta (endereço de recuperação)](#cli-e-mail-da-conta-endereço-de-recuperação)
   - [Comandos de Contatos](#comandos-de-contatos)
     - [Verificar Quem Tem WhatsApp](#verificar-quem-tem-whatsapp)
     - [Obter a URL da Foto de Perfil](#obter-a-url-da-foto-de-perfil)
@@ -350,6 +351,7 @@ npm install -g whalibmob
     - [Alterar o Nome de Exibição](#alterar-o-nome-de-exibição)
     - [Alterar o Texto do Recado](#alterar-o-texto-do-recado)
     - [Alterar a Foto de Perfil](#alterar-a-foto-de-perfil)
+    - [E-mail da Conta (endereço de recuperação)](#e-mail-da-conta-endereço-de-recuperação)
   - [Privacidade](#privacidade)
     - [Bloquear / Desbloquear Usuário](#bloquear--desbloquear-usuário)
     - [Obter a Lista de Bloqueados](#obter-a-lista-de-bloqueados)
@@ -960,6 +962,43 @@ wa> /privacy groups_add contacts
 Tipos disponíveis: `last_seen` · `profile_picture` · `status` · `online` · `read_receipts` · `groups_add`
 
 Valores disponíveis: `all` · `contacts` · `contact_blacklist` · `none` · `match_last_seen`
+
+#### CLI E-mail da Conta (endereço de recuperação)
+
+A conta pode ter um endereço de e-mail, usado para recuperar o acesso caso o
+número seja perdido ou o PIN de verificação em duas etapas seja esquecido.
+
+> [!NOTE]
+> Isto **não** é uma forma de receber o código de registro. Não há envio por
+> e-mail na etapa de pedir o código — registre o número primeiro (`--method sms`,
+> `voice`, `wa_old` ou `flash`), conecte, e só então vincule um e-mail. Funciona
+> em uma conta **primária**; um vínculo de companion (QR/pareamento) não pode usar.
+
+Vincule o endereço, peça um código, leia-o na caixa de entrada, envie-o, confirme:
+
+```sh
+wa> /email set nome@example.com
+  email bound: nome@example.com
+  next:  /email request    then  /email verify <code>
+
+wa> /email request
+  code sent — check the inbox, then:  /email verify <code>
+
+wa> /email verify 123456
+  code accepted for nome@example.com
+  finishing:  /email confirm
+
+wa> /email confirm
+  email confirmed
+
+wa> /email status
+  email      nome@example.com
+  verified   yes
+  confirmed  yes
+```
+
+`/email request` aceita um idioma e país opcionais (ex.: `/email request pt BR`)
+que apenas escolhem o idioma em que o e-mail é escrito — o código é o mesmo.
 
 ---
 
@@ -4914,6 +4953,42 @@ await client.changeProfilePicture(buf, { raw: true })
 // or choose the size
 await client.changeProfilePicture(buf, { size: 640, quality: 50 })
 ```
+
+### E-mail da Conta (endereço de recuperação)
+
+A conta pode ter um endereço de e-mail, usado para recuperar o acesso caso o
+número seja perdido ou o PIN de duas etapas seja esquecido.
+
+> [!NOTE]
+> Isto **não** é um canal para o código de registro — não há envio por e-mail na
+> etapa `/code`. Registre o número primeiro (SMS, voz, `wa_old` ou flash) e
+> conecte; o e-mail é vinculado na conta ativa e verificado com um código que o
+> servidor envia para a caixa de entrada. Apenas sessões **primárias** — um
+> vínculo de companion é recusado.
+
+```js
+// 1. vincular o endereço (ainda não verificado)
+await client.setEmail('nome@example.com')
+
+// 2. pedir ao servidor para enviar um código de seis dígitos por e-mail
+//    lg/lc apenas escolhem o idioma do e-mail
+await client.requestEmailCode({ lg: 'pt', lc: 'BR' })
+
+// 3. enviar o código que o usuário leu na caixa de entrada
+const r = await client.verifyEmailCode('123456')
+// r → { verified: true, autoVerifyFailed: false, email: 'nome@example.com' }
+
+// 4. confirmar a posse
+await client.confirmEmail()
+
+// ler o vínculo atual a qualquer momento
+const status = await client.getEmailStatus()
+// status → { email: 'nome@example.com', verified: true, confirmed: true }
+```
+
+Cada chamada lança o motivo do servidor quando é recusada — `535` o código
+expirou, `536` o código está errado, `537` tentativas demais, `534` bloqueado,
+`403` não permitido para esta conta.
 
 ## Privacidade
 

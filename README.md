@@ -194,6 +194,7 @@ npm install -g whalibmob
     - [Change About Text](#cli-change-about-text)
     - [Change Profile Picture](#cli-change-profile-picture)
     - [Change Privacy Settings](#cli-change-privacy-settings)
+    - [Account Email (recovery address)](#cli-account-email-recovery-address)
   - [Contact Commands](#contact-commands)
     - [Check Who Has WhatsApp](#check-who-has-whatsapp)
     - [Get Profile Picture URL](#get-profile-picture-url)
@@ -346,6 +347,7 @@ npm install -g whalibmob
     - [Change Display Name](#change-display-name)
     - [Change About Text](#change-about-text)
     - [Change Profile Picture](#change-profile-picture)
+    - [Account Email (recovery address)](#account-email-recovery-address)
   - [Privacy](#privacy)
     - [Block / Unblock User](#block--unblock-user)
     - [Get Block List](#get-block-list)
@@ -956,6 +958,43 @@ wa> /privacy groups_add contacts
 Available types: `last_seen` · `profile_picture` · `status` · `online` · `read_receipts` · `groups_add`
 
 Available values: `all` · `contacts` · `contact_blacklist` · `none` · `match_last_seen`
+
+#### CLI Account Email (recovery address)
+
+An account can carry an email address, used to get back in if the number is lost
+or the two-step PIN is forgotten.
+
+> [!NOTE]
+> This is **not** a way to receive the registration code. There is no email
+> delivery at the code-request step — register the number first (`--method sms`,
+> `voice`, `wa_old` or `flash`), connect, and only then bind an email. It works
+> on a **primary** account; a companion (QR/pairing) link cannot use it.
+
+Bind the address, ask for a code, read it from your inbox, submit it, confirm:
+
+```sh
+wa> /email set name@example.com
+  email bound: name@example.com
+  next:  /email request    then  /email verify <code>
+
+wa> /email request
+  code sent — check the inbox, then:  /email verify <code>
+
+wa> /email verify 123456
+  code accepted for name@example.com
+  finishing:  /email confirm
+
+wa> /email confirm
+  email confirmed
+
+wa> /email status
+  email      name@example.com
+  verified   yes
+  confirmed  yes
+```
+
+`/email request` takes an optional language and country (e.g. `/email request pt BR`)
+that only pick which language the email is written in — the code is the same.
 
 ---
 
@@ -4911,6 +4950,42 @@ await client.changeProfilePicture(buf, { raw: true })
 // or choose the size
 await client.changeProfilePicture(buf, { size: 640, quality: 50 })
 ```
+
+### Account Email (recovery address)
+
+An account can carry an email address, used to recover access when the number is
+lost or the two-step PIN is forgotten.
+
+> [!NOTE]
+> This is **not** a registration-code channel — there is no email delivery at the
+> `/code` step. Register the number first (SMS, voice, `wa_old` or flash) and
+> connect; the email is bound on the live account and verified with a code the
+> server sends to the inbox. Primary (mobile) sessions only — a companion link is
+> refused.
+
+```js
+// 1. bind the address (not verified yet)
+await client.setEmail('name@example.com')
+
+// 2. ask the server to email a six-digit code
+//    lg/lc only choose the language the email is written in
+await client.requestEmailCode({ lg: 'en', lc: 'US' })
+
+// 3. submit the code the user read from their inbox
+const r = await client.verifyEmailCode('123456')
+// r → { verified: true, autoVerifyFailed: false, email: 'name@example.com' }
+
+// 4. confirm ownership
+await client.confirmEmail()
+
+// read the current binding any time
+const status = await client.getEmailStatus()
+// status → { email: 'name@example.com', verified: true, confirmed: true }
+```
+
+Each call throws with the server's reason when it is refused — `535` the code
+expired, `536` the code is wrong, `537` too many wrong tries, `534` locked out,
+`403` not allowed for this account.
 
 ## Privacy
 
