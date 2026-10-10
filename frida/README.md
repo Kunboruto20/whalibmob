@@ -21,6 +21,9 @@ frida/
     server.js               HTTP server exposing /integrity, /cert, /info
     package.json            frida-compile build config
     README.md               how to run it on a rooted device
+    registration/
+      registration.js       hook on mbedtls_gcm_crypt_and_tag (ENC param trace)
+      README.md             how to trace the registration body on a device
   ios/                    iOS DeviceCheck App Attest server
     server.js               HTTP server exposing /integrity
     package.json            frida-compile build config
