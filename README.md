@@ -122,6 +122,7 @@ wa registration --request-code 919634847671
 The code, and the per-platform setup:
 
 - **[`frida/android/server.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/android/server.js)** — Play Integrity + Keystore attestation · [setup](https://github.com/Kunboruto20/whalibmob/blob/main/frida/android/README.md)
+- **[`frida/android/registration/registration.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/android/registration/registration.js)** — hooks `mbedtls_gcm_crypt_and_tag` in `libwhatsapp.so` to print the `/code` and `/register` parameters in plaintext, before they are sealed in the `ENC` envelope · [how to use](https://github.com/Kunboruto20/whalibmob/blob/main/frida/android/registration/README.md)
 - **[`frida/ios/server.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/ios/server.js)** — DeviceCheck App Attest · [setup](https://github.com/Kunboruto20/whalibmob/blob/main/frida/ios/README.md)
 - **[`frida/ios/registration/registration.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/ios/registration/registration.js)** — prints the registration public key
 - **[`frida/ios/exchange/index.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/ios/exchange/index.js)** — hooks `mbedtls_gcm_update` to read the payload

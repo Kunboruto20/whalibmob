@@ -126,6 +126,7 @@ wa registration --request-code 5511987654321
 O código, e a configuração de cada plataforma:
 
 - **[`frida/android/server.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/android/server.js)** — atestação Play Integrity + Keystore · [configuração](https://github.com/Kunboruto20/whalibmob/blob/main/frida/android/README.md)
+- **[`frida/android/registration/registration.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/android/registration/registration.js)** — faz hook em `mbedtls_gcm_crypt_and_tag` no `libwhatsapp.so` para imprimir os parâmetros do `/code` e do `/register` em texto puro, antes de serem selados no envelope `ENC` · [como usar](https://github.com/Kunboruto20/whalibmob/blob/main/frida/android/registration/README.md)
 - **[`frida/ios/server.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/ios/server.js)** — DeviceCheck App Attest · [configuração](https://github.com/Kunboruto20/whalibmob/blob/main/frida/ios/README.md)
 - **[`frida/ios/registration/registration.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/ios/registration/registration.js)** — imprime a chave pública de registro
 - **[`frida/ios/exchange/index.js`](https://github.com/Kunboruto20/whalibmob/blob/main/frida/ios/exchange/index.js)** — hook em `mbedtls_gcm_update` para ler o payload
