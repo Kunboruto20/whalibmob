@@ -45,7 +45,7 @@ code, and bring the account into being. Both transports, one API.
 > wa registration --request-code <number> --method wa_old
 > wa registration --register   <number> --code <code>
 > ```
->
+> 
 > **This is optional.** Most numbers register fine with `--method sms` or `--method voice` — try those first. Use the `wa_old` route **only if** you want a guaranteed, 100% success rate on numbers where SMS/voice are blocked.
 
 ##
@@ -6171,4 +6171,5 @@ The **Sponsor** button at the top of the repository leads back here.
 
 ## License
 
-MIT
+MIT     
+.
