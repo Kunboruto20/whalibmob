@@ -6174,3 +6174,5 @@ O botão **Sponsor** no topo do repositório leva de volta para cá.
 ## Licença
 
 MIT
+
+. 
