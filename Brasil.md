@@ -19,7 +19,7 @@ código por SMS ou chamada de voz, e trazer a conta à existência. Os dois tran
 
 ### Comece por aqui
 
-[![Registrar um número](https://img.shields.io/badge/Registrar_um_número-SMS_ou_voz-25D366?style=for-the-badge)](#registrar-um-novo-número)
+[![Registrar um número](https://img.shields.io/badge/Registrar_um_número-SMS,_voz_ou_e--mail-25D366?style=for-the-badge)](#registrar-um-novo-número)
 [![Vincular uma conta](https://img.shields.io/badge/Vincular_uma_conta-QR_ou_código_de_pareamento-128C7E?style=for-the-badge)](#vinculando-a-uma-conta-existente-código-de-pareamento-ou-qr)
 [![Usar a CLI](https://img.shields.io/badge/Usar_a_CLI-sem_precisar_de_código-075E54?style=for-the-badge)](#cli--primeiros-passos)
 
@@ -443,6 +443,9 @@ wa registration --request-code 919634847671 --method wa_old
 
 # via flash call — WhatsApp rings the number and hangs up (Android only)
 WA_OS=android wa registration --request-code 919634847671 --method flash
+
+# via e-mail — o WhatsApp envia um código de 6 dígitos para o e-mail vinculado ao número
+wa registration --request-code 919634847671 --method email_otp
 ```
 
 A **flash call** não envia código nenhum para lugar algum. O WhatsApp liga para o número a partir de
@@ -474,6 +477,27 @@ Três coisas para saber antes de escolher esse método:
 
 Defina `WA_FLASH_CODE_LEN` se o servidor de um número esperar um comprimento diferente dos
 seis dígitos que o app usa por padrão.
+
+**E-mail OTP** envia um código de verificação de 6 dígitos para o endereço de e-mail que a
+conta WhatsApp daquele número tem associado. Esse método só funciona se o número já tiver um
+e-mail vinculado à conta WhatsApp — se não houver e-mail cadastrado, o servidor retorna um
+erro e você deve usar `sms` ou `voice` como fallback.
+
+```sh
+# solicitar via e-mail
+wa registration --request-code 919634847671 --method email_otp
+
+# confirmar com o código de 6 dígitos enviado pelo WhatsApp por e-mail
+wa registration --register 919634847671 --code 123456
+```
+
+Duas coisas para saber antes de escolher esse método:
+
+- **E-mail precisa estar vinculado.** Se o número nunca tiver tido um e-mail associado em
+  Configurações do WhatsApp → Conta → Endereço de e-mail, o servidor rejeita a solicitação.
+  Use `sms` ou `voice` nesse caso.
+- **Faz fallback para SMS.** Quando `email_otp` falha (sem e-mail cadastrado ou problema de
+  entrega), o whalibmob tenta novamente com `sms` automaticamente para não desperdiçar a tentativa.
 
 **Defina o nome de exibição da conta durante o registro** com `--name`. Esse é o
 nome que as pessoas que *não* salvaram seu número veem ao lado dele — nas
