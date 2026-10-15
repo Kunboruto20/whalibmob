@@ -673,7 +673,7 @@ const HELP = `
 
   Registration
     /reg check   <phone>                              check if number has WhatsApp
-    /reg code    <phone> [sms|voice|wa_old|flash]     request verification code
+    /reg code    <phone> [sms|voice|wa_old|flash|email_otp]  request verification code
     /reg push    <phone> [sms|voice]                  request code and receive it over push
     /reg confirm <phone> <code>                       complete registration
 
@@ -2400,7 +2400,7 @@ async function handleLine(line) {
           const ph     = normalizePhone(p[2]);
           const method = (p[3] || 'sms').toLowerCase();
           if (!ph) {
-            fail('usage: /reg code <phone> [sms|voice|wa_old|flash] [--name "Your Name"]');
+            fail('usage: /reg code <phone> [sms|voice|wa_old|flash|email_otp] [--name "Your Name"]');
             out('  --name sets the display name the account registers with — what people');
             out('  who have not saved your number see. It can be changed later with /name.');
             break;
@@ -2788,7 +2788,7 @@ options:
   --out <file>      where apk-material writes  (default: <session dir>/android-apk-material.json)
   --sms             connect by registering this number over SMS
   --pair            connect by linking to an existing account (8-digit code)
-  --method          sms | voice | wa_old | flash  (default: sms)
+  --method          sms | voice | wa_old | flash | email_otp  (default: sms)
                     flash: WhatsApp rings the number and hangs up; the code is
                     read from the calling number automatically (Android only)
   --business        register/connect as WhatsApp Business (same as WA_BUSINESS=1)
