@@ -19,7 +19,7 @@ code, and bring the account into being. Both transports, one API.
 
 ### Start here
 
-[![Register a number](https://img.shields.io/badge/Register_a_number-SMS_or_voice-25D366?style=for-the-badge)](#register-a-new-number)
+[![Register a number](https://img.shields.io/badge/Register_a_number-SMS,_voice_or_email-25D366?style=for-the-badge)](#register-a-new-number)
 [![Link an account](https://img.shields.io/badge/Link_an_account-QR_or_pairing_code-128C7E?style=for-the-badge)](#linking-to-an-existing-account-pairing-code-or-qr)
 [![Use the CLI](https://img.shields.io/badge/Use_the_CLI-no_code_needed-075E54?style=for-the-badge)](#cli--getting-started)
 
@@ -439,6 +439,9 @@ wa registration --request-code 919634847671 --method wa_old
 
 # via flash call — WhatsApp rings the number and hangs up (Android only)
 WA_OS=android wa registration --request-code 919634847671 --method flash
+
+# via email — WhatsApp sends a 6-digit code to the email address linked to the number
+wa registration --request-code 919634847671 --method email_otp
 ```
 
 **Flash call** sends no code anywhere. WhatsApp rings the number from a
@@ -470,6 +473,28 @@ Three things to know before choosing it:
 
 Set `WA_FLASH_CODE_LEN` if a number's server expects a different length than the
 six digits the app defaults to.
+
+**Email OTP** sends a 6-digit verification code to the email address that the
+phone number's WhatsApp account has associated. This method only works when the
+number already has an email linked to its WhatsApp account — if there is no email
+on file, the server returns an error and you should fall back to `sms` or `voice`.
+
+```sh
+# request via email
+wa registration --request-code 919634847671 --method email_otp
+
+# then confirm with the 6-digit code WhatsApp emailed
+wa registration --register 919634847671 --code 123456
+```
+
+Two things to know before choosing it:
+
+- **Email must be linked.** If the number has never had an email associated in
+  WhatsApp Settings → Account → Email address, the server rejects the request.
+  Use `sms` or `voice` instead.
+- **Falls back to SMS.** When `email_otp` fails (no email on file or email
+  delivery issue), whalibmob automatically retries with `sms` so the attempt is
+  not wasted.
 
 **Set the account's display name while registering** with `--name`. This is the
 name people who have *not* saved your number see next to it — in group
