@@ -1806,6 +1806,7 @@ export declare const DeviceConfig: LibModule;
  */
 export declare const Devices: LibModule;
 export declare const PlayStore: LibModule;
+export declare const ApkPureStore: LibModule;
 export declare const PlayStoreDevice: LibModule;
 export declare const AndroidApk: LibModule;
 export declare const Attestation: LibModule;

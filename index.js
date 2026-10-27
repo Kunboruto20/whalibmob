@@ -125,6 +125,7 @@ const WebStore         = require('./lib/WebStore');
 const DeviceConfig     = require('./lib/DeviceConfig');
 const Devices          = require('./lib/DeviceManager');
 const PlayStore        = require('./lib/PlayStore');
+const ApkPureStore     = require('./lib/ApkPureStore');
 const PlayStoreDevice  = require('./lib/playstore-device');
 const AndroidApk       = require('./lib/AndroidApk');
 const Attestation      = require('./lib/Attestation');
@@ -369,6 +370,7 @@ module.exports = {
   DeviceConfig,
   Devices,
   PlayStore,
+  ApkPureStore,
   PlayStoreDevice,
   AndroidApk,
   Attestation,
