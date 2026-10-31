@@ -102,6 +102,18 @@ test('the _ga token still percent-encodes its inner object', () => {
   for (const k of ['bi', 'ap', 'ai', 'mp', 'ae', 'mu']) assert.ok(k in obj, 'has ' + k);
 });
 
+test('integrity_payload takes _lh from the APK material when present', () => {
+  const authKeyRaw = crypto.randomBytes(32);
+  const lh = crypto.randomBytes(32);                 // Buffer, as extractMaterial yields
+  const material = Object.assign(sampleMaterial(), { nativeLibSha256: lh });
+  const blob = attestation.generateIntegrityPayload({
+    authKeyRaw, material, aid: 'AID', serverNonce: 'NONCE'
+  });
+  const json = decryptEnvelope(blob, authKeyRaw);
+  const expected = lh.toString('base64').replace(/\//g, '\\/');
+  assert.ok(json.includes('"_lh":"' + expected + '"'), 'uses material.nativeLibSha256');
+});
+
 function fieldNumbers(buf) {
   let o = 0; const fields = [];
   const rv = () => { let r = 0n, s = 0n; while (o < buf.length) { const b = buf[o++]; r |= (BigInt(b) & 0x7fn) << s; if (!(b & 0x80)) break; s += 7n; } return r; };
