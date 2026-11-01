@@ -1699,8 +1699,11 @@ async function handleLine(line) {
         requireConn();
         const name = p.slice(1).join(' ');
         if (!name) { fail('usage: /name <text>'); break; }
-        _client.changeName(name);
-        out('name updated');
+        const synced = await _client.changeName(name);
+        out(synced
+          ? 'name announced; linked-device App State write accepted'
+          : 'name announced and saved for reconnect; linked-device App State write unconfirmed');
+        out('the other phone may refresh its ~name when it receives your next message');
         break;
       }
 
