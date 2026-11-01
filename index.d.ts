@@ -94,6 +94,10 @@ export interface WhalibmobStore {
   codePending: boolean;
   /** Display name announced on connect; `'User'` is the placeholder when none was given. */
   name: string;
+  /** Local rename intent, reconciled by login or authenticated App State. */
+  pendingPushName?: string | null;
+  /** Last observed login display_name, distinct from the requested name. */
+  serverPushName?: string | null;
   version: string;
   device: DeviceConfig;
   /** Signed device identity bytes, `null` until the server sends them in `<success>`. */
@@ -991,6 +995,8 @@ export declare class WhalibmobClient extends EventEmitter {
   queryBusinessProfile(jid: Jid): Promise<BusinessProfile | null>;
 
   // ─── Profile ─────────────────────────────────────────────────────────────
+  /** Publishes and saves rename intent. True confirms an App State write only;
+   * false means that write was unavailable or failed, not that a retry is queued. */
   changeName(name: string): Promise<boolean>;
   changeAbout(text: string): Promise<any>;
   /**
