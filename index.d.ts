@@ -620,10 +620,12 @@ export interface EmailStatus {
 export interface EmailVerifyResult {
   /** Whether the submitted code was accepted. */
   verified: boolean;
-  /** The server tried to auto-verify and it failed — finish with confirmEmail(). */
+  /** Compatibility field; auto_verify belongs to binding, not the OTP verdict. */
   autoVerifyFailed: boolean;
   /** The address the result refers to, when the server echoes it. */
   email: string | null;
+  /** Server-provided retry delay when included in the verification response. */
+  waitTimeSeconds?: number;
 }
 
 export interface PrivacySettings {
@@ -1037,13 +1039,13 @@ export declare class WhalibmobClient extends EventEmitter {
   // emails. Primary (mobile) sessions only — a companion link is refused.
   /** The email currently bound to the account, with its verify/confirm state. */
   getEmailStatus(): Promise<EmailStatus>;
-  /** Bind (or rebind) an email address. Not verified until requestEmailCode(). */
+  /** Bind an email. Legacy context is accepted; only confirmEmail transmits it. */
   setEmail(email: string, opts?: { context?: 'settings' | 'onboarding' }): Promise<EmailStatus>;
   /** Ask the server to email a verification code. lg/lc only pick the language. */
   requestEmailCode(opts?: { lg?: string; lc?: string; language?: string; locale?: string }): Promise<boolean>;
   /** Submit the six-digit code from the email. */
   verifyEmailCode(code: string): Promise<EmailVerifyResult>;
-  /** Confirm ownership after a successful verifyEmailCode(). */
+  /** Confirm ownership after a successful verifyEmailCode(). Defaults to settings. */
   confirmEmail(opts?: { context?: 'settings' | 'onboarding' }): Promise<boolean>;
 
   // ─── Terms-of-Service notices ────────────────────────────────────────────

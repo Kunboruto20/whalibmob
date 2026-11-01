@@ -4999,9 +4999,10 @@ await client.requestEmailCode({ lg: 'en', lc: 'US' })
 
 // 3. submit the code the user read from their inbox
 const r = await client.verifyEmailCode('123456')
-// r → { verified: true, autoVerifyFailed: false, email: 'name@example.com' }
+// r → { verified: true, autoVerifyFailed: false, email: null, waitTimeSeconds: 0 }
 
 // 4. confirm ownership
+if (!r.verified) throw new Error('The email code was not accepted')
 await client.confirmEmail()
 
 // read the current binding any time
@@ -5012,6 +5013,12 @@ const status = await client.getEmailStatus()
 Each call throws with the server's reason when it is refused — `535` the code
 expired, `536` the code is wrong, `537` too many wrong tries, `534` locked out,
 `403` not allowed for this account.
+
+`confirmEmail()` defaults to the `settings` context. OTP verification
+uses the account GET operation and its `code_match` reply; status reads the
+`verified` child element. Email IQs have a 32-second deadline. `EMAIL_IQ_TIMEOUT`,
+`EMAIL_IQ_DISCONNECTED` and `EMAIL_IQ_UNCERTAIN` mean the outcome is unknown:
+read status before repeating a change or asking for another code.
 
 ## Privacy
 
