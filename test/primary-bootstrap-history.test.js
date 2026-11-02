@@ -44,6 +44,8 @@ const EMPTY = { source: 'owned_primary_store', messageCount: 0, conversationCoun
 // server holds critical_block as patches written to it, at the version the
 // server gave them, or as a snapshot blob reference. hangPatch: 'applied'
 // keeps the write and never answers it, 'lost' drops it and never answers it.
+// refusePatch: 'iq' answers the write with an IQ error, 'node' with an error
+// inside a result; either way nothing is kept.
 // control.hangAck / control.ackError pick the peer messages whose ACK never
 // comes or refuses.
 async function fixture(t) {
@@ -59,7 +61,7 @@ async function fixture(t) {
     const code = 'K7M2QX4B', ref = Buffer.from('synthetic-independent-companion-ref');
     const wrapped = await P.buildWrappedEphemeralPub(code, ephemeral.public);
     const control = { hangAck: null, ackError: null };
-    const server = { version: 0, patches: [], snapshot: null, hangPatch: false };
+    const server = { version: 0, patches: [], snapshot: null, hangPatch: false, refusePatch: null };
     const requests = [];
     let linked = false, messageCount = 0, companionSecret = null;
     const reply = (query, content = []) => client._handleIq(new BinaryNode('iq', { id: query.attrs.id, type: 'result', from: 's.whatsapp.net' }, content));
@@ -91,6 +93,11 @@ async function fixture(t) {
                             // The server assigns the version a patch is kept at.
                             const keep = () => { server.version += 1; server.patches.push(withVersion(patch.content, server.version)); };
                             if (server.hangPatch) { if (server.hangPatch === 'applied') keep(); return; }
+                            if (server.refusePatch === 'iq') {
+                                client._handleIq(new BinaryNode('iq', { id: node.attrs.id, type: 'error', from: 's.whatsapp.net' }, [new BinaryNode('error', { code: '400' }, null)]));
+                                return;
+                            }
+                            if (server.refusePatch === 'node') { reply(node, [collection([new BinaryNode('error', { code: '400' }, null)])]); return; }
                             keep();
                             reply(node, [collection(null)]);
                             return;
@@ -134,7 +141,7 @@ async function fixture(t) {
         ])
     ]));
     t.after(() => { client.disconnect(); fs.rmSync(dir, { recursive: true, force: true }); });
-    return { client, dir, code, identity, requests, control, server, invitation: client.getPrimaryLinkInvitations()[0] };
+    return { client, dir, code, identity, requests, control, server, invitation: client.getPrimaryLinkInvitations()[0], removeServerDevice() { linked = false; } };
 }
 async function bootstrapFixture(t) {
     const f = await fixture(t);
@@ -158,6 +165,8 @@ const journal = f => f.client._primaryLinking.journal.snapshot();
 const outboxFile = f => path.join(f.dir, PHONE + '.primary-history-outbox.json');
 const keyFile = f => path.join(f.dir, PHONE + '.appStateKeys.json');
 const sha = buf => crypto.createHash('sha256').update(buf).digest('hex');
+// Every file the account keeps in its session directory, as text.
+const sessionText = f => fs.readdirSync(f.dir).map(name => fs.readFileSync(path.join(f.dir, name), 'utf8')).join('\n');
 function notificationOf(m) {
     const M = type('Message');
     const message = M.toObject(M.decode(plain(m)), { longs: Number });
@@ -287,7 +296,7 @@ test('empty history in first mode sends the live-validated bytes', async t => {
     const f = await bootstrapFixture(t);
     const result = await f.client.bootstrapPrimaryCompanion({ history: async () => snapshot() });
     assert.deepEqual(result, { status: 'sent', mode: 'first', operationId: journal(f).transaction.id,
-        history: { chats: 0, records: 0, bytes: buildHistorySync(snapshot()).length, inline: true }, delta: null });
+        history: { chats: 0, records: 0, bytes: buildHistorySync(snapshot()).length, inline: true, losses: 0, evicted: 0, captureOrigin: 'enabled' }, delta: null });
     const sent = messages(f);
     assert.equal(sent.length, 2);
     assert.equal(keyShareOf(sent[0]).keyData.length, 32);
@@ -307,7 +316,7 @@ test('store history is delivered inline with the recorded chats', async t => {
         pushNames: [{ id: ANA, pushname: 'Ana' }] });
     f.client._messageStore = { snapshot: () => snap };
     const result = await f.client.bootstrapPrimaryCompanion({ history: 'store' });
-    assert.deepEqual(result.history, { chats: 2, records: 3, bytes: buildHistorySync(snap).length, inline: true });
+    assert.deepEqual(result.history, { chats: 2, records: 3, bytes: buildHistorySync(snap).length, inline: true, losses: 0, evicted: 0, captureOrigin: 'enabled' });
     const hsn = notificationOf(messages(f)[1]);
     assert.equal(hsn.syncType, 0);
     assert.equal(hsn.progress, 100);
@@ -335,7 +344,7 @@ test('deflated size 65537 selects the blob path', async t => {
     assert.equal(uploads.length, 1);
     assert.equal(uploads[0].kind, 'md-msg-hist');
     assert.deepEqual(uploads[0].buf, bytes);
-    assert.deepEqual(result.history, { chats: 1, records: 1, bytes: 65537, inline: false });
+    assert.deepEqual(result.history, { chats: 1, records: 1, bytes: 65537, inline: false, losses: 0, evicted: 0, captureOrigin: 'enabled' });
     const hsn = notificationOf(messages(f)[1]);
     assert.equal(hsn.directPath, uploads[0].done.directPath);
     assert.deepEqual(hsn.mediaKey, uploads[0].done.mediaKey);
@@ -366,30 +375,61 @@ test('a blob upload that does not match the pinned bytes is not sent', async t =
     assert.equal(messages(f).length, 2);
 });
 
-test('resume after history_uploaded reuses the blob without uploading', async t => {
-    const f = await bootstrapFixture(t), snap = sized(INLINE_MAX + 1);
-    let uploads = 0;
-    const upload = async buf => { uploads++; return fakeUpload(buf); };
+test('resume from history_uploaded uploads the pinned bytes again', async t => {
+    // Nothing points at the first blob yet, and it may have expired since.
+    const f = await bootstrapFixture(t), pinned = sized(INLINE_MAX + 1), bytes = buildHistorySync(pinned);
+    let snap = pinned;
+    const uploads = [];
+    const upload = async buf => { const done = fakeUpload(buf); uploads.push({ buf, done }); return done; };
     failPhaseOnce(f, 'history_sending');
     await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
     const recorded = journal(f).transaction.bootstrap;
     assert.equal(recorded.phase, 'history_uploaded');
     assert.equal(recorded.errorCode, 'PRIMARY_LINK_STORE_WRITE_FAILED');
-    assert.equal(uploads, 1);
+    assert.equal(recorded.history.uploaded, true);
+    assert.ok(Number.isSafeInteger(recorded.history.uploadedAt));
+    assert.match(recorded.history.blobDigest, /^[0-9a-f]{64}$/);
+    assert.equal(uploads.length, 1);
     assert.equal(messages(f).length, 1);
     // Without resume, an attempt stays one attempt.
     await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload }), { code: 'PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED' });
-    uploads = 0;
+    snap = chatSnapshot(3);
     const result = await f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload, resume: true });
-    assert.equal(uploads, 0);
+    assert.equal(uploads.length, 2, 'exactly one more upload');
+    assert.deepEqual(uploads[1].buf, bytes, 'of the pinned bytes, not the changed store');
     assert.equal(result.history.inline, false);
     const sent = messages(f);
     assert.equal(sent.length, 2);
     assert.equal(patchWrites(f).length, 1);
     const hsn = notificationOf(sent[1]);
-    assert.equal(hsn.directPath, recorded.history.blob.directPath);
-    assert.deepEqual(hsn.mediaKey, Buffer.from(recorded.history.blob.mediaKey, 'base64'));
+    assert.equal(hsn.directPath, uploads[1].done.directPath);
+    assert.deepEqual(hsn.mediaKey, uploads[1].done.mediaKey);
     assert.equal(hsn.fileLength, 65537);
+});
+
+test('the blob media key stays out of the link journal, and a resume from history_sending reuses that blob', async t => {
+    const f = await bootstrapFixture(t), snap = sized(INLINE_MAX + 1), uploads = [];
+    const upload = async buf => { const done = fakeUpload(buf); uploads.push(done); return done; };
+    await stopUnacked(f, 2, { history: async () => snap, upload });
+    const key = uploads[0].mediaKey, journalFile = path.join(f.dir, PHONE + '.primary-linking.json');
+    assert.equal(journal(f).transaction.bootstrap.phase, 'history_sending');
+    for (const text of [key.toString('base64'), key.toString('hex')]) {
+        assert.ok(!fs.readFileSync(journalFile, 'utf8').includes(text), 'not in the journal');
+    }
+    // Only the 0600 outbox holds it, beside the bytes it encrypts.
+    const outbox = JSON.parse(fs.readFileSync(outboxFile(f), 'utf8'));
+    assert.equal(outbox.blob.mediaKey, key.toString('base64'));
+    assert.equal(outbox.blob.directPath, uploads[0].directPath);
+    const first = messages(f)[1];
+    await f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload, resume: true, resendUncertain: true });
+    assert.equal(uploads.length, 1, 'the message already sent points at this blob: it is resent as it was');
+    const sent = messages(f);
+    assert.equal(sent.length, 3);
+    assert.equal(sent[2].attrs.id, first.attrs.id);
+    assert.deepEqual(plain(sent[2]), plain(first));
+    // Once sent, no session file holds it at all.
+    for (const text of [key.toString('base64'), key.toString('hex')]) assert.ok(!sessionText(f).includes(text));
+    assert.equal(fs.existsSync(outboxFile(f)), false);
 });
 
 test('resume uses the pinned outbox even after the store changed', async t => {
@@ -401,7 +441,8 @@ test('resume uses the pinned outbox even after the store changed', async t => {
     assert.equal(journal(f).transaction.bootstrap.phase, 'history_prepared');
     const file = outboxFile(f), outbox = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-    assert.deepEqual(Object.keys(outbox).sort(), ['bytes', 'cutoff', 'inline', 'sha256']);
+    assert.deepEqual(Object.keys(outbox).sort(), ['bytes', 'cutoff', 'inline', 'sha256', 'txId']);
+    assert.equal(outbox.txId, journal(f).transaction.id);
     assert.deepEqual(outbox.cutoff, { seq: 2 });
     assert.equal(outbox.inline, true);
     assert.equal(sha(Buffer.from(outbox.bytes, 'base64')), outbox.sha256);
@@ -588,33 +629,286 @@ test('a step its ACK refused is not sent again, even with resendUncertain', asyn
     f.control.ackError = (node, n) => (n === 2 ? '403' : null);
     await assert.rejects(f.client.bootstrapPrimaryCompanion({ history }), { code: 'PRIMARY_BOOTSTRAP_ACK_403' });
     assert.equal(journal(f).transaction.bootstrap.phase, 'history_sending');
+    assert.equal(fs.existsSync(outboxFile(f)), false, 'a refused history is not kept');
     const count = f.requests.length;
     await assert.rejects(f.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true }), { code: 'PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED' });
     assert.equal(f.requests.length, count);
 });
 
 test('delta carries only records after the cutoff', async t => {
-    const f = await bootstrapFixture(t), pinned = chatSnapshot(3), later = chatSnapshot(5);
+    const BOB = '40788888888@s.whatsapp.net', CAROL = '40777777777@s.whatsapp.net', DAVE = '40766666666@s.whatsapp.net';
+    const gone = (id, seq, ts, tombstone) => ({ id, seq, fromMe: false, ts, status: 3, tombstone });
+    const chats = [{ id: ANA, name: 'Ana', conversationTimestamp: T + 5, unreadCount: 0 }, { id: BOB, name: 'Bob', conversationTimestamp: T + 3, unreadCount: 7 },
+        { id: GROUP, name: 'Group', conversationTimestamp: T + 7, unreadCount: 2 }];
+    const pushNames = [{ id: ANA, pushname: 'Ana' }, { id: BOB, pushname: 'Bob' }, { id: CAROL, pushname: 'Carol' }, { id: DAVE, pushname: 'Dave' }];
+    const pinned = snapshot({ seq: 3, chats, pushNames, records: {
+        [ANA]: [gone('X0', 1, T, 'expired'), rec('M1', 1, T + 1), rec('M2', 2, T + 2)],
+        [BOB]: [rec('B1', 3, T + 3)],
+        [GROUP]: [rec('G1', 2, T + 2, { participant: CAROL })] } });
+    const later = snapshot({ seq: 7, chats, pushNames, records: {
+        [ANA]: [rec('M1', 1, T + 1), gone('M2', 6, T + 2, 'revoked'), rec('M4', 4, T + 4), rec('M5', 5, T + 5)],
+        [BOB]: [rec('B1', 3, T + 3), gone('B2', 6, T + 4, 'expired')],
+        [GROUP]: [rec('G1', 2, T + 2, { participant: CAROL }), rec('G2', 7, T + 7, { participant: DAVE })] } });
+    const f = await bootstrapFixture(t);
     let calls = 0;
     const result = await f.client.bootstrapPrimaryCompanion({ history: async () => (calls++ === 0 ? pinned : later), delta: true });
-    assert.equal(result.history.records, 3);
-    assert.deepEqual(result.delta, { records: 2 });
+    // Counted as exported: the expired X0 never goes over.
+    assert.equal(result.history.records, 4);
+    assert.equal(result.history.chats, 3);
+    assert.deepEqual(result.delta, { records: 4 });
     const sent = messages(f);
     assert.equal(sent.length, 3);
-    assert.deepEqual(messageIds(historyOf(notificationOf(sent[1]))), ['M1', 'M2', 'M3']);
+    assert.deepEqual(messageIds(historyOf(notificationOf(sent[1]))), ['M1', 'M2', 'B1', 'G1']);
     const hsn = notificationOf(sent[2]);
     assert.equal(hsn.syncType, 3);
     const delta = historyOf(hsn);
     assert.equal(delta.syncType, 3);
-    assert.deepEqual(messageIds(delta), ['M4', 'M5']);
-    assert.deepEqual(journal(f).transaction.bootstrap.delta.cutoff, { seq: 5 });
+    // Only the chats with something new that goes over: Bob's expired B2 does
+    // not bring his chat back with its unread count.
+    assert.deepEqual(delta.conversations.map(c => c.ID), [ANA, GROUP]);
+    assert.deepEqual(messageIds(delta), ['M2', 'M4', 'M5', 'G2']);
+    assert.equal(delta.conversations[0].messages[0].message.messageStubType, 1);
+    // Push names of those chats and their senders only.
+    assert.deepEqual(delta.pushnames.map(p => p.ID).sort(), [ANA, DAVE].sort());
+    assert.deepEqual(journal(f).transaction.bootstrap.delta.cutoff, { seq: 7 });
     assert.equal(journal(f).transaction.bootstrap.phase, 'sent');
 
-    // Nothing arrived after the cutoff: nothing more is sent.
+    // Nothing that goes over arrived after the cutoff: nothing more is sent.
+    const quiet = snapshot({ seq: 6, chats, pushNames, records: { ...pinned.records, [BOB]: [rec('B1', 3, T + 3), gone('B2', 6, T + 4, 'expired')] } });
     const g = await bootstrapFixture(t);
-    const quiet = await g.client.bootstrapPrimaryCompanion({ history: async () => pinned, delta: true });
-    assert.deepEqual(quiet.delta, { records: 0 });
+    let again = 0;
+    const none = await g.client.bootstrapPrimaryCompanion({ history: async () => (again++ === 0 ? pinned : quiet), delta: true });
+    assert.deepEqual(none.delta, { records: 0 });
     assert.equal(messages(g).length, 2);
+});
+
+test('a dropped connection leaves the bootstrap resumable', async t => {
+    const history = async () => chatSnapshot(2);
+    // While the history's ACK is outstanding.
+    const f = await bootstrapFixture(t);
+    f.control.hangAck = (node, i) => i === 2;
+    const run = f.client.bootstrapPrimaryCompanion({ history });
+    await until(() => messages(f).length >= 2);
+    f.client._closePrimaryLinking();
+    await assert.rejects(run, { code: 'PRIMARY_LINK_CONNECTION_CLOSED' });
+    f.control.hangAck = null;
+    const tx = f.client._primaryLinkingForSession().journal.snapshot().transaction;
+    assert.equal(tx.phase, 'uncertain');
+    assert.equal(tx.bootstrap.phase, 'history_sending');
+    // Only a resume of the recorded attempt may continue an uncertain link.
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history }), { code: 'PRIMARY_BOOTSTRAP_AUTHORIZED_LINK_REQUIRED' });
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history, resume: true }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN' });
+    const first = messages(f)[1];
+    assert.equal((await f.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true })).status, 'sent');
+    assert.equal(messages(f).length, 3);
+    assert.equal(messages(f)[2].attrs.id, first.attrs.id);
+
+    // While the patch write is unanswered: settled by reading it back.
+    const g = await bootstrapFixture(t);
+    g.server.hangPatch = 'applied';
+    const write = g.client.bootstrapPrimaryCompanion({ history });
+    await until(() => patchWrites(g).length === 1);
+    g.client._closePrimaryLinking();
+    await assert.rejects(write, { code: 'PRIMARY_LINK_CONNECTION_CLOSED' });
+    g.server.hangPatch = false;
+    assert.equal(g.client._primaryLinkingForSession().journal.snapshot().transaction.phase, 'uncertain');
+    assert.equal((await g.client.bootstrapPrimaryCompanion({ history, resume: true })).status, 'sent');
+    assert.equal(patchWrites(g).length, 1);
+    assert.equal(messages(g).length, 2);
+
+    // The resumed attempt stays bound to its device.
+    const h = await bootstrapFixture(t);
+    h.control.hangAck = (node, i) => i === 2;
+    const bound = h.client.bootstrapPrimaryCompanion({ history });
+    await until(() => messages(h).length >= 2);
+    h.client._closePrimaryLinking();
+    await assert.rejects(bound, { code: 'PRIMARY_LINK_CONNECTION_CLOSED' });
+    h.control.hangAck = null;
+    h.client._devMgr = { async fetchBundles(jids) { return new Map([[jids[0], { identityKey: Buffer.alloc(32, 7) }]]); } };
+    await assert.rejects(h.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true }), { code: 'PRIMARY_BOOTSTRAP_PEER_UNMATCHED' });
+    assert.equal(messages(h).length, 2);
+});
+
+test('the outbox belongs to its link transaction and is removed once it can no longer be sent', async t => {
+    // A bootstrap stopped with its history pinned.
+    async function stuck() {
+        const f = await bootstrapFixture(t);
+        await stopUnacked(f, 2, { history: async () => chatSnapshot(2) });
+        assert.equal(JSON.parse(fs.readFileSync(outboxFile(f), 'utf8')).txId, journal(f).transaction.id);
+        return f;
+    }
+    // One some other transaction left is removed when a bootstrap starts.
+    const f = await stuck(), pinned = JSON.parse(fs.readFileSync(outboxFile(f), 'utf8'));
+    fs.writeFileSync(outboxFile(f), JSON.stringify({ ...pinned, txId: crypto.randomUUID() }), { mode: 0o600 });
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(2) }), { code: 'PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED' });
+    assert.equal(fs.existsSync(outboxFile(f)), false);
+
+    // Retiring the link removes it.
+    const g = await stuck();
+    g.client._primaryLinking.journal.update(s => { s.transaction.startedAt = Date.now() - 300001; });
+    g.removeServerDevice();
+    assert.equal((await g.client.retireAbsentPrimaryLink()).status, 'abandoned');
+    assert.equal(fs.existsSync(outboxFile(g)), false);
+
+    // So does a new link transaction taking this one's place.
+    const h = await stuck(), previous = journal(h).transaction.id;
+    h.client._primaryLinking.journal.update(s => { s.transaction.phase = 'committed'; });   // as reconcilePrimaryLink leaves it
+    const key = () => crypto.randomBytes(32).toString('base64');
+    await assert.rejects(h.client.approveCompanionQr(['another-companion-ref', key(), key(), key(), '1'].join(',')));
+    assert.notEqual(journal(h).transaction.id, previous);
+    assert.equal(fs.existsSync(outboxFile(h)), false);
+});
+
+test('losses, evictions and the capture origin are reported with the history', async t => {
+    const f = await bootstrapFixture(t);
+    const snap = { ...chatSnapshot(2), losses: [{ reason: 'undecryptable', ids: ['L1', 'L2'] }, { reason: 'store-disabled', from: 1, to: 2 }],
+        retained: { evicted: 7 }, capture: { since: T * 1000, origin: 'migrated', lc: 3 } };
+    failPhaseOnce(f, 'history_sending');
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+    // A resume reports what was pinned, not what the store holds now.
+    const result = await f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(5), resume: true });
+    assert.deepEqual(result.history, { chats: 1, records: 2, bytes: buildHistorySync(snap).length, inline: true, losses: 2, evicted: 7, captureOrigin: 'migrated' });
+    // A provider that does not say has no answer, rather than a clean one.
+    const g = await bootstrapFixture(t), bare = chatSnapshot(1);
+    delete bare.losses; delete bare.retained; delete bare.capture;
+    const unknown = (await g.client.bootstrapPrimaryCompanion({ history: async () => bare })).history;
+    assert.deepEqual([unknown.losses, unknown.evicted, unknown.captureOrigin], [null, null, null]);
+});
+
+test('a patch the server refused is not written again on resume', async t => {
+    for (const [refusal, code] of [['iq', 'PRIMARY_LINK_IQ_REJECTED'], ['node', 'PRIMARY_BOOTSTRAP_PATCH_REJECTED']]) {
+        const f = await bootstrapFixture(t), history = async () => chatSnapshot(1);
+        f.server.refusePatch = refusal;
+        await assert.rejects(f.client.bootstrapPrimaryCompanion({ history }), { code });
+        assert.equal(journal(f).transaction.bootstrap.phase, 'critical_patch_sending');
+        assert.deepEqual(journal(f).transaction.bootstrap.iq.errorCodes, ['400']);
+        f.server.refusePatch = null;
+        const count = f.requests.length, before = journal(f);
+        await assert.rejects(f.client.bootstrapPrimaryCompanion({ history, resume: true }), { code: 'PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED' }, refusal);
+        assert.equal(f.requests.length, count);
+        assert.deepEqual(journal(f), before);
+        assert.equal(patchWrites(f).length, 1);
+    }
+});
+
+test('a history the encoder refuses is HISTORY_INVALID, with the encoder error as its cause', async t => {
+    const noBytes = seq => ({ id: 'NORAW', seq, fromMe: false, ts: T, status: 3 });
+    const broken = snapshot({ seq: 1, chats: [{ id: ANA, conversationTimestamp: T, unreadCount: 0 }], records: { [ANA]: [noBytes(1)] } });
+    const f = await bootstrapFixture(t);
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => broken }),
+        e => e.code === 'PRIMARY_BOOTSTRAP_HISTORY_INVALID' && e.cause?.code === 'PRIMARY_HISTORY_EXPORT_SNAPSHOT_INVALID');
+    assert.equal(messages(f).length, 0);
+    assert.equal(journal(f).transaction.bootstrap, undefined);
+    // Found only at the delta: thrown and journaled under the same code.
+    const g = await bootstrapFixture(t);
+    let calls = 0;
+    const later = snapshot({ seq: 2, chats: broken.chats, records: { [ANA]: [noBytes(2)] } });
+    await assert.rejects(g.client.bootstrapPrimaryCompanion({ history: async () => (calls++ === 0 ? chatSnapshot(1) : later), delta: true }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_INVALID' });
+    assert.equal(journal(g).transaction.bootstrap.errorCode, 'PRIMARY_BOOTSTRAP_HISTORY_INVALID');
+    assert.equal(journal(g).transaction.bootstrap.phase, 'history_accepted');
+});
+
+test('verifyServerCriticalBlock reports a key file that is not ours as foreign', async t => {
+    const f = await bootstrapFixture(t);
+    fs.writeFileSync(keyFile(f), JSON.stringify({ '0a0b0c0d0e0f': { keyData: crypto.randomBytes(32).toString('base64'), timestamp: 1, source: 'phone' } }), { mode: 0o600 });
+    assert.deepEqual(await Bootstrap.verifyServerCriticalBlock(f.client._primaryLinking, null), { version: 0, verified: false, foreign: true });
+});
+
+test('resume from prepared shares the recorded key, or makes it if the key file was never written', async t => {
+    for (const keyFileLost of [false, true]) {
+        const f = await bootstrapFixture(t), history = async () => chatSnapshot(1);
+        failPhaseOnce(f, 'key_share_sending');
+        await assert.rejects(f.client.bootstrapPrimaryCompanion({ history }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+        const recorded = journal(f).transaction.bootstrap;
+        assert.equal(recorded.phase, 'prepared');
+        assert.equal(messages(f).length, 0);
+        if (keyFileLost) fs.rmSync(keyFile(f));
+        const before = keyFileLost ? null : fs.readFileSync(keyFile(f));
+        assert.equal((await f.client.bootstrapPrimaryCompanion({ history, resume: true })).status, 'sent');
+        const keyId = journal(f).transaction.bootstrap.keyId;
+        assert.equal(keyShareOf(messages(f)[0]).keyId, keyId);
+        assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(keyFile(f), 'utf8'))), [keyId]);
+        if (keyFileLost) assert.notEqual(keyId, recorded.keyId);
+        else {
+            assert.equal(keyId, recorded.keyId);
+            assert.deepEqual(fs.readFileSync(keyFile(f)), before);
+        }
+        assert.equal(messages(f).length, 2);
+        assert.equal(patchWrites(f).length, 1);
+    }
+});
+
+test('resume from key_share_accepted writes the patch once and does not share the key again', async t => {
+    const f = await bootstrapFixture(t), history = async () => chatSnapshot(1);
+    failPhaseOnce(f, 'critical_patch_sending');
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+    assert.equal(journal(f).transaction.bootstrap.phase, 'key_share_accepted');
+    assert.equal(patchWrites(f).length, 0);
+    assert.equal((await f.client.bootstrapPrimaryCompanion({ history, resume: true })).status, 'sent');
+    assert.equal(messages(f).length, 2);
+    assert.equal(patchWrites(f).length, 1);
+});
+
+test('a delta resumes from delta_prepared, delta_sending and delta_accepted', async t => {
+    const twoStep = () => { let calls = 0; return async () => (calls++ === 0 ? chatSnapshot(2) : chatSnapshot(4)); };
+    // delta_prepared: the pinned delta goes out even though this call asks for none.
+    const f = await bootstrapFixture(t);
+    failPhaseOnce(f, 'delta_sending');
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: twoStep(), delta: true }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+    assert.equal(journal(f).transaction.bootstrap.phase, 'delta_prepared');
+    assert.deepEqual((await f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(9), resume: true })).delta, { records: 2 });
+    assert.deepEqual(messageIds(historyOf(notificationOf(messages(f)[2]))), ['M3', 'M4']);
+    // delta_sending: uncertain until resendUncertain, then the same message again.
+    const g = await bootstrapFixture(t), history = twoStep();
+    await stopUnacked(g, 3, { history, delta: true });
+    assert.equal(journal(g).transaction.bootstrap.phase, 'delta_sending');
+    await assert.rejects(g.client.bootstrapPrimaryCompanion({ history, resume: true }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN' });
+    assert.deepEqual((await g.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true })).delta, { records: 2 });
+    const sent = messages(g);
+    assert.equal(sent.length, 4);
+    assert.equal(sent[3].attrs.id, sent[2].attrs.id);
+    assert.deepEqual(plain(sent[3]), plain(sent[2]));
+    // delta_accepted: only `sent` was left to record.
+    const h = await bootstrapFixture(t);
+    failPhaseOnce(h, 'sent');
+    await assert.rejects(h.client.bootstrapPrimaryCompanion({ history: twoStep(), delta: true }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+    assert.equal(journal(h).transaction.bootstrap.phase, 'delta_accepted');
+    assert.deepEqual((await h.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(9), resume: true })).delta, { records: 2 });
+    assert.equal(messages(h).length, 3);
+});
+
+test('a re-link resumes as a re-link, never with a patch', async t => {
+    const history = async () => chatSnapshot(2);
+    async function relinking() {
+        const f = await bootstrapFixture(t), ours = previousLink(f);
+        f.server.version = 1;
+        f.server.patches = [ours.built.patch];
+        return f;
+    }
+    // From key_share_accepted: critical_block is verified again, then the history goes.
+    const f = await relinking();
+    failPhaseOnce(f, 'history_prepared');
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+    assert.equal(journal(f).transaction.bootstrap.phase, 'key_share_accepted');
+    assert.equal((await f.client.bootstrapPrimaryCompanion({ history, resume: true })).mode, 'relink');
+    assert.equal(messages(f).length, 2);
+    assert.equal(patchWrites(f).length, 0);
+    // ...and a critical_block that changed under it in the meantime stops it.
+    const g = await relinking();
+    failPhaseOnce(g, 'history_prepared');
+    await assert.rejects(g.client.bootstrapPrimaryCompanion({ history }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+    g.server.patches = [Sync.buildPatch(pushNamePatch('Someone Else'), Buffer.from('0f0e0d0c0b0a', 'hex'), crypto.randomBytes(32), newState()).patch];
+    await assert.rejects(g.client.bootstrapPrimaryCompanion({ history, resume: true }), { code: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE' });
+    assert.equal(messages(g).length, 1);
+    // From history_sending: uncertain, then the same message under the same id.
+    const h = await relinking();
+    await stopUnacked(h, 2, { history });
+    await assert.rejects(h.client.bootstrapPrimaryCompanion({ history, resume: true }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN' });
+    assert.equal((await h.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true })).mode, 'relink');
+    const sent = messages(h);
+    assert.equal(sent.length, 3);
+    assert.equal(sent[2].attrs.id, sent[1].attrs.id);
+    assert.equal(patchWrites(h).length, 0);
 });
 
 test('bootstrapEmptyPrimary keeps its contract', async t => {

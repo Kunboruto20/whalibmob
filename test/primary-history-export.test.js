@@ -19,7 +19,7 @@ const zlib = require('node:zlib');
 const { type } = require('./helpers/history-proto');
 const Bootstrap = require('../lib/PrimaryBootstrap');
 const { PrimaryMessageStore } = require('../lib/primary/MessageStore');
-const { INLINE_MAX, buildHistorySync, buildNotification, recordsAfter } = require('../lib/primary/HistoryExport');
+const { INLINE_MAX, buildHistorySync, buildNotification, recordsAfter, exportedCounts } = require('../lib/primary/HistoryExport');
 
 const ANA   = '40799999999@s.whatsapp.net';
 const BOB   = '40788888888@s.whatsapp.net';
@@ -428,7 +428,8 @@ test('recordsAfter returns only post-cutoff records', () => {
   assert.equal(JSON.stringify(snap), before, 'the input snapshot is not changed');
 
   assert.deepEqual(recordsAfter(snap, { seq: 0 }).records, snap.records);
-  assert.equal(recordsAfter(snap, { seq: 9 }).counts.records, 0);
+  const nothing = recordsAfter(snap, { seq: 9 });
+  assert.deepEqual([nothing.chats, nothing.records, nothing.counts], [[], {}, { chats: 0, records: 0 }]);
 
   // What goes over is the post-cutoff records, numbered from 1.
   const sync = decodeSync(buildHistorySync(after));
@@ -439,6 +440,60 @@ test('recordsAfter returns only post-cutoff records', () => {
   for (const bad of [undefined, {}, { seq: -1 }, { seq: 1.5 }, { seq: '4' }]) {
     assert.throws(() => recordsAfter(snap, bad), e => /^PRIMARY_HISTORY_EXPORT_/.test(e.code));
   }
+});
+
+// A RECENT chunk that brought back a chat with nothing new in it would show it
+// on Web again, empty, with whatever unread count it had.
+test('recordsAfter keeps only the chats with something new that goes over, and their push names', () => {
+  const CAROL = '40777777777@s.whatsapp.net', DAVE = '40766666666@s.whatsapp.net';
+  const snap = snapshot({
+    seq: 9,
+    chats: [
+      { id: ANA, conversationTimestamp: T + 30, unreadCount: 1, pnJid: ANA, lidJid: '111@lid' },
+      { id: BOB, conversationTimestamp: T + 20, unreadCount: 7 },
+      { id: GROUP, conversationTimestamp: T + 10, unreadCount: 0 }
+    ],
+    records: {
+      // Revoked after the cutoff: its stub goes over.
+      [ANA]: [rec('A1', 1, T + 1), rec('A2', 8, T + 2, { tombstone: 'revoked', raw: undefined })],
+      // Expired after the cutoff: nothing of it goes over, so neither does Bob.
+      [BOB]: [rec('B1', 2, T + 3), rec('B2', 7, T + 4, { tombstone: 'expired', raw: undefined })],
+      [GROUP]: [rec('G1', 3, T + 5, { participant: CAROL }), rec('G2', 6, T + 6, { participant: DAVE })]
+    },
+    pushNames: [{ id: '111@lid', pushname: 'Ana' }, { id: BOB, pushname: 'Bob' }, { id: CAROL, pushname: 'Carol' }, { id: DAVE, pushname: 'Dave' }]
+  });
+  const after = recordsAfter(snap, { seq: 5 });
+  assert.deepEqual(after.chats.map(c => c.id), [ANA, GROUP]);
+  assert.deepEqual(Object.keys(after.records), [ANA, GROUP]);
+  assert.deepEqual(after.records[ANA].map(r => r.id), ['A2']);
+  assert.deepEqual(after.records[GROUP].map(r => r.id), ['G2']);
+  assert.deepEqual(after.counts, { chats: 2, records: 2 });
+  // Ana's (under her lid) and the sender's; not Bob's, not Carol's.
+  assert.deepEqual(after.pushNames, [{ id: '111@lid', pushname: 'Ana' }, { id: DAVE, pushname: 'Dave' }]);
+  const sync = decodeSync(buildHistorySync(after));
+  assert.deepEqual(sync.conversations.map(c => c.ID), [ANA, GROUP]);
+  assert.deepEqual(sync.pushnames.map(p => p.ID), ['111@lid', DAVE]);
+});
+
+test('exportedCounts counts what buildHistorySync carries', () => {
+  const snap = snapshot({
+    chats: [
+      { id: ANA, conversationTimestamp: T + 30, unreadCount: 0 },
+      // Nothing goes over and no time to place it at: left out of the export.
+      { id: BOB, unreadCount: 0 },
+      // Nothing goes over, but it has a time: it goes over, empty.
+      { id: GROUP, conversationTimestamp: T + 10, unreadCount: 0 }
+    ],
+    records: {
+      [ANA]: [rec('A1', 1, T), rec('A2', 2, T, { tombstone: 'revoked', raw: undefined }), rec('A3', 3, T, { tombstone: 'view-once', raw: undefined })],
+      [BOB]: [rec('B1', 4, T, { tombstone: 'expired', raw: undefined })],
+      [GROUP]: [rec('G1', 5, T, { tombstone: 'expired', raw: undefined })]
+    }
+  });
+  assert.deepEqual(exportedCounts(snap), { chats: 2, records: 2 });
+  const sync = decodeSync(buildHistorySync(snap));
+  assert.equal(sync.conversations.length, 2);
+  assert.equal(sync.conversations.flatMap(c => c.messages || []).length, 2);
 });
 
 test('a real store snapshot goes through the encoder', (t) => {

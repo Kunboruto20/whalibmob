@@ -1026,10 +1026,15 @@ export interface PrimaryBootstrapOptions {
   upload?: (bytes: Buffer) => Promise<PrimaryHistoryUpload>;
   /** Continue a recorded attempt after its last accepted step, with the bytes it pinned. */
   resume?: boolean;
-  /** With resume: send again, under the recorded message id, a step whose ACK never came. */
+  /** With resume: send again, under the recorded message id, a step whose ACK never came. A refused step is never sent again. */
   resendUncertain?: boolean;
-  /** After the history, send what reached the store since it was pinned, as a RECENT chunk. */
+  /**
+   * After the history, send what reached the store since it was pinned, as a RECENT chunk: only the chats with
+   * something new and the push names of those chats and senders. Not yet verified on real WhatsApp Web (spec §8).
+   */
   delta?: boolean;
+  /** Retry a key share the server refused with 479, once, with the same key. */
+  recoverRejected?: boolean;
   signal?: AbortSignal;
 }
 export interface PrimaryBootstrapResult {
@@ -1037,7 +1042,14 @@ export interface PrimaryBootstrapResult {
   /** first: a new key and the push-name patch. relink: our existing key, its patch already on the server. */
   mode: 'first' | 'relink';
   operationId: string;
-  history: { chats: number; records: number; bytes: number; inline: boolean };
+  /**
+   * What went over, counted as exported (records the export leaves out are not counted). losses: how many loss
+   * records the snapshot held (a run of messages seen but not stored, or a time the store was not capturing);
+   * evicted: messages its limits dropped; captureOrigin: how the store's capture began. null where the history
+   * provider does not say. Non-zero losses or evictions mean the history is partial.
+   */
+  history: { chats: number; records: number; bytes: number; inline: boolean; losses: number | null; evicted: number | null; captureOrigin: string | null };
+  /** records counted as exported; null without a delta. */
   delta: null | { records: number };
 }
 
@@ -1089,8 +1101,10 @@ export declare class WhalibmobClient extends EventEmitter {
    * Key share, critical_block patch and INITIAL_BOOTSTRAP history for the companion just linked: inline up to
    * 64 KiB deflated, an md-msg-hist blob above. The history is pinned on disk before it is sent. Without resume an
    * attempt is single (PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED); a step with no ACK stops with
-   * PRIMARY_BOOTSTRAP_KEY_SHARE_UNCERTAIN or PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN until resendUncertain. Server state
-   * neither empty nor written by our own key at our version is PRIMARY_BOOTSTRAP_FOREIGN_STATE. Does not report Web ready.
+   * PRIMARY_BOOTSTRAP_KEY_SHARE_UNCERTAIN or PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN until resendUncertain. A resume also
+   * continues after a dropped connection left the link uncertain. Server state neither empty nor written by our own
+   * key at our version is PRIMARY_BOOTSTRAP_FOREIGN_STATE; a history the encoder refuses is
+   * PRIMARY_BOOTSTRAP_HISTORY_INVALID (the encoder's error as `cause`). Does not report Web ready.
    */
   bootstrapPrimaryCompanion(options: PrimaryBootstrapOptions): Promise<PrimaryBootstrapResult>;
   /** Initial import only; must match a fresh server list, cannot overwrite existing ADV. */
