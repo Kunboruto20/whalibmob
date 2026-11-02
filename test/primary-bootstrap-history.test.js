@@ -336,6 +336,51 @@ test('store history is delivered inline with the recorded chats', async t => {
     assert.equal(journal(g).transaction.bootstrap, undefined);
 });
 
+// The handshake before the history (device list, key share, the patch) takes
+// seconds, and messages keep arriving. What the store kept by the time the
+// history is pinned goes, not only what it held when the bootstrap started.
+test('a message stored after the bootstrap started and before the history was pinned goes over', async t => {
+    const { PrimaryMessageStore } = require('../lib/primary/MessageStore');
+    const f = await bootstrapFixture(t);
+    const store = PrimaryMessageStore.open({ dir: f.dir, phone: PHONE });
+    t.after(() => store.close());
+    store.recordIncoming({ id: 'BEFORE', chat: ANA, ts: T + 1, raw: textMessage('before the link'), info: { kind: 'content' } });
+    f.client._messageStore = store;
+    // Recorded as the key share goes out: after the start, before the pin.
+    f.control.ackError = (node, n) => {
+        if (n === 1) store.recordIncoming({ id: 'DURING', chat: ANA, ts: T + 2, raw: textMessage('during the handshake'), info: { kind: 'content' } });
+        return null;
+    };
+    const result = await f.client.bootstrapPrimaryCompanion({ history: 'store' });
+    const history = historyOf(notificationOf(messages(f)[1]));
+    assert.deepEqual(messageIds(history), ['BEFORE', 'DURING']);
+    assert.equal(result.history.records, 2);
+    assert.deepEqual(journal(f).transaction.bootstrap.history.cutoff, { seq: store.snapshot().seq });
+
+    // Read at the start and fine then, refused by the encoder at the pin: the
+    // key share and the patch went, the history did not, and a resume reads
+    // the store again.
+    const g = await bootstrapFixture(t), good = chatSnapshot(2);
+    const broken = snapshot({ seq: 3, chats: good.chats, records: { [ANA]: [{ id: 'NORAW', seq: 3, fromMe: false, ts: T, status: 3 }] } });
+    let calls = 0;
+    await assert.rejects(g.client.bootstrapPrimaryCompanion({ history: async () => (calls++ === 0 ? good : broken) }),
+        e => e.code === 'PRIMARY_BOOTSTRAP_HISTORY_INVALID' && e.cause?.code === 'PRIMARY_HISTORY_EXPORT_SNAPSHOT_INVALID');
+    assert.equal(calls, 2);
+    assert.equal(messages(g).length, 1, 'only the key share went');
+    assert.equal(journal(g).transaction.bootstrap.phase, 'critical_patch_accepted');
+    assert.equal(journal(g).transaction.bootstrap.errorCode, 'PRIMARY_BOOTSTRAP_HISTORY_INVALID');
+    assert.equal(fs.existsSync(outboxFile(g)), false);
+    // Not a snapshot at all, at the pin: the same.
+    const h = await bootstrapFixture(t);
+    let reads = 0;
+    await assert.rejects(h.client.bootstrapPrimaryCompanion({ history: async () => (reads++ === 0 ? good : { seq: -1 }) }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_INVALID' });
+    assert.equal(messages(h).length, 1);
+    const resumed = await g.client.bootstrapPrimaryCompanion({ history: async () => good, resume: true });
+    assert.equal(resumed.history.records, 2);
+    assert.equal(messages(g).length, 2);
+    assert.equal(patchWrites(g).length, 1);
+});
+
 test('deflated size 65537 selects the blob path', async t => {
     const f = await bootstrapFixture(t), snap = sized(INLINE_MAX + 1), bytes = buildHistorySync(snap), uploads = [];
     // The default upload is the md-msg-hist media upload.
@@ -650,8 +695,9 @@ test('delta carries only records after the cutoff', async t => {
         [BOB]: [rec('B1', 3, T + 3), gone('B2', 6, T + 4, 'expired')],
         [GROUP]: [rec('G1', 2, T + 2, { participant: CAROL }), rec('G2', 7, T + 7, { participant: DAVE })] } });
     const f = await bootstrapFixture(t);
+    // Read at the start, then again for the pin, then for the delta.
     let calls = 0;
-    const result = await f.client.bootstrapPrimaryCompanion({ history: async () => (calls++ === 0 ? pinned : later), delta: true });
+    const result = await f.client.bootstrapPrimaryCompanion({ history: async () => (calls++ < 2 ? pinned : later), delta: true });
     // Counted as exported: the expired X0 never goes over.
     assert.equal(result.history.records, 4);
     assert.equal(result.history.chats, 3);
@@ -677,7 +723,7 @@ test('delta carries only records after the cutoff', async t => {
     const quiet = snapshot({ seq: 6, chats, pushNames, records: { ...pinned.records, [BOB]: [rec('B1', 3, T + 3), gone('B2', 6, T + 4, 'expired')] } });
     const g = await bootstrapFixture(t);
     let again = 0;
-    const none = await g.client.bootstrapPrimaryCompanion({ history: async () => (again++ === 0 ? pinned : quiet), delta: true });
+    const none = await g.client.bootstrapPrimaryCompanion({ history: async () => (again++ < 2 ? pinned : quiet), delta: true });
     assert.deepEqual(none.delta, { records: 0 });
     assert.equal(messages(g).length, 2);
 });
@@ -846,7 +892,7 @@ test('a history the encoder refuses is HISTORY_INVALID, with the encoder error a
     const g = await bootstrapFixture(t);
     let calls = 0;
     const later = snapshot({ seq: 2, chats: broken.chats, records: { [ANA]: [noBytes(2)] } });
-    await assert.rejects(g.client.bootstrapPrimaryCompanion({ history: async () => (calls++ === 0 ? chatSnapshot(1) : later), delta: true }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_INVALID' });
+    await assert.rejects(g.client.bootstrapPrimaryCompanion({ history: async () => (calls++ < 2 ? chatSnapshot(1) : later), delta: true }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_INVALID' });
     assert.equal(journal(g).transaction.bootstrap.errorCode, 'PRIMARY_BOOTSTRAP_HISTORY_INVALID');
     assert.equal(journal(g).transaction.bootstrap.phase, 'history_accepted');
 });
@@ -893,7 +939,8 @@ test('resume from key_share_accepted writes the patch once and does not share th
 });
 
 test('a delta resumes from delta_prepared, delta_sending and delta_accepted', async t => {
-    const twoStep = () => { let calls = 0; return async () => (calls++ === 0 ? chatSnapshot(2) : chatSnapshot(4)); };
+    // The start and the pin read 2 records; the delta, 4.
+    const twoStep = () => { let calls = 0; return async () => (calls++ < 2 ? chatSnapshot(2) : chatSnapshot(4)); };
     // delta_prepared: the pinned delta goes out even though this call asks for none.
     const f = await bootstrapFixture(t);
     failPhaseOnce(f, 'delta_sending');
