@@ -649,6 +649,38 @@ test('a message kept under both jids goes over once, and a tombstone under eithe
   assert.deepEqual(exportedCounts(snap), { chats: 1, records: 4 });
 });
 
+// The server can deliver a message again under the contact's other jid after
+// it was edited. The copy stored later then holds the text as first sent, and
+// it must not undo the edit.
+test('between two copies with content, the edited one wins over one the store changed later', () => {
+  const tied = [
+    { id: ANA, pnJid: ANA, lidJid: ANA_LID, conversationTimestamp: T + 9, unreadCount: 0 },
+    { id: ANA_LID, pnJid: ANA, lidJid: ANA_LID, conversationTimestamp: T + 8, unreadCount: 0 }
+  ];
+  const snap = snapshot({
+    seq: 9,
+    chats: tied,
+    records: {
+      [ANA_LID]: [
+        // Edited under the lid...
+        rec('X', 2, T + 1, { raw: textMessage('X as edited'), edited: T + 5 }),
+        // ...two edits, the later one under the lid with the lower seq.
+        rec('Y', 4, T + 2, { raw: textMessage('Y second edit'), edited: T + 7 })
+      ],
+      [ANA]: [
+        // ...then delivered again under the number, as first sent.
+        rec('X', 3, T + 1, { raw: textMessage('X as first sent') }),
+        rec('Y', 6, T + 2, { raw: textMessage('Y first edit'), edited: T + 6 })
+      ]
+    }
+  });
+  const text = m => type('Message').decode(m.message.message).conversation;
+  for (const order of [snap, { ...snap, chats: [tied[1], tied[0]] }]) {
+    const [ana] = decodeSync(buildHistorySync(order)).conversations;
+    assert.deepEqual(ana.messages.map(m => [m.message.key.ID, text(m)]), [['X', 'X as edited'], ['Y', 'Y second edit']]);
+  }
+});
+
 test('chats that are not tied, groups, and chats of two different numbers go over as they were', () => {
   const OLD = '40711111111@s.whatsapp.net', NEW = '40722222222@s.whatsapp.net';
   const snap = snapshot({
