@@ -62,6 +62,9 @@ const {
 const { assertMeId, initAuthCreds } = require('./lib/auth-utils');
 const { defaultBaseDir, sessionDirFor, storeFileFor, webStoreFileFor,
         listSessions, migrateSession, isLegacyLayout } = require('./lib/SessionPaths');
+// Everything the link commands do and say. This file only reads their
+// arguments, asks y/N, and prints what comes back.
+const LinkCli = require('./lib/cli/linkCommands');
 
 // ─── Wire trace implementation ────────────────────────────────────────────────
 // Everything below is CLI-only instrumentation; the library is untouched.
@@ -509,6 +512,34 @@ function printCodeNextSteps(store, phone, confirmCmd) {
   out('  run: ' + confirmCmd + ' <code>');
 }
 
+// A number registered here starts its message store at registration, so a
+// companion it links later is handed everything since then and is told so,
+// instead of everything since some later connect. These are the files the
+// client opens at each login (Client._openMessageStore): the number's session
+// folder under the base, and the number the session file carries. A store
+// already on disk keeps the origin it was started with.
+//
+// Nothing here may cost the registration: a store that will not open is a
+// warning, and the client starts one at the first connect instead.
+function startMessageStoreAtRegistration(store, phone) {
+  if (!_messageStoreOn) return;
+  try {
+    const { PrimaryMessageStore } = require('./lib/primary/MessageStore');
+    PrimaryMessageStore.open({
+      dir:    sessionDirFor(_sessDir, phone),
+      phone:  String(store.phoneNumber || phone),
+      origin: 'registration',
+      lc:     store.connectionLc || 0
+    }).close();
+  } catch (e) {
+    const code = e && typeof e.code === 'string' && e.code.startsWith('PRIMARY_') ? e.code : null;
+    warn('the message store did not start: ' +
+         (code ? LinkCli.explainError(code).title + ' (' + code + ')' : (e && e.message) || String(e)));
+    out('  the registration itself is fine. The store starts at the first connect instead, and a');
+    out('  companion linked later is told it holds only the messages kept from then on.');
+  }
+}
+
 function normalizeJid(s) {
   if (!s) return null;
   s = String(s);
@@ -539,6 +570,19 @@ let _sessDir = defaultSessionDir();
 // /fixnumber knows what it is fixing without probing the server again.
 let _pendingFix = null;
 let _rl      = null;
+// Whether clients keep the primary message store: the record of what this
+// number sends and receives that a companion it links is handed as history.
+// On unless `--no-message-store` was given (the library's own default is off).
+let _messageStoreOn = true;
+// Link commands still running, and whether one of them is waiting on a y/N.
+// An event that arrives meanwhile prints among the command's lines rather than
+// redrawing the prompt in the middle of them.
+let _linkActive = 0;
+let _linkAsking = false;
+// What the last handover in this run sent, and from which number:
+// { phone, history: { chats, records } }, for the history column of
+// /linked-devices.
+let _linkHistory = null;
 
 // ─── shell help ───────────────────────────────────────────────────────────────
 
@@ -681,12 +725,25 @@ const HELP = `
     /connect    <phone> [sms|pair]           connect to WhatsApp (asks which if unset)
     /pair       <phone> [code]               link to an existing account by 8-digit code
     /qrcode     <phone>                       link to an existing account by scanning a QR
-    /link-code  <code> [invitationId]         primary approves a separate companion's code
-    /link-qr    <qr-payload-or-wa.me-url>     primary approves a separate companion's QR
     /fixnumber                               re-file a session under the number WhatsApp uses
     /disconnect                              disconnect
     /reconnect                              force reconnection
     /session                                show session info
+
+  Companions  (this number is the primary: it approves WhatsApp Web and hands it the chats)
+    the chats are the messages this program has kept for the number: since it
+    registered here, or since the store was first on (wa --no-message-store keeps none)
+    /link-invitations                        pairing requests waiting from WhatsApp Web
+    /link-code CODE [n|id]                   approve Web's 8-character code, then send the chats
+                                               n|id: which request, when more than one is waiting
+    /link-qr PAYLOAD                         approve Web's QR (its text or wa.me link), then send the chats
+    /link-status                             where the link and the chat handover stand
+    /linked-devices                          this number's companions
+    /link-bootstrap [--resume] [--resend-uncertain]
+                                             send the chats, or continue a handover that stopped
+    /link-confirm FILE|JSON                  confirm an approval with the companion's public proof
+    /link-retire                             clear an approval whose companion never appeared
+    /link-unlock                             break a link-journal lock left by a program that is gone
 
     /help                                   show this help
     /quit  /exit                            disconnect and exit
@@ -903,6 +960,32 @@ function attachEvents(client) {
     notConnected();
   });
 
+  // Linking a companion, as the primary. A pairing request is announced as it
+  // arrives, whether or not a /link-code is waiting for it; the rest is the
+  // link's own progress, in the words /link-status uses, and the message store
+  // reporting that it could not record something.
+  //
+  // In the middle of a link command the line goes in among the command's own,
+  // which redraws the prompt when it is done. Otherwise the prompt (or a
+  // pending y/N) is cleared off its line first and drawn again under it.
+  const linkEvent = (print) => (e) => {
+    if (_linkActive > 0 && !_linkAsking) { print(e || {}); return; }
+    if (_rl && process.stdout.isTTY) {
+      readline.cursorTo(process.stdout, 0);
+      readline.clearLine(process.stdout, 0);
+    }
+    _rl && _rl.pause();
+    print(e || {});
+    _rl && (_rl.resume(), _rl.prompt(true));
+  };
+  client.on('primary_link_invitation', linkEvent(inv => out(LinkCli.formatInvitationNotice(inv))));
+  client.on('primary_link_progress', linkEvent(e => out('  ' + LinkCli.formatLinkStatus({ phase: e.phase })[0])));
+  client.on('primary_linked', linkEvent(e => out('  ' + LinkCli.formatLinkStatus({ phase: 'committed', confirmed: true })[0] +
+    '   companion #' + e.deviceId + ', key index ' + e.keyIndex)));
+  client.on('primary_link_error', linkEvent(e => fail('link request: ' + LinkCli.explainError(e.code).title + '  (' + e.code + ')')));
+  client.on('primary_message_store_error', linkEvent(e => fail('message store: ' + LinkCli.explainError(e.code).title +
+    '  (' + e.code + (e.op ? ', ' + e.op : '') + ')')));
+
   client.on('error', (e) => {
     _rl && _rl.pause();
     fail(e.message || String(e));
@@ -1051,7 +1134,7 @@ function registrationPrompts() {
 async function doConnectWeb(phone, opts) {
   opts  = opts || {};
   phone = normalizePhone(phone);
-  const client = new WhalibmobClient({ sessionDir: _sessDir });
+  const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: _messageStoreOn });
   attachEvents(client);
 
   client.on('pair_device', () => { /* QR path — nothing to draw in a terminal */ });
@@ -1111,7 +1194,7 @@ async function doConnectWeb(phone, opts) {
 // ref into a QR, and this draws it in the terminal for the phone to scan.
 async function doConnectWebQr(phone) {
   phone = normalizePhone(phone);
-  const client = new WhalibmobClient({ sessionDir: _sessDir });
+  const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: _messageStoreOn });
   attachEvents(client);
 
   let renderQr = null;
@@ -1188,7 +1271,7 @@ async function doConnect(phone) {
          'stored in the session. Unset it to use the session\'s own.');
   }
 
-  const client = new WhalibmobClient({ sessionDir: _sessDir });
+  const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: _messageStoreOn });
   attachEvents(client);
 
   // The session may be re-filed mid-connect when WhatsApp turns out to keep the
@@ -1315,6 +1398,214 @@ function tokens(line) {
   return t;
 }
 
+// ─── companion linking ────────────────────────────────────────────────────────
+//
+// This number as the primary: it approves a separate companion (WhatsApp Web)
+// and hands it the chats it has kept. What each command does, and every word
+// it prints about the link, comes from lib/cli/linkCommands.js. What is here
+// reads the arguments, asks y/N, and prints.
+
+const printLines = (lines) => { for (const line of lines) out(line); };
+
+// A failure as linkCommands explains it: what happened, the step to take, and
+// the code to report. Never a stack.
+function failLink(e, context) {
+  const [first, ...rest] = LinkCli.describeError(e, context);
+  fail(first);
+  printLines(rest);
+}
+
+function linkUsage(usage, ...more) {
+  fail('usage: ' + usage);
+  for (const line of more) out('  ' + line);
+}
+
+// Approving a companion is the primary's job. A companion session would be
+// refused by the library too, in terms that do not say what to do instead.
+function requirePrimary() {
+  requireConn();
+  if (_client._mode !== 'mobile') {
+    const e = new Error('PRIMARY_LINK_PRIMARY_REQUIRED');
+    e.code = 'PRIMARY_LINK_PRIMARY_REQUIRED';
+    throw e;
+  }
+}
+
+// y/N through the shell's own reader: a second reader on the same stdin would
+// split the answer with it. Anything but y or yes is no, and so is having no
+// way to ask.
+function askYesNo(question) {
+  return new Promise((resolve) => {
+    if (!_rl || _linkAsking) return resolve(false);
+    _linkAsking = true;
+    _rl.question(question, (answer) => {
+      _linkAsking = false;
+      resolve(/^y(es)?$/i.test(String(answer).trim()));
+    });
+  });
+}
+
+// Asked only when the readiness check says the history is partial, after it
+// has printed what is and is not in it.
+const confirmHistory = () => askYesNo('approve the link and send this history?  [y/N] ');
+
+// The number this connection is the primary for.
+const linkPhone = () => String((_client && _client.store && _client.store.phoneNumber) || _phone || '');
+
+function noteHandover(history) {
+  if (history) _linkHistory = { phone: linkPhone(), history };
+}
+
+function linkOutcome(result) {
+  if (!result) return;
+  if (result.status === 'aborted') out('cancelled: nothing was approved');
+  if (result.status === 'sent') noteHandover(result.bootstrap && result.bootstrap.history);
+}
+
+// The proof /link-confirm takes: a file, or the JSON itself. It is read off
+// the line as typed, because the tokenizer drops quotes that JSON needs.
+function proofText(arg) {
+  const quoted = /^(["'])([\s\S]*)\1$/.exec(arg);
+  const text = quoted ? quoted[2].trim() : arg;
+  if (text.startsWith('{')) return { text };
+  const file = text.startsWith('~')
+    ? path.join(os.homedir(), text.slice(1).replace(/^[\/\\]/, ''))
+    : path.resolve(text);
+  try { return { text: fs.readFileSync(file, 'utf8') }; }
+  catch (error) { return { file, error }; }
+}
+
+async function linkCommand(cmd, p, line) {
+  const K = LinkCli.COMMANDS;
+  _linkActive++;
+  try {
+    switch (cmd) {
+      case '/link-code': {
+        if (!p[1] || p.length > 3) {
+          return linkUsage('/link-code CODE [n|id]',
+            'CODE  the 8-character code WhatsApp Web shows after "Link with phone number"',
+            'n|id  which request, when ' + K.invitations + ' lists more than one: its number or its id');
+        }
+        requirePrimary();
+        linkOutcome(await LinkCli.runLinkCode({
+          client: _client, code: p[1], selector: p[2], confirm: confirmHistory, print: out
+        }));
+        return;
+      }
+
+      case '/link-qr': {
+        if (p.length !== 2) {
+          return linkUsage('/link-qr PAYLOAD', 'PAYLOAD  the text of the QR WhatsApp Web shows, or its wa.me link');
+        }
+        requirePrimary();
+        linkOutcome(await LinkCli.runLinkQr({ client: _client, payload: p[1], confirm: confirmHistory, print: out }));
+        return;
+      }
+
+      case '/link-invitations': {
+        if (p.length > 1) return linkUsage('/link-invitations');
+        requirePrimary();
+        // One reading of the clock, so what is grouped is what is shown.
+        const now = Date.now();
+        printLines(LinkCli.formatInvitations(LinkCli.groupInvitations(await _client.getPrimaryLinkInvitations(), now), now));
+        return;
+      }
+
+      case '/link-status': {
+        if (p.length > 1) return linkUsage('/link-status');
+        requirePrimary();
+        printLines(LinkCli.formatLinkStatus(await _client.getPrimaryLinkStatus()));
+        return;
+      }
+
+      case '/linked-devices': {
+        if (p.length > 1) return linkUsage('/linked-devices');
+        requirePrimary();
+        // The status carries the device list and the journal, from one query.
+        const status = await _client.getPrimaryLinkStatus();
+        const phone  = linkPhone();
+        printLines(LinkCli.formatLinkedDevices({
+          phone,
+          devices: status && status.devices,
+          journal: status,
+          history: _linkHistory && _linkHistory.phone === phone ? _linkHistory.history : undefined
+        }));
+        return;
+      }
+
+      case '/link-retire': {
+        if (p.length > 1) return linkUsage('/link-retire');
+        requirePrimary();
+        const result = await _client.retireAbsentPrimaryLink();
+        out('retired the unfinished approval' +
+            (result && result.operationId ? ' (operation ' + String(result.operationId).slice(0, 8) + ')' : '') +
+            '; nothing was linked');
+        printLines(LinkCli.formatLinkStatus(await _client.getPrimaryLinkStatus()));
+        return;
+      }
+
+      case '/link-confirm': {
+        const arg = line.replace(/^\S+\s*/, '');
+        if (!arg) {
+          return linkUsage(K.reconcile,
+            "FILE  a file holding the companion's public proof JSON",
+            'JSON  or that JSON itself, on the line');
+        }
+        requirePrimary();
+        const given = proofText(arg);
+        if (given.error) {
+          fail('could not read ' + given.file + ' (' + (given.error.code || given.error.message) + ')');
+          out('  next: ' + LinkCli.explainError('PRIMARY_LINK_WEB_PROOF_INVALID').next);
+          return;
+        }
+        const { parseWhatsAppWebPublicProof } = require('./lib/WhatsAppWebProof');
+        const result = await _client.reconcilePrimaryLink(parseWhatsAppWebPublicProof(given.text));
+        out("confirmed: the companion's proof was verified" +
+            (result && Number.isFinite(result.deviceId) ? ' (companion #' + result.deviceId + ')' : ''));
+        printLines(LinkCli.formatLinkStatus(await _client.getPrimaryLinkStatus()));
+        return;
+      }
+
+      case '/link-bootstrap': {
+        const options = { history: 'store', resume: false, resendUncertain: false };
+        for (const t of p.slice(1)) {
+          if (t === '--resume') options.resume = true;
+          else if (t === '--resend-uncertain') options.resendUncertain = true;
+          else {
+            return linkUsage('/link-bootstrap [--resume] [--resend-uncertain]',
+              '--resume            continue the last attempt after its last accepted step (harmless when there is none)',
+              '--resend-uncertain  with --resume: send once more a step whose reply never came');
+          }
+        }
+        requirePrimary();
+        out('sending the stored history to the companion...');
+        const result = await _client.bootstrapPrimaryCompanion(options);
+        printLines(LinkCli.formatBootstrapResult(result));
+        noteHandover(result && result.history);
+        return;
+      }
+
+      case '/link-unlock': {
+        if (p.length > 1) return linkUsage('/link-unlock');
+        // No connection needed: the lock is a file, and a session that cannot
+        // link because of it is still able to connect.
+        if (!_client) throw new Error('not connected — use /connect <phone>');
+        const { holder } = _client.unlockPrimaryLink() || {};
+        if (!holder) { out('no lock was held on the link journal; there was nothing to break'); return; }
+        const who = [Number.isFinite(holder.pid) ? 'pid ' + holder.pid : null, holder.host ? 'on ' + holder.host : null]
+          .filter(Boolean).join(' ');
+        out('broke the link journal lock' + (who ? ' held by ' + who : ''));
+        out('  next: retry the command that reported the journal busy');
+        return;
+      }
+    }
+  } catch (e) {
+    failLink(e, cmd === '/link-unlock' ? 'unlock' : undefined);
+  } finally {
+    _linkActive--;
+  }
+}
+
 // ─── command dispatch ─────────────────────────────────────────────────────────
 
 async function handleLine(line) {
@@ -1424,24 +1715,19 @@ async function handleLine(line) {
         break;
       }
 
+      // ── companion linking (this number as the primary) ─────────────────────
+
       case '/link-code':
-      case '/link-qr': {
-        requireConn();
-        if (!p[1] || p.length > (cmd === '/link-code' ? 3 : 2)) {
-          fail(cmd === '/link-code' ? 'usage: /link-code <8-char-code> [invitationId]' : 'usage: /link-qr <qr-payload-or-wa.me-url>');
-          break;
-        }
-        const result = cmd === '/link-code'
-          ? await _client.linkCompanionWithCode(p[1], p[2] ? { invitationId: p[2] } : undefined)
-          : await _client.linkCompanionWithQr(p[1]);
-        kv('status', result.status);
-        kv('operation', result.operationId);
-        if (result.status === 'awaiting_confirmation') {
-          out('  approval sent; independent companion proof and a fresh device list are still required');
-          out('  reconcile this operation through the runner; do not repeat approval');
-        }
+      case '/link-qr':
+      case '/link-invitations':
+      case '/link-status':
+      case '/linked-devices':
+      case '/link-retire':
+      case '/link-confirm':
+      case '/link-bootstrap':
+      case '/link-unlock':
+        await linkCommand(cmd, p, line);
         break;
-      }
 
       case '/disconnect':
         if (_client) { _client.disconnect(); _client = null; _phone = null; }
@@ -2475,6 +2761,7 @@ async function handleLine(line) {
             const savedPhone = String(finalStore.phoneNumber || ph);
             const savedFile  = storeFileFor(_sessDir, savedPhone);
             saveStore(finalStore, savedFile);
+            startMessageStoreAtRegistration(finalStore, savedPhone);
             if (r.canonicalPhoneNumber) {
               out('note: WhatsApp knows this account as +' + r.canonicalPhoneNumber +
                   ', not +' + r.typedPhoneNumber);
@@ -2572,6 +2859,7 @@ async function handleLine(line) {
             finalStore.registered = true; finalStore.codePending = false;
             const savedPhone = String(finalStore.phoneNumber || ph);
             saveStore(finalStore, storeFileFor(_sessDir, savedPhone));
+            startMessageStoreAtRegistration(finalStore, savedPhone);
             out('registered via push  session saved');
             out('now run: /connect ' + savedPhone);
           } else {
@@ -2768,22 +3056,55 @@ async function handleLine(line) {
 
 // ─── argument parser ──────────────────────────────────────────────────────────
 
+// Options that are switches: on when present, and never followed by a value,
+// so `wa connect --no-message-store <phone>` keeps the phone as the phone.
+// Every other option takes the argument after it as its value, unless that is
+// itself an option.
+const SWITCHES = new Set(['no-message-store', 'sms', 'pair', 'business', 'all', 'download']);
+// What `--switch=value` may say.
+const SWITCH_VALUES = { 'true': true, 'yes': true, 'on': true, '1': true,
+                        'false': false, 'no': false, 'off': false, '0': false };
+// Commands spelled like options. Typed first, they are still the command.
+const COMMAND_OPTIONS = new Set(['--version', '--help']);
+
+// `wa [options] <command> [<sub>] [arguments and options]`
+//
+// An option is `--name value` or `--name=value`, and may come before the
+// command as well as after it: `wa --session ~/s connect <phone>` reads as
+// `wa connect <phone> --session ~/s`. `--session=./dir` used to be taken for an
+// option called "session=./dir" and ignored, and an option typed before the
+// command was taken for the command. `--name=` is an empty value, which
+// --session refuses like a missing one.
 function parseArgs(argv) {
   const a = argv.slice(2);
-  const r = { cmd: null, sub: null, flags: {}, pos: [] };
-  if (!a.length) return r;
-  r.cmd = a[0];
-  let i = 1;
+  const r = { cmd: null, sub: null, flags: {}, pos: [], error: null };
+
+  // The option at a[i]; returns the index of what follows it.
+  const option = (i) => {
+    const body = a[i].slice(2);
+    const eq   = body.indexOf('=');
+    const name = eq === -1 ? body : body.slice(0, eq);
+    if (eq !== -1) {
+      const value = body.slice(eq + 1);
+      if (!SWITCHES.has(name)) r.flags[name] = value;
+      else if (Object.prototype.hasOwnProperty.call(SWITCH_VALUES, value.toLowerCase())) r.flags[name] = SWITCH_VALUES[value.toLowerCase()];
+      else if (!r.error) r.error = '--' + name + ' is a switch and takes no value (got "' + value + '")';
+      return i + 1;
+    }
+    if (SWITCHES.has(name)) { r.flags[name] = true; return i + 1; }
+    if (a[i + 1] && !a[i + 1].startsWith('-')) { r.flags[name] = a[i + 1]; return i + 2; }
+    r.flags[name] = true;
+    return i + 1;
+  };
+
+  let i = 0;
+  while (i < a.length && a[i].startsWith('--') && !COMMAND_OPTIONS.has(a[i])) i = option(i);
+  if (i >= a.length) return r;
+  r.cmd = a[i++];
   if (a[i] && !a[i].startsWith('-')) r.sub = a[i++];
   while (i < a.length) {
-    if (a[i].startsWith('--')) {
-      const k = a[i].slice(2);
-      const v = a[i + 1] && !a[i + 1].startsWith('-') ? a[++i] : true;
-      r.flags[k] = v;
-    } else {
-      r.pos.push(a[i]);
-    }
-    i++;
+    if (a[i].startsWith('--')) i = option(i);
+    else r.pos.push(a[i++]);
   }
   return r;
 }
@@ -2807,8 +3128,10 @@ usage:
   wa migrate-sessions [phone]                 move old flat sessions into folders
   wa version
 
-options:
+options:  before or after the command; --session <dir> and --session=<dir> are the same
   --session <dir>   authentication folder (default: remembered, else ~/.waSession)
+  --no-message-store  keep no record of messages. By default a registered number keeps
+                    one, from registration on, to hand a companion it links as history
   --out <file>      where apk-material writes  (default: <session dir>/android-apk-material.json)
   --sms             connect by registering this number over SMS
   --pair            connect by linking to an existing account (8-digit code)
@@ -2901,7 +3224,12 @@ function askDonation(cmd) {
 }
 
 async function main() {
-  const { cmd, sub, flags, pos } = parseArgs(process.argv);
+  const { cmd, sub, flags, pos, error } = parseArgs(process.argv);
+  if (error) {
+    fail(error);
+    process.exit(1);
+  }
+  _messageStoreOn = !flags['no-message-store'];
 
   // `--session` with nothing after it parses as `true`, and so does an empty
   // value, which is what `--session "$DIR"` turns into when $DIR is unset.
@@ -3241,6 +3569,7 @@ async function main() {
           sessionDirFor(_sessDir, savedPhone, { create: true });
           const savedFile  = storeFileFor(_sessDir, savedPhone);
           saveStore(finalStore, savedFile);
+          startMessageStoreAtRegistration(finalStore, savedPhone);
           if (r.canonicalPhoneNumber) {
             out('note: WhatsApp knows this account as +' + r.canonicalPhoneNumber +
                 ', not +' + r.typedPhoneNumber);
@@ -3303,7 +3632,7 @@ async function main() {
     const phone = normalizePhone(sub || pos[0] || flags.phone || '');
     if (!phone) { fail('phone number required'); process.exit(1); }
 
-    const client = new WhalibmobClient({ sessionDir: _sessDir });
+    const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: _messageStoreOn });
 
     client.on('connected', () => {
       _client = client;
@@ -3383,6 +3712,8 @@ async function main() {
     client.on('reconnecting', ({ delay }) => out('  reconnecting in ' + delay / 1000 + 's...'));
     client.on('reconnected',  ()   => out('  reconnected'));
     client.on('auth_failure', (f)  => { fail('session revoked: ' + f.reason); process.exit(1); });
+    client.on('primary_message_store_error', (e) => fail('message store: ' + LinkCli.explainError(e.code).title +
+      '  (' + e.code + (e.op ? ', ' + e.op : '') + ')'));
     client.on('error',        (e)  => fail(e.message));
 
     process.on('SIGINT', () => { out('\nstopping...'); client.disconnect(); process.exit(0); });
