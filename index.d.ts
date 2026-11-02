@@ -154,6 +154,14 @@ export interface WhalibmobClientOptions {
   maxRetryResends?: number;
   /** How long a first message waits for its trusted-contact token, in ms. Default `5000`. */
   tcTokenPresendTimeoutMs?: number;
+  /**
+   * Primary (mobile) sessions: keep a record of every message sent and
+   * received, so a companion this account links can be handed the chat
+   * history. Default off. `true` keeps the defaults (100 messages a chat,
+   * 20 000 in all); an object bounds them. Never used on a companion session.
+   * See `getPrimaryMessageStore()` and the `primary_message_store_error` event.
+   */
+  messageStore?: boolean | { perChat?: number; maxMessages?: number };
 }
 
 export interface ConnectWebOptions {
@@ -172,6 +180,50 @@ export interface ConnectWebOptions {
 export interface DisconnectOptions {
   /** Allow the reconnect loop to run afterwards. */
   reconnect?: boolean;
+}
+
+/** One message in the primary message store. `raw` is the encoded `Message`. */
+export interface PrimaryMessageRecord {
+  id: string;
+  seq: number;
+  fromMe: boolean;
+  /** Seconds. */
+  ts: number;
+  /** 0 error, 1 pending, 2 server ack, 3 delivered, 4 read, 5 played. */
+  status: number;
+  participant?: string;
+  pushName?: string;
+  /** Absent once the message is a tombstone. */
+  raw?: Buffer;
+  tombstone?: 'revoked' | 'expired' | 'view-once';
+  /** When it was last edited, in seconds. */
+  edited?: number;
+  /** The disappearing-messages timer that applied to it, in seconds. */
+  expiration?: number;
+}
+
+export interface PrimaryMessageChat {
+  id: string;
+  name?: string;
+  pnJid?: string;
+  lidJid?: string;
+  conversationTimestamp: number;
+  unreadCount: number;
+  ephemeral?: { seconds: number; setAt?: number };
+}
+
+/** What a primary has kept of its messages, and what it knows it missed. */
+export interface PrimaryMessageSnapshot {
+  seq: number;
+  capture: { since: number; origin: string; lc: number };
+  chats: PrimaryMessageChat[];
+  /** Keyed by chat id, oldest first. */
+  records: Record<string, PrimaryMessageRecord[]>;
+  /** Messages seen but not kept (`ids`), or a time window nothing was kept for (`from`/`to`). */
+  losses: Array<{ reason: string; ids?: string[]; from?: number; to?: number }>;
+  retained: { evicted: number };
+  pushNames: Array<{ id: string; pushname: string }>;
+  counts: { chats: number; records: number };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -855,6 +907,12 @@ export interface WhalibmobEvents {
 
   history_sync: (r: HistorySyncResult) => void;
   history_sync_error: (e: { err: Error; notification: any }) => void;
+  /**
+   * The primary message store could not open, or could not take a record.
+   * Messaging carries on; a store that did not open stays off until the next
+   * login. `code` is `PRIMARY_MESSAGE_STORE_*`.
+   */
+  primary_message_store_error: (e: { code: string; op: string; err: Error }) => void;
   media_retry: (n: MediaRetryNotification) => void;
 
   /** Companion mode: a pairing code was requested. */
@@ -1287,6 +1345,12 @@ export declare class WhalibmobClient extends EventEmitter {
   // ─── Stores on disk ──────────────────────────────────────────────────────
   getHistoryStore(): any;
   getMessagesStore(): any;
+  /**
+   * What this primary has kept of the messages it sent and received. `null`
+   * when the `messageStore` option is off, on a companion session, before the
+   * first login or after `disconnect()`, or when the store could not be opened.
+   */
+  getPrimaryMessageStore(): PrimaryMessageSnapshot | null;
   getPNForLID(lid: Jid): Jid | null;
   getLIDForPN(pn: Jid): Jid | null;
 
