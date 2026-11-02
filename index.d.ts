@@ -922,7 +922,8 @@ export interface PrimaryLinkCommonOptions {
 /**
  * Who holds a primary link journal, as its lock file says. `legacy` is a lock in
  * the older bare-pid format, or one that cannot be read: only `pid` (if any) and
- * `at` (the file's mtime) are known. `err.holder` on PRIMARY_LINK_STORE_BUSY.
+ * `at` (the file's mtime) are known. `err.holder` on PRIMARY_LINK_STORE_BUSY,
+ * which is always set: null only when no holder could be read at all.
  */
 export interface PrimaryLinkHolder {
   v: number; pid: number | null; host: string | null; bootId: string | null;
@@ -932,6 +933,13 @@ export interface PrimaryLinkHolder {
   /** Linux only: the holder's pid namespace. */
   pidNs: string | null;
   legacy: boolean;
+  /**
+   * Only on `err.holder`, when what stood in the way was the takeover mutex
+   * (`<lock>.takeover`) rather than the lock: the record is then the mutex's
+   * writer, a recovery in progress or one that died mid-way (`legacy` if the
+   * mutex is empty or unreadable).
+   */
+  mutex?: true;
 }
 export interface PrimaryLinkOptions extends PrimaryLinkCommonOptions { invitationId: string; }
 export interface PrimaryCodeLinkOptions extends PrimaryLinkCommonOptions {
@@ -991,8 +999,11 @@ export declare class WhalibmobClient extends EventEmitter {
    * Break the primary link lock when PRIMARY_LINK_STORE_BUSY names a holder that
    * cannot be proven dead from here (another host or container, a bare-pid lock).
    * Breaking it is the caller's decision; a holder still running stops at its next
-   * write with PRIMARY_LINK_STORE_LOST. Throws PRIMARY_LINK_BUSY while this
-   * process holds the store. Returns the holder broken, or null if none.
+   * write with PRIMARY_LINK_STORE_LOST. A takeover mutex left by a recovery that
+   * died is cleared too, but one held by a recovery running on this machine is
+   * not: then this still throws PRIMARY_LINK_STORE_BUSY with `err.holder.mutex`.
+   * Throws PRIMARY_LINK_BUSY while this process holds the store. Returns the
+   * holder broken, or null if none.
    */
   unlockPrimaryLink(): { holder: PrimaryLinkHolder | null };
   disconnect(opts?: DisconnectOptions): void;
