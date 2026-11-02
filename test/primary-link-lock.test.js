@@ -508,15 +508,33 @@ test('two explicit breakers on one stale mutex: one wins, nothing is left behind
     }
 });
 
-// A mutex written by the very process that holds the lock is a finished
-// takeover's, whatever else is true of that process. Should one be left, an
-// explicit break clears it and goes on to break the lock.
+// A mutex under the token the lock carries is a finished takeover's: the
+// takeover got the lock. Should one be left, an explicit break clears it and
+// goes on to break the lock.
 test('a mutex written by the lock holder is finished and does not stop an explicit break', t => {
     const { dir, file, lock } = scratch(t);
     const a = open(t, file);
     fs.copyFileSync(lock, lock + '.takeover');
     assert.equal(PrimaryLinkStore.breakLock(file).holder.token, a.token);
     assert.deepEqual(fs.readdirSync(dir), ['journal.json']);
+});
+
+// A takeover is named by its token, not by its process: one process can hold
+// the lock through one store while another store in it writes a mutex. That
+// mutex belongs to a takeover that has not got the lock, live and fresh, and
+// even an explicit break leaves it be.
+test('a mutex from the lock holder\'s process under another token is not a finished takeover', t => {
+    const { file, lock } = scratch(t);
+    const a = open(t, file);
+    const { legacy, ...mine } = PrimaryLinkStore.readHolder(file);
+    assert.equal(legacy, false);
+    fs.writeFileSync(lock + '.takeover', JSON.stringify({ ...mine, token: 'f'.repeat(32), gen: 0, at: Date.now() }), { mode: 0o600 });
+    const busy = caught(() => PrimaryLinkStore.breakLock(file));
+    assert.equal(busy.code, 'PRIMARY_LINK_STORE_BUSY');
+    assert.equal(busy.holder.mutex, true);
+    assert.equal(busy.holder.token, 'f'.repeat(32));
+    assert.equal(PrimaryLinkStore.readHolder(file).token, a.token);
+    assert.ok(fs.existsSync(lock + '.takeover'));
 });
 
 // A recoverer holds the mutex for microseconds. One more than a minute old is
