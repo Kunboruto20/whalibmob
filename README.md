@@ -96,6 +96,68 @@ npm install -g whalibmob
 ```
 
 
+## Quick Start
+
+One script that registers a number on its first run, then connects and sends a message. Save it as `quick-start.js`, set `PHONE` and `TO`, and run `node quick-start.js`.
+
+```js
+const {
+  WhalibmobClient, createNewStore, loadStore, saveStore,
+  requestSmsCode, verifyCode, storeFileFor
+} = require('whalibmob')
+const os = require('os')
+const path = require('path')
+const readline = require('readline/promises')
+
+const PHONE    = '40712345678'                 // your number: country code + number, no '+'
+const TO       = '40798765432'                 // who to message
+const BASE_DIR = path.join(os.homedir(), '.waSession')
+
+async function register(phone) {
+  const store = createNewStore(phone, { name: 'My Bot' })
+  saveStore(store, storeFileFor(BASE_DIR, phone))
+  await requestSmsCode(store, 'sms')           // or 'voice'
+  saveStore(store, storeFileFor(BASE_DIR, phone))
+
+  const rl   = readline.createInterface({ input: process.stdin, output: process.stdout })
+  const code = (await rl.question('6-digit code: ')).replace(/\D/g, '')
+  rl.close()
+
+  const result = await verifyCode(store, code) // updates `store` in place
+  if (!['ok', 'sent', 'verified'].includes(result.status)) {
+    throw new Error('registration failed: ' + JSON.stringify(result))
+  }
+  store.registered  = true
+  store.codePending = false
+  // WhatsApp can file the account under a slightly different number.
+  saveStore(store, storeFileFor(BASE_DIR, store.phoneNumber))
+  return store.phoneNumber
+}
+
+async function main() {
+  let phone = PHONE
+  const saved = loadStore(storeFileFor(BASE_DIR, phone))
+  if (!saved || !saved.registered) phone = await register(phone)
+
+  const client = new WhalibmobClient({ sessionDir: BASE_DIR })
+  client.on('connected',    () => console.log('connected as +' + phone))
+  client.on('reconnecting', ({ attempt }) => console.log('reconnecting, attempt', attempt))
+  client.on('auth_failure', ({ reason }) => { console.error('session ended:', reason); process.exit(1) })
+  client.on('message', msg => {
+    const d = msg.decoded
+    if (d && d.type === 'text') console.log('message from', msg.from + ':', d.text)
+  })
+
+  await client.init(phone)                     // resolves once logged in
+  await client.sendText(TO, 'Hello from whalibmob!')
+}
+
+main().catch(err => { console.error(err.message || err); process.exit(1) })
+```
+
+The client reconnects by itself after a dropped connection — do not create a new one on `disconnected`. Prefer no code at all? The [CLI](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli-getting-started.md#cli--getting-started) does the same in two commands. A brand-new account is watched closely by WhatsApp's anti-abuse checks, so send the first messages to people who have your number saved — see [Accounts](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts.md#why-registration-can-be-blocked--the-anti-abuse-landscape).
+
+
 ## Documentation
 
 The full guide is split by topic so every page loads fast and reads cleanly. Pick a section below.

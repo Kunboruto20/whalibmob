@@ -12,37 +12,40 @@ whalibmob uses the EventEmitter syntax for events.
 
 ```js
 const { WhalibmobClient } = require('whalibmob')
+const os   = require('os')
 const path = require('path')
 
-async function connect() {
+async function main() {
   const client = new WhalibmobClient({
-    sessionDir: path.join(process.env.HOME, '.waSession')
+    sessionDir: path.join(os.homedir(), '.waSession')
   })
 
-  client.on('connected', async () => {
-    console.log('connected')
-    await client.sendText('919634847671', 'Hello!')
-  })
+  client.on('connected', () => console.log('connected'))
 
-  client.on('disconnected', () => {
-    console.log('disconnected — reconnecting...')
-    setTimeout(() => connect(), 3000)
-  })
+  // The client reconnects on its own after a dropped connection. Only log here:
+  // building a second client in this handler would put two connections on the
+  // same account, and one more after every drop.
+  client.on('disconnected', () => console.log('disconnected'))
+  client.on('reconnecting', ({ attempt, delay }) =>
+    console.log('reconnecting in', delay, 'ms, attempt', attempt))
+  client.on('reconnected', () => console.log('reconnected'))
 
   client.on('message', msg => {
     const d = msg.decoded
     if (d && d.type === 'text') console.log('message from', msg.from, d.text)
   })
 
+  // The one case the client will not retry: the session itself is gone.
   client.on('auth_failure', ({ reason }) => {
     console.error('session revoked:', reason)
-    // re-register the number
+    process.exit(1)   // re-register the number, or link it again
   })
 
-  await client.init('919634847671')
+  await client.init('919634847671')            // resolves once logged in
+  await client.sendText('919876543210', 'Hello!')
 }
 
-connect()
+main().catch(err => { console.error(err.message || err); process.exit(1) })
 ```
 
 ### All Events

@@ -49,33 +49,44 @@ wa connect                     40712345678
 ```
 
 Library, registering a new number (Mobile API). Registration functions take the
-session **store**, not the phone string; `verifyCode` returns `{ status, store }`:
+session **store**, not the phone string. `verifyCode` returns the server's answer
+(`.status`) and registers the store it was given in place — save that same store,
+under `store.phoneNumber`, which WhatsApp may have corrected. In CommonJS, `await`
+must sit inside an `async function`:
 
 ```js
 const {
-  createNewStore, saveStore, requestSmsCode, verifyCode, WhalibmobClient
+  createNewStore, saveStore, requestSmsCode, verifyCode, storeFileFor, WhalibmobClient
 } = require('whalibmob');
+const os = require('os');
 const path = require('path');
 
-const phone    = '40712345678';                    // country code + number, no '+'
-const sessDir  = path.join(process.env.HOME, '.waSession');
-const sessFile = path.join(sessDir, phone + '.json');
+const phone   = '40712345678';                       // country code + number, no '+'
+const sessDir = path.join(os.homedir(), '.waSession');
 
-const store = createNewStore(phone, { name: 'Ricardo Trade' });
-saveStore(store, sessFile);
+async function main() {
+  const store = createNewStore(phone, { name: 'Ricardo Trade' });
+  saveStore(store, storeFileFor(sessDir, phone));
 
-await requestSmsCode(store, 'sms');                // 'sms' | 'voice' | 'wa_old'
+  await requestSmsCode(store, 'sms');                // 'sms' | 'voice' | 'wa_old'
 
-const result = await verifyCode(store, '123456');  // .status, .store
-if (result.status === 'ok') saveStore(result.store, sessFile);
+  const result = await verifyCode(store, '123456');  // .status; `store` is updated in place
+  if (!['ok', 'sent', 'verified'].includes(result.status)) throw new Error(JSON.stringify(result));
+  store.registered = true;
+  store.codePending = false;
+  saveStore(store, storeFileFor(sessDir, store.phoneNumber));
 
-// The client is constructed from options, and finds the session by number.
-const client = new WhalibmobClient({ sessionDir: sessDir });
-client.on('connected', () => console.log('connected'));
-client.on('message', (msg) => console.log(msg.from, msg.decoded && msg.decoded.text));
+  // The client is constructed from options, finds the session by number, and
+  // reconnects by itself after a drop.
+  const client = new WhalibmobClient({ sessionDir: sessDir });
+  client.on('connected', () => console.log('connected'));
+  client.on('message', (msg) => console.log(msg.from, msg.decoded && msg.decoded.text));
 
-await client.init(phone);
-await client.sendText('40798765432@s.whatsapp.net', 'hello');
+  await client.init(store.phoneNumber);              // resolves once logged in
+  await client.sendText('40798765432@s.whatsapp.net', 'hello');
+}
+
+main().catch((err) => { console.error(err.message || err); process.exit(1); });
 ```
 
 Library, linking to an account that already exists (Web API):
@@ -83,13 +94,17 @@ Library, linking to an account that already exists (Web API):
 ```js
 const { WhalibmobClient } = require('whalibmob');
 
-const client = new WhalibmobClient({ sessionDir: process.env.HOME + '/.waSession' });
-client.on('pairing_code', ({ code }) => console.log('pairing code:', code));
-client.on('paired',       ({ jid })  => console.log('linked as', jid));
-client.on('message',      (msg)      => console.log(msg.from, msg.decoded && msg.decoded.text));
+async function main() {
+  const client = new WhalibmobClient({ sessionDir: require('os').homedir() + '/.waSession' });
+  client.on('pairing_code', ({ code }) => console.log('pairing code:', code));
+  client.on('paired',       ({ jid })  => console.log('linked as', jid));
+  client.on('message',      (msg)      => console.log(msg.from, msg.decoded && msg.decoded.text));
 
-await client.connectWeb('40712345678', { syncFullHistory: true });
-await client.requestPairingCode('40712345678');    // first run only; or listen for 'qr'
+  await client.connectWeb('40712345678', { syncFullHistory: true });
+  await client.requestPairingCode('40712345678');  // first run only; or listen for 'qr'
+}
+
+main().catch((err) => { console.error(err.message || err); process.exit(1); });
 ```
 
 ## Start here
