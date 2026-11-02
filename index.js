@@ -213,6 +213,12 @@ const Signal = Object.assign({},
     })
   });
 
+// lib/primary/ — what this account keeps while it is the primary device, so
+// it has a history to hand the companions it links.
+const Primary = {
+  MessageStore: require('./lib/primary/MessageStore')
+};
+
 // App state — lib/appstate/. AppStateStore.js is spread because the flat
 // AppStateStore is its class; the other three are whole.
 const AppState = Object.assign({}, require('./lib/appstate/AppStateStore'), {
@@ -427,5 +433,6 @@ module.exports = {
   Argo,
   WAUSync,
   Signal,
-  AppState
+  AppState,
+  Primary
 };

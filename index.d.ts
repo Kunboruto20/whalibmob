@@ -2013,3 +2013,7 @@ export declare const PrimaryLinkCrypto: LibModule;
 export declare const PrimaryLinkQr: LibModule;
 export declare const PrimaryLinkStore: LibModule;
 export declare const PrimaryBootstrap: LibModule;
+/** `whalibmob/lib/primary/` — what a primary keeps for the companions it links. */
+export declare const Primary: {
+  MessageStore: LibModule;
+};
