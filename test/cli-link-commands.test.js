@@ -344,6 +344,9 @@ test('a busy store may be held by another process, and the way out says so', () 
     assert.match(title, /another (wa|program|process)/i);
     assert.match(title, /process/);
     assert.match(next, /close the other wa using this session, or wait/i);
+    // Not knowing who holds it, the way out of one that is gone is still named.
+    assert.match(next, /If no other wa is running, restart wa with --unlock-message-store\.$/);
+    assert.match(L.explainBlocker({ code: 'PRIMARY_MESSAGE_STORE_DISABLED', detail: { reason: 'unreadable', code: 'PRIMARY_MESSAGE_STORE_BUSY' } }).next, /--unlock-message-store/);
 });
 
 test('a busy store names who holds it and points at --unlock-message-store; a takeover in progress is told apart', () => {

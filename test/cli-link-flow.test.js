@@ -454,7 +454,8 @@ test('wa listen reports store failures once a minute, in words that need no shel
   assert.ok(has(text, 'connected  listening on +' + PHONE + '  (Ctrl+C to stop)'), text);
   assert.equal(lines.filter(l => l.includes('PRIMARY_MESSAGE_STORE_WRITE_FAILED')).length, 1, text);
   assert.ok(has(text, '  next: Free disk space or fix permissions on the session folder, then restart wa.'), text);
-  assert.ok(has(text, '  next: Close the other wa using this session, or wait until it has finished, then restart wa.'), text);
+  assert.ok(has(text, '  next: Close the other wa using this session, or wait until it has finished, then restart wa.'
+    + ' If no other wa is running, break the lock with wa connect <phone> --unlock-message-store (it asks first).'), text);
   assert.ok(!/\/reconnect/.test(text), text);
 });
 
