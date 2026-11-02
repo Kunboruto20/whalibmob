@@ -40,7 +40,12 @@ whalibmob_auth/
 │   ├── 919634847671.appState.json
 │   ├── 919634847671.appStateKeys.json
 │   ├── 919634847671.history.json
-│   └── 919634847671.messages.json
+│   ├── 919634847671.messages.json
+│   ├── 919634847671.primary-messages.log        ← what the primary kept, to hand a companion
+│   ├── 919634847671.primary-messages.json
+│   ├── 919634847671.primary-messages.write-failed ← only while a disk failure is not yet recorded
+│   ├── 919634847671.primary-history-outbox.json ← only while a handover is under way
+│   └── 919634847671.primary-linking.json        ← the link journal
 └── 5568936182750/
     └── …
 ```
@@ -52,12 +57,43 @@ One account is then one directory: copy it to move a number to another machine,
 delete it to be rid of one, archive it to keep it. Nothing has to be picked out
 of a pile by prefix.
 
+The five `primary-*` files only exist on a number that acts as the primary device
+and keeps messages or links a companion; see
+[Files the Primary Keeps for Linked Companions](#files-the-primary-keeps-for-linked-companions).
+
 > [!NOTE]
 > **Sessions written by earlier versions keep working where they are.** The
 > layout is decided per number: a number whose files sit loose in the base
 > directory is left exactly as it is, and only new numbers get a folder. Nothing
 > is moved unless you ask — `wa migrate-sessions` does that, one number or all
 > of them, and re-running it is safe.
+
+### Files the Primary Keeps for Linked Companions
+
+A number registered here is the account's primary device. When it keeps a record of its messages and approves a companion such as WhatsApp Web ([how](linking.md#linking-whatsapp-web-from-the-cli)), more files appear beside the others: the message store's two and the link journal for good, the store's write-failed marker while the disk is refusing it, the history outbox while a handover is under way, and a lock file beside the store and one beside the journal while a program has them open. All are created readable by you only (mode `0600`).
+
+| File | Backend key | Holds |
+|---|---|---|
+| `<phone>.primary-messages.log` | `primary-messages-log` | The message store's journal, one JSON event per line, appended as messages are sent and received. The message bytes are in it, base64, unencrypted. |
+| `<phone>.primary-messages.json` | `primary-messages` | The same store, compacted: the chats, the messages kept (newest 100 per chat and 20 000 in all, by default), what it knows it lost, and where capture began (`origin`: `registration` or `enabled`). The journal is folded into it (a compaction) once it has grown by about as much as this snapshot holds, and never less than about 1 MiB or 5 000 lines, so a large store is not rewritten every megabyte; also when the store is closed on disconnect, and on the next turn of the event loop after a message is revoked or expires, so that its bytes leave the files at once. Expiry is checked when the store opens, when it is read, and once an hour while it is open. |
+| `<phone>.primary-messages.write-failed` | `primary-messages-write-failed` | Empty. There only while the disk is refusing the store's writes and that stretch has not been written down yet; its modification time is when the refusals began. The next write that lands (or, after a crash, the next open) records the stretch as a loss, `messages were not saved from ... to ...`, and removes the file. It belongs to the store and moves with it. A copy between backends keeps the file but not its time. |
+| `<phone>.primary-history-outbox.json` | `primary-history-outbox` | The history waiting to go out to a companion, pinned before it is sent so that a resume sends exactly those bytes. Plaintext, and for a blob the key that opens it. Only while a handover is under way: it is deleted when the handover finishes, or can never be sent. |
+| `<phone>.primary-linking.json` | `primary-linking` | The link journal: approvals begun and not finished, the pairing requests waiting, the link state with the companions' key indexes, and how far the bootstrap got. Bound to the number and its identity key by a digest, and refused for any other number. |
+| `<phone>.primary-messages.lock` | none | Who has the message store open right now (pid, host, boot, start time), so that a second program on the same session is refused it (`PRIMARY_MESSAGE_STORE_BUSY`, which names the holder). It belongs to a running process, not to the number, and never moves: it is there from the login that opens the store until the store is closed, and one left by a process that died on this machine is taken over by the next. One whose holder cannot be proven gone (another machine or container, a pid handed to another process since, a lock its writer died before filling in) stays until you break it: start wa with `--unlock-message-store`, which shows the holder and asks first. A program that in fact still held it stops keeping messages at its next write (`PRIMARY_MESSAGE_STORE_LOST`). |
+| `<phone>.primary-linking.json.lock` | none | Who holds the journal right now (pid, host, boot, start time). A connected primary takes it at its first link activity (any link command, `/link-status` included, or a pairing request arriving from Web) and keeps it until it disconnects or its connection closes. It belongs to a running process, not to the number, and is the file `/link-unlock` breaks. |
+
+The backend keys are for `copySession` and the backends below. The client itself still writes files. A companion (`.web.`) session never writes these, but a `<phone>.web.primary-*` copy is listed too, so a move does not leave one behind.
+
+What the files do when a session is moved or re-filed:
+
+- **`wa migrate-sessions` (and `migrateSession()`)** moves the store (its write-failed marker included, with its time), the outbox and the journal with everything else. The two `.lock` files never move, there or anywhere else: each belongs to a process.
+- **Re-filing under the number WhatsApp uses** ([see accounts](accounts.md#the-number-whatsapp-files-your-account-under); `adoptCanonicalNumber()`) renames the message store, its write-failed marker and the outbox with the number, so the history follows the account. The **link journal is not renamed**: it is bound to the number it was written for, and a renamed copy would be refused. It stays under the old name, with its lock, and the new number starts a journal of its own, so an approval left unfinished under the old name is not seen under the new one. The store's lock is not renamed either.
+- **Registering the number again in the CLI** starts a new message store. The earlier one is moved aside, as `<phone>.primary-messages.log.before-<time>` and `<phone>.primary-messages.json.before-<time>` (and its write-failed marker, if it left one); it is kept, and never handed to a companion. Under `--no-message-store` the earlier store is still moved aside, and no new one starts. The move happens under the store's lock: if another wa has the store open then, nothing is moved, and the warning names who holds it.
+- **`--no-message-store`** writes no store files at all. A later run with the store on records that there was a stretch it was not open for, as a loss.
+- **`--reset-message-store`** starts a store whose files are damaged again. The damaged files stay in the folder, renamed `<phone>.primary-messages.log.corrupt-<time>` and `<phone>.primary-messages.json.corrupt-<time>` (and the marker, if there is one); they are kept, never read and never handed to a companion, and the new store counts as switched on at that moment.
+- **`--unlock-message-store`** breaks a store lock whose holder cannot be proven gone. Before the store of the number being connected or registered opens, it shows who holds the lock (pid, host, since when) and asks `[y/N]`; Enter is no. `wa listen` cannot ask, so it names the holder and refuses. Break it only when no other wa is using the number.
+
+These files hold message content in the clear. Back them up, move them and delete them the way you do the keys beside them.
 
 ### Keeping the Announced Version Current
 
@@ -262,7 +298,11 @@ list(prefix)       // every key present that starts with prefix
 The keys are logical names rather than file names — `auth`, `signal`,
 `sender-key`, `tc-token`, `device-cache`, `lid-mapping`,
 `lid-reverse-mapping`, `history`, `messages`, `app-state`, `app-state-keys`,
-and `` `pre-key/${id}` `` for each of the 812 one-time pre-keys.
+the primary's `primary-messages-log`, `primary-messages`,
+`primary-messages-write-failed`, `primary-history-outbox` and
+`primary-linking`, and `` `pre-key/${id}` `` for
+each of the 812 one-time pre-keys. The lock files have no key: they belong to a
+running process, not to the session.
 
 Three implementations ship with the package:
 
@@ -316,12 +356,16 @@ leaves the previous state intact instead of half a file.
 > through the client is the next step. Nothing here changes how a session is
 > created or connected today.
 
-### One Database Instead of 834 Files
+### One Database Instead of 844 Files
 
-A number's state is 22 named files plus a file for each of its 812 one-time
-pre-keys. On a laptop nobody notices. On a phone under Termux, on a container
-with a small inode budget, or with fifty numbers in one folder, it is 40 000
-files whose directory has to be read every time the pre-key pool is counted.
+A number's state is 32 named files (16 for each half of the number, the
+primary's message store, its write-failed marker, history outbox and link
+journal among them) plus a
+file for each of its 812 one-time pre-keys, and the two lock files while a
+program holds them. On a laptop nobody notices. On a phone under Termux, on a
+container with a small inode budget, or with fifty numbers in one folder, it is
+over 40 000 files whose directory has to be read every time the pre-key pool is
+counted.
 
 `SqliteBackend` is the same state as a handful of rows:
 

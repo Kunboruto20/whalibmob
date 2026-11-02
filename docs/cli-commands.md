@@ -996,6 +996,55 @@ wa> /quit
 
 ---
 
+### Companion Commands (Approving WhatsApp Web)
+
+A number registered through whalibmob is the account's primary device. These commands let it approve **WhatsApp Web** as a companion and hand it the chat history the program has kept for the number. They need the number connected as the primary (`wa connect <phone>`, with `--sms` if the number also holds a companion session); a companion session gets `PRIMARY_LINK_PRIMARY_REQUIRED`.
+
+The whole flow, every command typed as shown:
+
+```sh
+wa connect 447949738354 --session ~/whalibmob_auth
+```
+
+1. On WhatsApp Web choose **Link with phone number** and enter `447949738354`. Web shows an 8-character code, good for about three minutes. The shell prints `link request   companion c0ffee01   code window 2:50   id a1a1a1a1`.
+2. `wa> /link-code ABCD-EFGH` — the dash, the case and a space between the halves do not matter.
+3. With more than one browser asking, nothing is approved and the shell lists them. Repeat with the number or the id of yours: `/link-code ABCD-EFGH 2`.
+4. If the history is known to be partial, the shell prints the coverage and asks `[y/N]`; Enter is no.
+5. Success says `history handed to the companion: 12 chats, 340 messages, 20.0 KB (sent inline), first link`, then where capture began and, for a partial history, what was dropped and lost. A history over 64 KiB deflated goes up as a blob first, announced as `uploading history (2.0 MB)... this can take a few minutes`; wait for it. Check it:
+
+```
+wa +447949738354> /linked-devices
+linked devices  +447949738354
+  #0   this phone (primary)
+  #12  companion   key index 3   linked 2026-11-02 15:31 by code   binding unconfirmed   history delivered (12 chats, 340 msgs)
+```
+
+Each step, with its output in full, is in [Linking WhatsApp Web from the CLI](linking.md#linking-whatsapp-web-from-the-cli).
+
+| Command | What it does |
+|---|---|
+| `/link-invitations` | List the pairing requests waiting, one line per browser, newest first. |
+| `/link-code CODE [n\|id]` | Approve Web's 8-character code, then send the chats. `n\|id` picks the request when more than one browser is asking: its number in the list, or 6 or more characters of its id. Order: readiness check, choice of request, the `[y/N]` when the history is partial, the approval, the history. A refusal at any point before the approval approves nothing. |
+| `/link-qr PAYLOAD` | The same for a QR: `PAYLOAD` is the text the QR encodes, or its `https://wa.me/settings/linked_devices#...` link. |
+| `/link-status` | Where the link and the handover stand: the phase, the binding, the bootstrap, the companions, and the next step. |
+| `/linked-devices` | This number's companions: slot, key index, when and how (by code or by QR) it was linked, whether the binding is confirmed, and the chats and messages of the history it was handed. |
+| `/link-bootstrap [--resume] [--resend-uncertain]` | Send the chats to an approved companion, or continue a handover that stopped. `--resume` continues after the last accepted step (harmless when there is none). `--resend-uncertain` also sends once more a step whose reply never came; on its own it counts as a resume. There is no blind resend. |
+| `/link-confirm FILE\|JSON` | Confirm an approval with the companion's public proof JSON: a file, or the JSON itself on the line. |
+| `/link-retire` | Clear an approval whose companion never appeared or has been logged out. Works once the approval is 5 minutes old and the companion is gone from the device list. |
+| `/link-unlock` | Show who holds the link journal's lock and ask `[y/N]` before breaking it; Enter is no. For a lock left by a program that is gone, which cannot be proven gone from here (another machine or container, an older lock format). |
+
+**What the history covers.** Only what the store kept since it began: since registration for a number registered here, or since the store was first switched on for any other. It keeps 100 messages per chat and 20 000 in all, oldest first out. Losses are reported, and the shell asks `[y/N]` unless the store has kept everything since registration and dropped nothing.
+
+**What is never transferred.** The content of revoked, expired and view-once messages, and reactions and poll votes (they are skipped, so they do not appear on the new device). A message of a type the library does not decode is kept as received and handed over unchanged.
+
+**Limits.** A second companion while one is still linked is not supported; the shell refuses up front. The binding stays `unconfirmed` unless the companion's public proof JSON is reconciled with `/link-confirm`; standard WhatsApp Web is not known to offer such a proof. The reasons are in [What the History Covers](linking.md#what-the-history-covers).
+
+**Linking again.** Log out on Web (Menu → Log out); wait until `/linked-devices` no longer lists it; run `/link-retire` (5 minutes after the approval, if a hold is left over); run `/link-code` again. Web gets the history again, with the same app-state key. See [Linking Again](linking.md#linking-again).
+
+**When it stops part-way.** `/link-status` says what to do. `/link-bootstrap --resume` continues; `/link-bootstrap --resume --resend-uncertain` resends only a step whose reply never came; a step WhatsApp refused is never resent. `/link-unlock` breaks the lock on the link journal only when you run it: a lock left by a dead process on the same machine is recovered without it, and any other holder is reported as busy, with who holds it. See [When Something Stops Part-Way](linking.md#when-something-stops-part-way).
+
+---
+
 ### Full Command Reference Table
 
 | Command | Description |
@@ -1094,6 +1143,16 @@ wa> /quit
 | `/reg check <phone>` | Check if number has WhatsApp |
 | `/reg code <phone> [method] [--name "Name"]` | Request verification code, optionally naming the account |
 | `/reg confirm <phone> <code> [--name "Name"]` | Complete registration |
+| **Companions (primary only)** | |
+| `/link-invitations` | List the pairing requests waiting from WhatsApp Web |
+| `/link-code CODE [n\|id]` | Approve Web's 8-character code, then send the chats |
+| `/link-qr PAYLOAD` | Approve Web's QR (its text or `wa.me` link), then send the chats |
+| `/link-status` | Where the link and the chat handover stand |
+| `/linked-devices` | This number's companions |
+| `/link-bootstrap [--resume] [--resend-uncertain]` | Send the chats, or continue a handover that stopped |
+| `/link-confirm FILE\|JSON` | Confirm an approval with the companion's public proof |
+| `/link-retire` | Clear an approval whose companion never appeared |
+| `/link-unlock` | Break a link-journal lock left by a program that is gone |
 | **Connection** | |
 | `/connect <phone> [sms\|pair]` | Connect to WhatsApp — picks the method from the session files when unset |
 | `/pair <phone> [code]` | Link to an existing account by 8-digit pairing code |
