@@ -1,0 +1,119 @@
+// A minimal schema for the history-sync wire format, kept for the tests.
+//
+// It is the second reader the history tests check the library's bytes against.
+// The library has its own hand-written codec, and a test that only round-trips
+// through that codec proves it agrees with itself; decoding with protobufjs
+// over this file, which shares nothing with it, does not.
+//
+// The field numbers are WhatsApp's. They come from the protobuf schema as it is
+// published in the whatsmeow project: proto/waHistorySync, proto/waWeb,
+// proto/waE2E and proto/waCommon. Only the fields the tests exercise are
+// declared; anything else on the wire is skipped as an unknown field. What goes
+// on the wire depends on the field number and the wire type alone, so an enum
+// is declared int32, and an embedded Message the tests compare verbatim is
+// declared bytes.
+
+syntax = "proto2";
+package watest;
+
+// waCommon
+message MessageKey {
+  optional string remoteJID = 1;
+  optional bool fromMe = 2;
+  optional string ID = 3;
+  optional string participant = 4;
+}
+
+// waWeb
+message WebMessageInfo {
+  required MessageKey key = 1;
+  optional bytes message = 2;
+  optional uint64 messageTimestamp = 3;
+  optional int32 status = 4;
+  optional string participant = 5;
+  optional string pushName = 19;
+  optional int32 messageStubType = 24;
+  repeated string messageStubParameters = 26;
+}
+
+// waHistorySync
+message HistorySyncMsg {
+  optional WebMessageInfo message = 1;
+  optional uint64 msgOrderID = 2;
+}
+
+message Conversation {
+  required string ID = 1;
+  repeated HistorySyncMsg messages = 2;
+  optional uint32 unreadCount = 6;
+  optional uint64 conversationTimestamp = 12;
+  optional string name = 13;
+  optional string pnJID = 39;
+  optional string lidJID = 42;
+}
+
+message Pushname {
+  optional string ID = 1;
+  optional string pushname = 2;
+}
+
+message PhoneNumberToLIDMapping {
+  optional string pnJID = 1;
+  optional string lidJID = 2;
+}
+
+message HistorySync {
+  required int32 syncType = 1;
+  repeated Conversation conversations = 2;
+  optional uint32 chunkOrder = 5;
+  optional uint32 progress = 6;
+  repeated Pushname pushnames = 7;
+  repeated PhoneNumberToLIDMapping phoneNumberToLidMappings = 15;
+}
+
+// waE2E
+message HistorySyncNotification {
+  optional bytes fileSHA256 = 1;
+  optional uint64 fileLength = 2;
+  optional bytes mediaKey = 3;
+  optional bytes fileEncSHA256 = 4;
+  optional string directPath = 5;
+  optional int32 syncType = 6;
+  optional uint32 chunkOrder = 7;
+  optional uint32 progress = 9;
+  optional bytes initialHistBootstrapInlinePayload = 11;
+}
+
+message ProtocolMessage {
+  optional MessageKey key = 1;
+  optional int32 type = 2;
+  optional uint32 ephemeralExpiration = 4;
+  optional HistorySyncNotification historySyncNotification = 6;
+  optional bytes appStateSyncKeyShare = 7;
+  optional bytes editedMessage = 14;
+}
+
+message ContextInfo {
+  optional uint32 expiration = 25;
+}
+
+message ExtendedTextMessage {
+  optional string text = 1;
+  optional ContextInfo contextInfo = 17;
+}
+
+message DeviceSentMessage {
+  optional string destinationJID = 1;
+  optional bytes message = 2;
+  optional string phash = 3;
+}
+
+message Message {
+  optional string conversation = 1;
+  optional ExtendedTextMessage extendedTextMessage = 6;
+  optional ProtocolMessage protocolMessage = 12;
+  optional DeviceSentMessage deviceSentMessage = 31;
+  optional bytes viewOnceMessage = 37;
+  optional bytes ephemeralMessage = 40;
+  optional bytes viewOnceMessageV2 = 55;
+}
