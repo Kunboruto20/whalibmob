@@ -681,6 +681,8 @@ const HELP = `
     /connect    <phone> [sms|pair]           connect to WhatsApp (asks which if unset)
     /pair       <phone> [code]               link to an existing account by 8-digit code
     /qrcode     <phone>                       link to an existing account by scanning a QR
+    /link-code  <code> [invitationId]         primary approves a separate companion's code
+    /link-qr    <qr-payload-or-wa.me-url>     primary approves a separate companion's QR
     /fixnumber                               re-file a session under the number WhatsApp uses
     /disconnect                              disconnect
     /reconnect                              force reconnection
@@ -1419,6 +1421,25 @@ async function handleLine(line) {
         if (_client && _client.connected) { fail('already connected — /disconnect first'); break; }
         out('connecting...');
         await doConnectWebQr(ph);
+        break;
+      }
+
+      case '/link-code':
+      case '/link-qr': {
+        requireConn();
+        if (!p[1] || p.length > (cmd === '/link-code' ? 3 : 2)) {
+          fail(cmd === '/link-code' ? 'usage: /link-code <8-char-code> [invitationId]' : 'usage: /link-qr <qr-payload-or-wa.me-url>');
+          break;
+        }
+        const result = cmd === '/link-code'
+          ? await _client.linkCompanionWithCode(p[1], p[2] ? { invitationId: p[2] } : undefined)
+          : await _client.linkCompanionWithQr(p[1]);
+        kv('status', result.status);
+        kv('operation', result.operationId);
+        if (result.status === 'awaiting_confirmation') {
+          out('  approval sent; independent companion proof and a fresh device list are still required');
+          out('  reconcile this operation through the runner; do not repeat approval');
+        }
         break;
       }
 

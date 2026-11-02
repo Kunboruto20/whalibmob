@@ -4,6 +4,12 @@ const { WhalibmobClient, checkNumberStatus, fetchIosVersion, fetchWaVersion, ass
 const { getDeviceConfig } = require('./lib/DeviceConfig');
 const { fetchAndroidVersion, currentVersionFor, refreshSessionVersion } = require('./lib/Registration');
 const SessionPaths = require('./lib/SessionPaths');
+const PrimaryLinking = require('./lib/PrimaryLinking');
+const PrimaryLinkCrypto = require('./lib/PrimaryLinkCrypto');
+const PrimaryLinkQr = require('./lib/PrimaryLinkQr');
+const PrimaryLinkStore = require('./lib/PrimaryLinkStore');
+const PrimaryBootstrap = require('./lib/PrimaryBootstrap');
+const { parseWhatsAppWebPublicProof } = require('./lib/WhatsAppWebProof');
 const { createNewStore, saveStore, loadStore, toSixParts, fromSixParts, storeToJson, storeFromJson } = require('./lib/Store');
 const { checkIfRegistered, requestSmsCode, verifyCode } = require('./lib/Registration');
 const { SignalProtocol } = require('./lib/signal/SignalProtocol');
@@ -217,6 +223,12 @@ const AppState = Object.assign({}, require('./lib/appstate/AppStateStore'), {
 });
 
 module.exports = {
+  PrimaryLinking,
+  PrimaryLinkCrypto,
+  PrimaryLinkQr,
+  PrimaryLinkStore,
+  PrimaryBootstrap,
+  parseWhatsAppWebPublicProof,
   WhalibmobClient,
   checkNumberStatus,
   checkIfRegistered,

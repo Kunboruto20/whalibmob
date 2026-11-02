@@ -116,3 +116,30 @@ function sameThing(): void {
 }
 
 export { media, decode, poll, retry, internals, sameThing, freshLocation, retryOutcome };
+
+async function checkPrimaryLinkedApi(client: wa.WhalibmobClient, code: string, proof: wa.PrimaryCompanionProof) {
+  const invitations = client.getPrimaryLinkInvitations();
+  if (!invitations.length) return;
+  const result: wa.PrimaryLinkResult = await client.approveCompanionCode(code, {
+    invitationId: invitations[0].id,
+    getCompanionProof: async () => proof
+  });
+  if (result.status === 'awaiting_confirmation') await client.reconcilePrimaryLink(proof);
+  const devices: Array<{ deviceId: number; keyIndex: number }> = await client.listLinkedDevices();
+  void devices;
+}
+void checkPrimaryLinkedApi;
+
+async function checkPrimaryQrApi(client: wa.WhalibmobClient, qr: string, code: string, proof: wa.PrimaryCompanionProof) {
+  const options: wa.PrimaryLinkCommonOptions = { getCompanionProof: async () => proof };
+  const result: wa.PrimaryLinkResult = await client.linkCompanionWithQr(qr, options);
+  if (result.status === 'awaiting_confirmation') await client.reconcilePrimaryLink(proof);
+  await client.approveCompanionQr(qr);
+  await client.linkCompanionWithCode(code, { ...options, waitMs: 45000, timeoutMs: 90000 });
+  await client.linkCompanionWithCode(code);
+  // @ts-expect-error The strict API still requires an explicit invitation.
+  await client.approveCompanionCode(code, {});
+  // @ts-expect-error QR input is text, never an unchecked object.
+  await client.approveCompanionQr({ qr });
+}
+void checkPrimaryQrApi;
