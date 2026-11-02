@@ -999,9 +999,21 @@ export declare class WhalibmobClient extends EventEmitter {
    * Break the primary link lock when PRIMARY_LINK_STORE_BUSY names a holder that
    * cannot be proven dead from here (another host or container, a bare-pid lock).
    * Breaking it is the caller's decision; a holder still running stops at its next
-   * write with PRIMARY_LINK_STORE_LOST. A takeover mutex left by a recovery that
-   * died is cleared too, but one held by a recovery running on this machine is
-   * not: then this still throws PRIMARY_LINK_STORE_BUSY with `err.holder.mutex`.
+   * write with PRIMARY_LINK_STORE_LOST.
+   *
+   * The takeover mutex (`<lock>.takeover`) is cleared too when it is left over:
+   * empty or unreadable, written by a process that is gone, by the process that
+   * now holds the lock, or more than a minute ago. So is one written on another
+   * host, in another container or pid namespace, since nothing here can check it:
+   * if that recovery is in fact still running, it may end with
+   * PRIMARY_LINK_STORE_BUSY, or LOST at its first write. Only a recovery running
+   * on this machine within the last minute keeps it, and then this throws
+   * PRIMARY_LINK_STORE_BUSY with `err.holder.mutex`.
+   *
+   * Concurrent recoveries can still race: in rare interleavings two of them each
+   * believe they hold the mutex. The worst case is that one owner fails with
+   * PRIMARY_LINK_STORE_LOST at its first write; the journal is never corrupted.
+   *
    * Throws PRIMARY_LINK_BUSY while this process holds the store. Returns the
    * holder broken, or null if none.
    */

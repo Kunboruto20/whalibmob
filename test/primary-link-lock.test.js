@@ -425,6 +425,151 @@ test('a live recoverer\'s mutex gives BUSY, marked as the mutex, even to an expl
     assert.equal(PrimaryLinkStore.readHolder(file).token, a.token);
 });
 
+// Two takeovers interleaved deterministically, without timing: the code under
+// test is interrupted the first time it moves the takeover mutex aside, and
+// `during(aside)` runs there. The rename itself goes ahead unless `during`
+// returns true.
+const realRename = fs.renameSync;
+function interruptMutexSetAside(t, mutex, during) {
+    let armed = true;
+    fs.renameSync = function (src, dst) {
+        if (armed && src === mutex) {
+            armed = false;
+            if (during(dst))
+                return;
+        }
+        return realRename.apply(this, arguments);
+    };
+    t.after(() => { fs.renameSync = realRename; });
+}
+
+// B has judged a dead recoverer's mutex and is about to move it aside. In that
+// gap A clears it, takes the lock and finishes, with A's own new mutex standing
+// exactly where B's rename would have put the old one. That mutex is over: its
+// writer holds the lock now. Put back, it would block every later recovery,
+// explicit ones included, for as long as A lives.
+test('two automatic recoverers on one stale mutex leave no mutex behind', t => {
+    const { dir, file } = scratch(t);
+    crashed(file);
+    crashed(file, 'die-in-takeover');
+    const mutex = file + '.lock.takeover';
+    let a;
+    interruptMutexSetAside(t, mutex, aside => {
+        a = open(t, file, { hooks: { beforeTakeoverRename() { realRename(mutex, aside); } } });
+        return true;
+    });
+    const b = caught(() => new PrimaryLinkStore(file, BINDING));
+    fs.renameSync = realRename;
+    assert.ok(a, 'A did not run');
+    assert.equal(b.code, 'PRIMARY_LINK_STORE_BUSY');
+    assert.equal(b.holder.token, a.token);
+    assert.equal(b.holder.mutex, undefined);
+    assert.deepEqual(fs.readdirSync(dir).sort(), ['journal.json', 'journal.json.lock']);
+});
+
+// Two operators breaking at once, both having judged the same stale mutex. X
+// either finishes entirely before Y moves anything, or is caught mid-way with
+// its new mutex where Y's rename would have put the old one. Either way exactly
+// one of them breaks the dead lock, and no file is left behind.
+test('two explicit breakers on one stale mutex: one wins, nothing is left behind', t => {
+    for (const variant of ['x finishes first', 'x mid-way']) {
+        const { dir, file } = scratch(t);
+        const dead = crashed(file);
+        crashed(file, 'die-in-takeover');
+        const mutex = file + '.lock.takeover';
+        let x, y;
+        interruptMutexSetAside(t, mutex, aside => {
+            if (variant === 'x finishes first') {
+                x = PrimaryLinkStore.breakLock(file);
+                return false;
+            }
+            x = open(t, file, { breakLock: true, hooks: { beforeTakeoverRename() { realRename(mutex, aside); } } });
+            return true;
+        });
+        try {
+            y = PrimaryLinkStore.breakLock(file);
+        }
+        catch (error) {
+            y = error;
+        }
+        fs.renameSync = realRename;
+        if (variant === 'x finishes first') {
+            assert.equal(x.holder.pid, dead.pid, variant);
+            assert.deepEqual(y, { holder: null }, variant);
+            assert.deepEqual(fs.readdirSync(dir), ['journal.json'], variant);
+        }
+        else {
+            assert.equal(PrimaryLinkStore.readHolder(file).token, x.token, variant);
+            assert.equal(y.code, 'PRIMARY_LINK_STORE_BUSY', variant);
+            assert.equal(y.holder.token, x.token, variant);
+            assert.equal(y.holder.mutex, undefined, variant);
+            assert.deepEqual(fs.readdirSync(dir).sort(), ['journal.json', 'journal.json.lock'], variant);
+        }
+    }
+});
+
+// A mutex written by the very process that holds the lock is a finished
+// takeover's, whatever else is true of that process. Should one be left, an
+// explicit break clears it and goes on to break the lock.
+test('a mutex written by the lock holder is finished and does not stop an explicit break', t => {
+    const { dir, file, lock } = scratch(t);
+    const a = open(t, file);
+    fs.copyFileSync(lock, lock + '.takeover');
+    assert.equal(PrimaryLinkStore.breakLock(file).holder.token, a.token);
+    assert.deepEqual(fs.readdirSync(dir), ['journal.json']);
+});
+
+// A recoverer holds the mutex for microseconds. One more than a minute old is
+// left over even if its writer's pid answers, so an operator's break clears it.
+// The automatic path still clears only what it can prove.
+test('an explicit break clears a mutex over a minute old; the automatic path does not', t => {
+    const { dir, file, lock } = scratch(t);
+    const dead = crashed(file);
+    const other = scratch(t);
+    const own = new PrimaryLinkStore(other.file, BINDING);
+    const { legacy, ...mine } = PrimaryLinkStore.readHolder(other.file);
+    own.close();
+    assert.equal(legacy, false);
+    // Written by this very process, alive, but a minute and more ago.
+    fs.writeFileSync(lock + '.takeover', JSON.stringify({ ...mine, gen: 0, at: Date.now() - 61000 }));
+    const busy = caught(() => new PrimaryLinkStore(file, BINDING));
+    assert.equal(busy.holder.mutex, true);
+    assert.equal(busy.holder.pid, process.pid);
+    assert.equal(PrimaryLinkStore.breakLock(file).holder.pid, dead.pid);
+    assert.deepEqual(fs.readdirSync(dir), ['journal.json']);
+});
+
+// An old owner whose lock was broken may find the new lock unreadable. That is
+// still a takeover, not a disk problem: the name no longer holds its file.
+test('an old owner is LOST even when the new lock is unreadable to it', { skip: (process.platform === 'win32' || root) && 'needs file permissions to bite' }, t => {
+    const { file, lock } = scratch(t);
+    const a = open(t, file);
+    PrimaryLinkStore.breakLock(file);
+    open(t, file);
+    const before = fs.readFileSync(file);
+    fs.chmodSync(lock, 0o000);
+    const lost = caught(() => a.update(s => { s.receipts = [RECEIPT]; }));
+    fs.chmodSync(lock, 0o600);
+    assert.equal(lost.code, 'PRIMARY_LINK_STORE_LOST');
+    assert.deepEqual(fs.readFileSync(file), before);
+});
+
+// A recoverer that died between moving something aside and removing it leaves
+// <lock>.dead-* or <lock>.takeover.dead-* behind. Nobody reads them; the next
+// owner removes them, and nothing else. One from the last minute may still be
+// in a concurrent clearer's hands, and is left to it.
+test('the next owner sweeps away what dead takeovers left aside', t => {
+    const { dir, file, lock } = scratch(t);
+    const old = (Date.now() - 120000) / 1000;
+    for (const name of [lock + '.dead-0123', lock + '.takeover.dead-4567', lock + '.deadline']) {
+        fs.writeFileSync(name, '');
+        fs.utimesSync(name, old, old);
+    }
+    fs.writeFileSync(lock + '.takeover.dead-89ab', '');
+    open(t, file);
+    assert.deepEqual(fs.readdirSync(dir).sort(), ['journal.json', 'journal.json.lock', 'journal.json.lock.deadline', 'journal.json.lock.takeover.dead-89ab']);
+});
+
 // The public way out of BUSY for a lock no automatic check can clear.
 function primary(t, dir) {
     const client = new WhalibmobClient({ sessionDir: dir, refreshVersion: false });
