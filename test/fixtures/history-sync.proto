@@ -120,4 +120,5 @@ message Message {
   optional bytes viewOnceMessage = 37;
   optional bytes ephemeralMessage = 40;
   optional bytes viewOnceMessageV2 = 55;
+  optional bytes editedMessage = 58;
 }

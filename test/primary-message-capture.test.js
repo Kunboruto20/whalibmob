@@ -1292,6 +1292,78 @@ test('only Message fields the schema leaves undefined are tried as wrappers', as
     assert.equal(logHolds(f.dir, secret), false);
 });
 
+// ─── edits and revokes inside the envelopes real clients send ────────────────
+//
+// Each is decoded through the same path as any message, so the store sees the
+// protocol message inside: the edit applied, the revoked target a tombstone,
+// and its bytes neither handed out nor left on disk once the store compacts.
+
+const tick = () => new Promise(resolve => setImmediate(resolve));
+const snapText = dir => { try { return fs.readFileSync(path.join(dir, PHONE + '.primary-messages.json'), 'utf8'); } catch (_) { return ''; } };
+const onDisk = (dir, secret) => logHolds(dir, secret) || snapText(dir).includes(secret.toString('base64'));
+
+test('an edit inside editedMessage (58) replaces the stored content', async t => {
+    const f = fixture(t);
+    f.login();
+    await f.receive(dm('IN58', encode({ conversation: 'ilk hali' })));
+    const edited = encode({ conversation: 'son hali' });
+    const edit = encode({ protocolMessage: { type: 14, key: { remoteJID: PEER, fromMe: false, ID: 'IN58' }, editedMessage: edited } });
+    await f.receive(dm('ED58', encode({ editedMessage: wrapped(edit) }), { edit: '1' }));
+    const [r] = records(f, PEER);
+    assert.equal(r.id, 'IN58');
+    assert.ok(r.raw.equals(edited), 'the edit is applied');
+    assert.equal(r.edited, T);
+    assert.deepEqual(records(f, PEER).map(x => x.id), ['IN58'], 'the edit is not a message of its own');
+    assert.deepEqual(f.snapshot().losses, []);
+    assert.deepEqual(f.errors, []);
+});
+
+test('a revoke inside deviceSentMessage (31) tombstones our own message, sent from a companion', async t => {
+    const f = fixture(t);
+    f.login();
+    const secret = encode({ conversation: 'benden, silinecek' });
+    await f.receive(dm('DS31', encode({ deviceSentMessage: { destinationJID: PEER, message: secret } }), { from: OWN_DEVICE }));
+    const revoke = encode({ protocolMessage: { type: 0, key: { remoteJID: PEER, fromMe: true, ID: 'DS31' } } });
+    await f.receive(dm('RV31', encode({ deviceSentMessage: { destinationJID: PEER, message: revoke } }), { from: OWN_DEVICE, edit: '7' }));
+    const [r] = records(f, PEER);
+    assert.equal(r.id, 'DS31');
+    assert.equal(r.tombstone, 'revoked');
+    assert.equal(r.raw, undefined);
+    await tick();
+    assert.equal(onDisk(f.dir, secret), false, 'and off the disk');
+    assert.deepEqual(f.errors, []);
+});
+
+test('a revoke inside ephemeralMessage (40) tombstones its target in a disappearing chat', async t => {
+    const f = fixture(t);
+    f.login();
+    // Sent now: a week's timer has not run out by the time the test looks.
+    const sent = Math.floor(Date.now() / 1000);
+    const at = { t: String(sent) };
+    // The chat turns disappearing messages on; what follows comes in the
+    // ephemeral envelope, carrying its timer.
+    await f.receive(dm('EP0', encode({ ephemeralMessage: wrapped(encode({ protocolMessage: { type: 3, ephemeralExpiration: 604800 } })) }), at));
+    const secret = encode({ extendedTextMessage: { text: 'kaybolacak ve silinecek', contextInfo: { expiration: 604800 } } });
+    await f.receive(dm('EP1', encode({ ephemeralMessage: wrapped(secret) }), at));
+    await f.receive(dm('EP2', encode({ ephemeralMessage: wrapped(encode({ extendedTextMessage: { text: 'kalsin', contextInfo: { expiration: 604800 } } })) }), at));
+    let byId = Object.fromEntries(records(f, PEER).map(r => [r.id, r]));
+    assert.equal(byId.EP1.expiration, 604800);
+    assert.ok(byId.EP1.raw);
+    const revoke = encode({ protocolMessage: { type: 0, key: { remoteJID: PEER, fromMe: false, ID: 'EP1' } } });
+    await f.receive(dm('RV40', encode({ ephemeralMessage: wrapped(revoke) }), { ...at, edit: '7' }));
+    byId = Object.fromEntries(records(f, PEER).map(r => [r.id, r]));
+    assert.deepEqual(Object.keys(byId).sort(), ['EP1', 'EP2']);
+    assert.equal(byId.EP1.tombstone, 'revoked');
+    assert.equal(byId.EP1.raw, undefined);
+    assert.equal(byId.EP2.tombstone, undefined);
+    assert.ok(byId.EP2.raw);
+    assert.deepEqual(f.snapshot().chats.find(c => c.id === PEER).ephemeral, { seconds: 604800, setAt: sent });
+    await tick();
+    assert.equal(onDisk(f.dir, secret), false, 'and off the disk');
+    assert.deepEqual(f.snapshot().losses, []);
+    assert.deepEqual(f.errors, []);
+});
+
 // ─── a damaged store, set aside on request ──────────────────────────────────
 
 test('messageStore { setAsideCorrupt } sets a damaged store aside at login and captures from then', async t => {

@@ -17,9 +17,12 @@ const assert = require('node:assert/strict');
 
 const { type } = require('./helpers/history-proto');
 const { decodeMessageContainer } = require('../lib/proto/MessageProto');
+const { Writer } = require('protobufjs/minimal');
 
 const Message = () => type('Message');
 const encode = (obj) => Buffer.from(Message().encode(Message().create(obj)).finish());
+// FutureProofMessage { message = 1 }, which the fixture declares as bytes.
+const wrapped = (inner) => Buffer.from(Writer.create().uint32((1 << 3) | 2).bytes(inner).finish());
 
 test('revoke exposes the target key', () => {
   const buf = encode({
@@ -145,4 +148,38 @@ test('the flags the envelopes set are unchanged', () => {
   assert.equal(ephemeral.text, 'gizli');
   assert.equal(ephemeral.ephemeral, true);
   assert.equal(ephemeral.viewOnce, undefined);
+});
+
+// The envelopes real clients put edits and revokes in. Each must still come out
+// as the protocol message inside it, with the key it names: an edit or a revoke
+// read as "unknown" would leave the old, or the revoked, content in the store.
+
+test('an edit inside editedMessage (58) is the type-14 protocol message it wraps', () => {
+  const edited = encode({ conversation: 'son hali' });
+  const inner = encode({ protocolMessage: { type: 14, key: { remoteJID: '4477@s.whatsapp.net', fromMe: false, ID: 'E58' }, editedMessage: edited } });
+  const d = decodeMessageContainer(encode({ editedMessage: wrapped(inner) }));
+  assert.equal(d.type, 'protocol');
+  assert.equal(d.protocolType, 14);
+  assert.equal(d.key.id, 'E58');
+  assert.ok(d.editedMessageRaw.equals(edited));
+  assert.equal(d.edited, true);
+});
+
+test('a revoke inside deviceSentMessage (31) keeps its key and the destination', () => {
+  const inner = encode({ protocolMessage: { type: 0, key: { remoteJID: '4477@s.whatsapp.net', fromMe: true, ID: 'R31' } } });
+  const d = decodeMessageContainer(encode({ deviceSentMessage: { destinationJID: '4477@s.whatsapp.net', message: inner } }));
+  assert.equal(d.type, 'protocol');
+  assert.equal(d.protocolType, 0);
+  assert.deepEqual(d.key, { remoteJid: '4477@s.whatsapp.net', fromMe: true, id: 'R31', participant: undefined });
+  assert.equal(d.deviceSentMeta.destinationJid, '4477@s.whatsapp.net');
+  assert.ok(d.deviceSentMeta.messageRaw.equals(inner));
+});
+
+test('a revoke inside ephemeralMessage (40), as a disappearing chat sends it, keeps its key', () => {
+  const inner = encode({ protocolMessage: { type: 0, key: { remoteJID: '4477@s.whatsapp.net', fromMe: false, ID: 'R40' } } });
+  const d = decodeMessageContainer(encode({ ephemeralMessage: wrapped(inner) }));
+  assert.equal(d.type, 'protocol');
+  assert.equal(d.protocolType, 0);
+  assert.equal(d.key.id, 'R40');
+  assert.equal(d.ephemeral, true);
 });
