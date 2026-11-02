@@ -442,6 +442,12 @@ function resolveAuthFolder(name) {
   return path.join(os.homedir(), raw);
 }
 
+// A leading ~ is the home directory. The shell expands it in `--session ~/x`,
+// but not after an `=`, so `--session=~/x` used to name a folder called "~".
+function expandHome(p) {
+  return p === '~' || /^~[\/\\]/.test(p) ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
 // Ask what to call the authentication folder, once, and remember the answer.
 //
 // Skipped entirely when --session or WA_SESSION_DIR already say where it is,
@@ -450,7 +456,7 @@ function resolveAuthFolder(name) {
 // not a terminal, so scripts and cron never block on it.
 function askSessionDir(cmd, explicit) {
   const OFFLINE = ['version', '--version', '-v', 'help', '--help', '-h'];
-  if (explicit) return Promise.resolve(explicit);
+  if (explicit) return Promise.resolve(expandHome(explicit));
   if (cmd && OFFLINE.includes(cmd)) return Promise.resolve(defaultSessionDir());
   if (process.env.WA_SESSION_DIR) return Promise.resolve(process.env.WA_SESSION_DIR);
 
@@ -516,28 +522,61 @@ function printCodeNextSteps(store, phone, confirmCmd) {
 // companion it links later is handed everything since then and is told so,
 // instead of everything since some later connect. These are the files the
 // client opens at each login (Client._openMessageStore): the number's session
-// folder under the base, and the number the session file carries. A store
-// already on disk keeps the origin it was started with.
+// folder under the base, and the number the session file carries.
 //
-// Nothing here may cost the registration: a store that will not open is a
-// warning, and the client starts one at the first connect instead.
+// A store already there is from before this registration: an earlier one of
+// the same number, or connects before it. Nothing in it records the time in
+// between, so carried on it would claim a coverage it does not have. It is
+// renamed aside (kept, never handed over) and the store starts again here.
+// That happens under --no-message-store too, which then starts none: the old
+// one must not be picked up again by a later connect with the store on.
+//
+// Nothing here may cost the registration: a failure is a warning.
 function startMessageStoreAtRegistration(store, phone) {
-  if (!_messageStoreOn) return;
+  const dir = sessionDirFor(_sessDir, phone);
+  const who = String(store.phoneNumber || phone);
+  let setAside = false;
   try {
+    setEarlierStoreAside(dir, who);
+    setAside = true;
+    if (!_messageStoreOn) return;
     const { PrimaryMessageStore } = require('./lib/primary/MessageStore');
-    PrimaryMessageStore.open({
-      dir:    sessionDirFor(_sessDir, phone),
-      phone:  String(store.phoneNumber || phone),
-      origin: 'registration',
-      lc:     store.connectionLc || 0
-    }).close();
+    PrimaryMessageStore.open({ dir, phone: who, origin: 'registration', lc: store.connectionLc || 0 }).close();
   } catch (e) {
     const code = e && typeof e.code === 'string' && e.code.startsWith('PRIMARY_') ? e.code : null;
     warn('the message store did not start: ' +
          (code ? LinkCli.explainError(code).title + ' (' + code + ')' : (e && e.message) || String(e)));
-    out('  the registration itself is fine. The store starts at the first connect instead, and a');
-    out('  companion linked later is told it holds only the messages kept from then on.');
+    if (setAside) {
+      out('  the registration itself is fine. The store starts at the first connect instead, and a');
+      out('  companion linked later is told it holds only the messages kept from then on.');
+    } else {
+      out('  the registration itself is fine, but the earlier store could not be set aside. Move');
+      out('  ' + path.join(dir, who + '.primary-messages.*') + ' out of the session folder before connecting.');
+    }
   }
+}
+
+function setEarlierStoreAside(dir, who) {
+  const present = [who + '.primary-messages.log', who + '.primary-messages.json']
+    .map(name => path.join(dir, name))
+    .filter(file => { try { fs.lstatSync(file); return true; } catch (_) { return false; } });
+  if (!present.length) return;
+  // When it was set aside, without the colons some filesystems refuse.
+  const suffix = '.before-' + new Date().toISOString().replace(/[:.]/g, '-');
+  const moved = [];
+  try {
+    for (const file of present) {
+      if (fs.existsSync(file + suffix)) throw new Error(file + suffix + ' already exists');
+      fs.renameSync(file, file + suffix);
+      moved.push(file);
+    }
+  } catch (e) {
+    // All or nothing: half a store set aside is a store neither old nor new.
+    for (const file of moved.reverse()) { try { fs.renameSync(file + suffix, file); } catch (_) {} }
+    throw e;
+  }
+  out('  the earlier message store of this number is kept, set aside and no longer handed over: ' +
+      path.join(dir, who + '.primary-messages.*' + suffix));
 }
 
 function normalizeJid(s) {
@@ -750,6 +789,14 @@ const HELP = `
 `.trim();
 
 // ─── incoming event display ───────────────────────────────────────────────────
+
+// A failure reported by an event rather than by a command: what went wrong and
+// the step to take, in linkCommands' words, with the code to report.
+function failEvent(what, code, detail) {
+  const { title, next } = LinkCli.explainError(code);
+  fail(what + ': ' + title + '  (' + code + (detail ? ', ' + detail : '') + ')');
+  out('  next: ' + next);
+}
 
 function attachEvents(client) {
   client.on('message', (msg) => {
@@ -982,9 +1029,8 @@ function attachEvents(client) {
   client.on('primary_link_progress', linkEvent(e => out('  ' + LinkCli.formatLinkStatus({ phase: e.phase })[0])));
   client.on('primary_linked', linkEvent(e => out('  ' + LinkCli.formatLinkStatus({ phase: 'committed', confirmed: true })[0] +
     '   companion #' + e.deviceId + ', key index ' + e.keyIndex)));
-  client.on('primary_link_error', linkEvent(e => fail('link request: ' + LinkCli.explainError(e.code).title + '  (' + e.code + ')')));
-  client.on('primary_message_store_error', linkEvent(e => fail('message store: ' + LinkCli.explainError(e.code).title +
-    '  (' + e.code + (e.op ? ', ' + e.op : '') + ')')));
+  client.on('primary_link_error', linkEvent(e => failEvent('link request', e.code)));
+  client.on('primary_message_store_error', linkEvent(e => failEvent('message store', e.code, e.op)));
 
   client.on('error', (e) => {
     _rl && _rl.pause();
@@ -1446,8 +1492,10 @@ function askYesNo(question) {
 }
 
 // Asked only when the readiness check says the history is partial, after it
-// has printed what is and is not in it.
-const confirmHistory = () => askYesNo('approve the link and send this history?  [y/N] ');
+// has printed what is and is not in it, and after the request is chosen: the
+// question (linkCommands' words) names that browser.
+const confirmHistory = (readiness, ask) =>
+  askYesNo(((ask && ask.question) || 'approve the link and send this history?') + '  [y/N] ');
 
 // The number this connection is the primary for.
 const linkPhone = () => String((_client && _client.store && _client.store.phoneNumber) || _phone || '');
@@ -1468,9 +1516,7 @@ function proofText(arg) {
   const quoted = /^(["'])([\s\S]*)\1$/.exec(arg);
   const text = quoted ? quoted[2].trim() : arg;
   if (text.startsWith('{')) return { text };
-  const file = text.startsWith('~')
-    ? path.join(os.homedir(), text.slice(1).replace(/^[\/\\]/, ''))
-    : path.resolve(text);
+  const file = path.resolve(expandHome(text));
   try { return { text: fs.readFileSync(file, 'utf8') }; }
   catch (error) { return { file, error }; }
 }
@@ -1481,14 +1527,19 @@ async function linkCommand(cmd, p, line) {
   try {
     switch (cmd) {
       case '/link-code': {
-        if (!p[1] || p.length > 3) {
+        // Web shows the code in two halves, and `ABCD EFGH` is how it gets
+        // typed. A half is never a whole code, so two 4-character tokens are
+        // one code, and the selector, if any, comes after them.
+        const split = p.length >= 3 && p[1].length === 4 && p[2].length === 4;
+        const args = split ? [p[0], p[1] + p[2], ...p.slice(3)] : p;
+        if (!args[1] || args.length > 3) {
           return linkUsage('/link-code CODE [n|id]',
             'CODE  the 8-character code WhatsApp Web shows after "Link with phone number"',
             'n|id  which request, when ' + K.invitations + ' lists more than one: its number or its id');
         }
         requirePrimary();
         linkOutcome(await LinkCli.runLinkCode({
-          client: _client, code: p[1], selector: p[2], confirm: confirmHistory, print: out
+          client: _client, code: args[1], selector: args[2], confirm: confirmHistory, print: out
         }));
         return;
       }
@@ -1578,6 +1629,12 @@ async function linkCommand(cmd, p, line) {
           }
         }
         requirePrimary();
+        // A resend is a resend of the attempt on record; without --resume the
+        // library would refuse it as already attempted.
+        if (options.resendUncertain && !options.resume) {
+          options.resume = true;
+          out('note: --resend-uncertain only counts on a resume, so this runs as ' + K.resend);
+        }
         out('sending the stored history to the companion...');
         const result = await _client.bootstrapPrimaryCompanion(options);
         printLines(LinkCli.formatBootstrapResult(result));
@@ -3111,6 +3168,10 @@ function parseArgs(argv) {
 
 // ─── main ─────────────────────────────────────────────────────────────────────
 
+// The commands main() runs, by name. Keep in step with it.
+const MAIN_COMMANDS = new Set(['connect', 'pair', 'listen', 'registration', 'reg', 'apk-material',
+                               'refresh-version', 'migrate-sessions', 'version', 'help']);
+
 const USAGE = `
 whalibmob v${VERSION}
 
@@ -3239,6 +3300,13 @@ async function main() {
   // connection depends on the answer.
   if (flags.session !== undefined && !(typeof flags.session === 'string' && flags.session.trim())) {
     fail('--session needs a directory, e.g. --session ./sessions');
+    process.exit(1);
+  }
+  // `wa --session connect <phone>` (the folder left out) reads "connect" as
+  // the folder and the phone as the command. A folder named after a command is
+  // that mistake far more often than a real folder, so say where options go.
+  if (typeof flags.session === 'string' && MAIN_COMMANDS.has(flags.session.trim())) {
+    fail('--session needs a directory; put options after the command, e.g. wa connect <phone> --session <dir>');
     process.exit(1);
   }
 
@@ -3712,8 +3780,7 @@ async function main() {
     client.on('reconnecting', ({ delay }) => out('  reconnecting in ' + delay / 1000 + 's...'));
     client.on('reconnected',  ()   => out('  reconnected'));
     client.on('auth_failure', (f)  => { fail('session revoked: ' + f.reason); process.exit(1); });
-    client.on('primary_message_store_error', (e) => fail('message store: ' + LinkCli.explainError(e.code).title +
-      '  (' + e.code + (e.op ? ', ' + e.op : '') + ')'));
+    client.on('primary_message_store_error', (e) => failEvent('message store', e.code, e.op));
     client.on('error',        (e)  => fail(e.message));
 
     process.on('SIGINT', () => { out('\nstopping...'); client.disconnect(); process.exit(0); });

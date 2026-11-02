@@ -193,6 +193,8 @@ async function checkLinkCommands(client: wa.WhalibmobClient, readiness: wa.Prima
   if (result.status === 'sent') { const op: string = result.approval.operationId; const chats: number = result.bootstrap.history.chats; void op; void chats; }
   if (result.status === 'choose') { const n: number = result.groups.length; void n; }
   const qr: wa.LinkQrResult = await L.runLinkQr({ client, payload: 'https://wa.me/settings/linked_devices#x' });
+  // The question names the browser the request was chosen for.
+  await L.runLinkCode({ client, code: 'ABCD1234', confirm: async (ready: wa.PrimaryLinkReadiness, ask: wa.LinkConfirmPrompt) => ready.ready && ask.question.length > 0 && ask.companion !== undefined });
   try { await L.runLinkQr({ client, payload: 'x' }); } catch (error) { L.describeError(error); }
   L.formatLinkedDevices({ phone: '447949738354', devices: await client.listLinkedDevices(), journal: await client.getPrimaryLinkStatus(), history: { chats: 1, records: 2 } });
   const notice: string = L.formatInvitationNotice(client.getPrimaryLinkInvitations()[0], Date.now());

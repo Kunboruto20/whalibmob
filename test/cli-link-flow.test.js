@@ -185,25 +185,28 @@ test('the owner\'s flow: connect, requests, choose, confirm, approve, hand over,
   assert.match(seen, /^ {2}1 {2}browser deadbe02 {3}1 request {3}newest id b2b2b2b2b2b2 {3}expires in 2m \d\ds$/m);
   assert.match(seen, /^ {2}2 {2}browser c0ffee01 {3}1 request {3}newest id a1a1a1a1a1a1 {3}expires in 2m \d\ds$/m);
 
-  // /link-code CODE: the coverage is shown and asked about; Enter is no.
-  seen = await wa.type('/link-code ABCD1234', ASKING);
+  // /link-code CODE with two browsers asking: the choice comes first, so
+  // nothing is asked yet and nothing is approved.
+  seen = await wa.type('/link-code ABCD1234');
+  assert.ok(has(seen, 'more than one browser is asking to link, so nothing was approved. Choose the one this code belongs to.'), seen);
+  assert.match(seen, /^ {2}or by its number \(numbers shift as requests expire\): {2}\/link-code CODE <number>$/m);
+  assert.ok(!seen.includes('[y/N]'), 'asked before the choice was made\n' + seen);
+  assert.equal(calls(dir, 'approveCompanionCode').length, 0);
+
+  // /link-code CODE 2: the coverage is shown, and the one question names that browser; Enter is no.
+  seen = await wa.type('/link-code ABCD1234 2', ASKING);
   assert.ok(has(seen, 'ready to link (first link)'), seen);
   assert.ok(has(seen, 'history to send: 3 chats, 42 messages'), seen);
   assert.match(seen, /^ {2}capture period +since 2026-11-01 09:00 - the store was switched on then/m);
-  assert.ok(seen.endsWith('approve the link and send this history?  [y/N] '), seen);
+  assert.ok(seen.endsWith('approve the link with browser c0ffee01 (request a1a1a1a1) and send it this history?  [y/N] '), seen);
   seen = await wa.type('');
   assert.ok(has(seen, 'cancelled: nothing was approved'), seen);
   assert.equal(calls(dir, 'approveCompanionCode').length, 0);
 
-  // Yes, but two browsers are asking: nothing is approved, and the choice is shown.
-  await wa.type('/link-code ABCD1234', ASKING);
-  seen = await wa.type('y');
-  assert.ok(has(seen, 'more than one browser is asking to link, so nothing was approved. Choose the one this code belongs to.'), seen);
-  assert.match(seen, /^ {2}or by its number \(numbers shift as requests expire\): {2}\/link-code CODE <number>$/m);
-  assert.equal(calls(dir, 'approveCompanionCode').length, 0);
-
-  // /link-code CODE 2: approve that request, then hand over the history, in one go.
-  await wa.type('/link-code ABCD1234 2', ASKING);
+  // The code typed as Web shows it, in two halves, then the choice: one
+  // question, then the approval and the handover in one go.
+  seen = await wa.type('/link-code ABCD EFGH 2', ASKING);
+  assert.equal((seen.match(/\[y\/N\]/g) || []).length, 1, seen);
   seen = await wa.type('yes');
   const order = [
     'approving with the request a1a1a1a1a1a1...',
@@ -215,7 +218,7 @@ test('the owner\'s flow: connect, requests, choose, confirm, approve, hand over,
   const printed = seen.split('\n');
   assert.deepEqual(order.map(l => printed.indexOf(l)).map((at, n, all) => at >= 0 && (n === 0 || at > all[n - 1])), order.map(() => true), seen);
   assert.ok(!seen.slice(0, seen.lastIndexOf('first link')).includes(PROMPT), 'the prompt was redrawn in the middle of the command\n' + seen);
-  assert.deepEqual(calls(dir, 'approveCompanionCode'), [['ABCD1234', { invitationId: A }]]);
+  assert.deepEqual(calls(dir, 'approveCompanionCode'), [['ABCDEFGH', { invitationId: A }]]);
   assert.deepEqual(calls(dir, 'bootstrapPrimaryCompanion'), [[{ history: 'store' }]]);
 
   // /linked-devices and /link-status.
@@ -237,8 +240,13 @@ test('the owner\'s flow: connect, requests, choose, confirm, approve, hand over,
   assert.ok(has(seen, '  (PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN)'), seen);
   seen = await wa.type('/link-bootstrap --resume --resend-uncertain');
   assert.ok(has(seen, 'history handed to the companion: 3 chats, 42 messages, 2.0 KB (sent inline), first link'), seen);
+  assert.ok(!/^note:/m.test(seen), seen);
+  // --resend-uncertain only counts on a resume, so on its own it is one, and says so.
+  seen = await wa.type('/link-bootstrap --resend-uncertain');
+  assert.ok(has(seen, 'note: --resend-uncertain only counts on a resume, so this runs as /link-bootstrap --resume --resend-uncertain'), seen);
   assert.deepEqual(calls(dir, 'bootstrapPrimaryCompanion').slice(1), [
     [{ history: 'store', resume: true, resendUncertain: false }],
+    [{ history: 'store', resume: true, resendUncertain: true }],
     [{ history: 'store', resume: true, resendUncertain: true }]
   ]);
 
@@ -298,9 +306,16 @@ test('a QR link, a link refused before approval, a failure after it, and the eve
       bootstrapPrimaryCompanion: [{ error: { code: 'PRIMARY_BOOTSTRAP_DEVICE_UNCONFIRMED' } }]
     }
   });
-  const start = await wa.until(new RegExp('\\(PRIMARY_MESSAGE_STORE_WRITE_FAILED, append\\)\\n' + ESC(PROMPT) + '$'));
-  assert.ok(has(start, 'error: link request: A link message from WhatsApp could not be processed.  (PRIMARY_LINK_NOTIFICATION_REJECTED)'), start);
-  assert.ok(has(start, 'error: message store: The message store could not write to disk.  (PRIMARY_MESSAGE_STORE_WRITE_FAILED, append)'), start);
+  const start = await wa.until(new RegExp(ESC('then run /reconnect.') + '\\n' + ESC(PROMPT) + '$'));
+  // Each with the step to take, not just what went wrong.
+  const events = printedLines(start);
+  const at = (line) => events.indexOf(line);
+  const linkError = at('error: link request: A link message from WhatsApp could not be processed.  (PRIMARY_LINK_NOTIFICATION_REJECTED)');
+  assert.ok(linkError >= 0, start);
+  assert.equal(events[linkError + 1], '  next: Ask Web for a new code and try again; if it repeats, run /link-status and report the code shown.', start);
+  const storeError = at('error: message store: The message store could not write to disk.  (PRIMARY_MESSAGE_STORE_WRITE_FAILED, append)');
+  assert.ok(storeError >= 0, start);
+  assert.equal(events[storeError + 1], '  next: Free disk space or fix permissions on the session folder, then run /reconnect.', start);
   const [[opts]] = calls(dir, 'constructor');
   assert.deepEqual(opts, { sessionDir: path.join(dir, 'sessions'), messageStore: false });
 
@@ -327,6 +342,7 @@ test('a QR link, a link refused before approval, a failure after it, and the eve
   for (const [line, usage] of [
     ['/link-code', 'error: usage: /link-code CODE [n|id]'],
     ['/link-code A B C', 'error: usage: /link-code CODE [n|id]'],
+    ['/link-code ABCD EFGH 1 2', 'error: usage: /link-code CODE [n|id]'],
     ['/link-qr', 'error: usage: /link-qr PAYLOAD'],
     ['/link-qr a b', 'error: usage: /link-qr PAYLOAD'],
     ['/link-confirm', 'error: usage: /link-confirm FILE|JSON'],
@@ -362,9 +378,9 @@ test('without a connection, and on a companion session, the link commands say wh
 
 // ─── the message store starts at registration ────────────────────────────────
 
-function register(dir, args, input) {
+function register(dir, args, input, scenario) {
   const r = spawnSync(process.execPath, ['-r', FAKE, CLI, ...args], {
-    cwd: dir, env: env(dir, { verify: { status: 'ok' } }), input, encoding: 'utf8', timeout: 20000
+    cwd: dir, env: env(dir, { verify: { status: 'ok' }, ...scenario }), input, encoding: 'utf8', timeout: 20000
   });
   if (r.error) throw r.error;
   return r;
@@ -408,13 +424,65 @@ test('--no-message-store registers without a store', (t) => {
 
 test('a store that will not open is a warning, and the registration stands', (t) => {
   const dir = home(t);
-  // A directory where the store's log has to go.
-  fs.mkdirSync(path.join(dir, 'sessions', PHONE, PHONE + '.primary-messages.log'), { recursive: true });
-  const r = register(dir, ['registration', '--register', PHONE, '--code', '123456', '--session', './sessions'], '/quit\n');
+  const r = register(dir, ['registration', '--register', PHONE, '--code', '123456', '--session', './sessions'], '/quit\n',
+    { storeOpenError: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED' });
   assert.equal(r.status, 0, r.stdout);
-  assert.match(r.stdout, /^warning: the message store did not start: /m, r.stdout);
+  assert.ok(r.stdout.split('\n').includes('warning: the message store did not start: The message store could not write to disk. (PRIMARY_MESSAGE_STORE_WRITE_FAILED)'), r.stdout);
   assert.ok(r.stdout.includes('the registration itself is fine'), r.stdout);
   assert.ok(r.stdout.includes('registered  session saved to'), r.stdout);
   assert.ok(fs.existsSync(path.join(dir, 'sessions', PHONE, PHONE + '.json')));
   assert.doesNotMatch(r.stdout, /^\s+at /m, r.stdout);
+});
+
+// A number registered again keeps nothing of its earlier store in what it
+// hands over: that store began before this registration, and nothing in it
+// records the time between. It is renamed aside, not deleted.
+
+const ASIDE = /\.primary-messages\.(log|json)\.before-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z$/;
+
+function earlierStore(dir) {
+  const at = path.join(dir, 'sessions', PHONE);
+  fs.mkdirSync(at, { recursive: true });
+  const monthAgo = Date.now() - 30 * 86400000;
+  const store = PrimaryMessageStore.open({ dir: at, phone: PHONE, lc: 5, now: () => monthAgo });
+  store.noteLogin(6);
+  store.close();
+  return storeFiles(dir, PHONE).sort();
+}
+
+test('re-registering a number moves its earlier store aside and starts again from registration', (t) => {
+  const dir = home(t);
+  const before = earlierStore(dir);
+  assert.deepEqual(before, [PHONE + '.primary-messages.json', PHONE + '.primary-messages.log']);
+  const started = Date.now();
+  const r = register(dir, ['registration', '--register', PHONE, '--code', '123456', '--session', './sessions'], '/quit\n');
+  assert.equal(r.status, 0, r.stdout);
+  assert.ok(r.stdout.includes('registered  session saved to'), r.stdout);
+
+  // Both files kept, under a name that says when they were set aside.
+  const files = storeFiles(dir, PHONE);
+  const aside = files.filter(f => ASIDE.test(f));
+  assert.deepEqual(aside.map(f => f.replace(/\.before-.*$/, '')).sort(), before, files.join('\n'));
+  const stamp = aside[0].replace(/^.*\.before-/, '');
+  assert.ok(aside.every(f => f.endsWith(stamp)), 'one stamp for the pair');
+  // One line says where.
+  const where = path.join(dir, 'sessions', PHONE, PHONE + '.primary-messages.*.before-' + stamp);
+  assert.equal(r.stdout.split('\n').filter(l => l.includes(where)).length, 1, r.stdout);
+
+  // The store now begins at this registration, at this moment.
+  const store = PrimaryMessageStore.open({ dir: path.join(dir, 'sessions', PHONE), phone: PHONE });
+  try {
+    assert.equal(store.capture.origin, 'registration');
+    assert.ok(store.capture.since >= started && store.capture.since <= Date.now(), JSON.stringify(store.capture));
+  } finally { store.close(); }
+});
+
+test('re-registering with --no-message-store still sets the earlier store aside, and starts none', (t) => {
+  const dir = home(t);
+  const before = earlierStore(dir);
+  const r = register(dir, ['registration', '--register', PHONE, '--code', '123456', '--session', './sessions', '--no-message-store'], '/quit\n');
+  assert.equal(r.status, 0, r.stdout);
+  const files = storeFiles(dir, PHONE);
+  assert.deepEqual(files.filter(f => !ASIDE.test(f)), [], files.join('\n'));
+  assert.deepEqual(files.map(f => f.replace(/\.before-.*$/, '')).sort(), before);
 });

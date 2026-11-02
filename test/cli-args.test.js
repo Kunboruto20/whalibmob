@@ -112,3 +112,23 @@ test('the usage text names --no-message-store and both ways of giving a value', 
   assert.match(r.stdout, /^\s+--no-message-store\s/m, dump(r));
   assert.match(r.stdout, /--session=<dir>/, dump(r));
 });
+
+test('a ~ in --session=~/dir is the home directory, as the shell would have made it', () => {
+  // zsh and bash expand ~ in `--session ~/dir`, but not after an `=`.
+  for (const args of [['migrate-sessions', '--session=~/sessions'], ['--session=~/sessions', 'migrate-sessions'], ['migrate-sessions', '--session', '~/sessions']]) {
+    const r = runCli(args);
+    assert.equal(r.status, 0, dump(r));
+    assert.ok(usedFolder(r, path.join(r.home, 'sessions')), args.join(' ') + '\n' + dump(r));
+    assert.ok(!fs.existsSync(path.join(r.home, '~')), 'a folder named ~ was made');
+  }
+});
+
+test('--session that would swallow the command is refused, and says where options go', () => {
+  const MOVE = 'error: --session needs a directory; put options after the command, e.g. wa connect <phone> --session <dir>';
+  for (const args of [['--session', 'connect', PHONE], ['--session', 'migrate-sessions'], ['--session=version']]) {
+    const r = runCli(args);
+    assert.equal(r.status, 1, dump(r));
+    assert.ok(lines(r.stderr).includes(MOVE), args.join(' ') + '\n' + dump(r));
+    assert.doesNotMatch(r.stderr, /unknown command/, dump(r));
+  }
+});

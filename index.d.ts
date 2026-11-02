@@ -2260,10 +2260,18 @@ export interface LinkCommandError extends Error {
   invitationId?: string;
   operationId?: string;
 }
+/** What `confirm` is asked about: the browser the request was chosen for (a QR names its own). */
+export interface LinkConfirmPrompt {
+  /** The question in words, naming the browser; how to answer it is the front end's to add. */
+  question: string;
+  invitationId?: string;
+  /** The browser's fingerprint; null when the request carries none. */
+  companion?: string | null;
+}
 export interface LinkRunOptions {
   client: LinkCommandsClient;
-  /** Asked once, only when the history is known to be partial; no function is a no. */
-  confirm?: (readiness: PrimaryLinkReadiness) => boolean | Promise<boolean>;
+  /** Asked once, after the request is chosen, only when the history is known to be partial; no function is a no. */
+  confirm?: (readiness: PrimaryLinkReadiness, ask: LinkConfirmPrompt) => boolean | Promise<boolean>;
   /** One line at a time. */
   print?: (line: string) => void;
 }
@@ -2276,7 +2284,7 @@ export type LinkQrResult =
   | { status: 'aborted' };
 /**
  * `whalibmob/lib/cli/linkCommands` — the logic behind the CLI's link commands, with no terminal in it:
- * readiness, an optional coverage confirmation, the choice between pairing requests, the approval, then the
+ * readiness, the choice between pairing requests, an optional coverage confirmation, the approval, then the
  * bootstrap with the stored history; the `/linked-devices` and `/link-status` views; a message and a next step
  * for every error code.
  */

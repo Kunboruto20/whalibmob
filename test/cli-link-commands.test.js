@@ -393,7 +393,7 @@ function fake(over = {}) {
             if (over.bootstrapError) throw over.bootstrapError;
             return over.bootstrap || { status: 'sent', mode: 'first', operationId: 'op-1', history: { chats: 12, records: 340, bytes: 20480, inline: true }, delta: null };
         },
-        confirm: async (...args) => { log('confirm'); return over.confirm === undefined ? true : over.confirm; },
+        confirm: async (readiness, ask) => { log('confirm', ask); return over.confirm === undefined ? true : over.confirm; },
         printed: [],
         print(line) { client.printed.push(line); }
     };
@@ -423,7 +423,8 @@ test('runLinkCode asks before a partial-history link and aborts on no', async ()
     const client = fake({ readiness: PARTIAL({ origin: 'enabled', since: at(2026, 6, 1, 9, 12), evicted: 4 }), confirm: false });
     const result = await run(client);
     assert.deepEqual(result, { status: 'aborted' });
-    assert.deepEqual(client.names(), ['getPrimaryLinkReadiness', 'confirm']);
+    // The request is chosen first, so the question is about one browser.
+    assert.deepEqual(client.names(), ['getPrimaryLinkReadiness', 'getPrimaryLinkInvitations', 'confirm']);
     const text = client.printed.join('\n');
     assert.match(text, /capture period/);
     assert.match(text, /retained range/);
@@ -431,8 +432,42 @@ test('runLinkCode asks before a partial-history link and aborts on no', async ()
 
     // Not asked, and not assumed: a caller with no way to ask is a no.
     const mute = fake({ readiness: PARTIAL({ origin: 'enabled' }) });
-    assert.deepEqual(await L.runLinkCode({ client: mute, code: 'ABCD1234', print: mute.print }), { status: 'aborted' });
-    assert.deepEqual(mute.names(), ['getPrimaryLinkReadiness']);
+    assert.deepEqual(await L.runLinkCode({ client: mute, code: 'ABCD1234', print: mute.print, now: () => NOW }), { status: 'aborted' });
+    assert.deepEqual(mute.names(), ['getPrimaryLinkReadiness', 'getPrimaryLinkInvitations']);
+});
+
+test('runLinkCode names the chosen browser in its question', async () => {
+    const client = fake({ readiness: PARTIAL({ origin: 'enabled' }), invitations: [inv('a', '1a2b3c4d', NOW + 100), inv('b', '99887766', NOW + 200)] });
+    await run(client, { selector: '2' });
+    const [, ask] = client.calls.find(c => c[0] === 'confirm');
+    assert.equal(ask.invitationId, id('a'));
+    assert.equal(ask.companion, '1a2b3c4d');
+    assert.match(ask.question, /browser 1a2b3c4d/);
+    assert.match(ask.question, /aaaaaaaa/);                       // the id, as the arrival notice shows it
+    assert.ok(!ask.question.includes(id('a')), 'not the whole id');
+    assert.ok(!/\[y\/N\]/i.test(ask.question), 'how to answer is the front end\'s');
+    // A request with no fingerprint is still named by its id.
+    const bare = fake({ readiness: PARTIAL({ origin: 'enabled' }), invitations: [inv('c', null, NOW + 100)] });
+    await run(bare);
+    const [, bareAsk] = bare.calls.find(c => c[0] === 'confirm');
+    assert.match(bareAsk.question, /cccccccc/);
+    assert.ok(!/null|undefined/.test(bareAsk.question), bareAsk.question);
+});
+
+test('runLinkCode asks nothing while it still needs a choice between browsers', async () => {
+    // The owner was asked y/N, then told to choose, then asked again on the re-run.
+    const client = fake({ readiness: PARTIAL({ origin: 'enabled' }), invitations: [inv('a', '1a2b3c4d', NOW + 100), inv('b', '99887766', NOW + 200)] });
+    const result = await run(client);
+    assert.equal(result.status, 'choose');
+    assert.deepEqual(client.names(), ['getPrimaryLinkReadiness', 'getPrimaryLinkInvitations']);
+    assert.ok(!/capture period/.test(client.printed.join('\n')), 'the coverage waits for the run that asks');
+    // Nor when the selector matches nothing, nor when nothing is waiting.
+    const none = fake({ readiness: PARTIAL({ origin: 'enabled' }), invitations: [inv('a', '1a2b3c4d', NOW + 100)] });
+    assert.equal((await run(none, { selector: '7' })).status, 'choose');
+    assert.ok(!none.names().includes('confirm'));
+    const empty = fake({ readiness: PARTIAL({ origin: 'enabled' }), invitations: [] });
+    await assert.rejects(run(empty), error => error.code === 'PRIMARY_LINK_INVITATION_REQUIRED');
+    assert.ok(!empty.names().includes('confirm'));
 });
 
 test('runLinkCode does not ask when the history is not known to be partial', async () => {
@@ -448,7 +483,7 @@ test('runLinkCode approves then bootstraps with the chosen invitation', async ()
         invitations: [inv('a', '1a2b3c4d', NOW + 100), inv('b', '1a2b3c4d', NOW + 300), inv('c', '1a2b3c4d', NOW + 200)]
     });
     const result = await run(client);
-    assert.deepEqual(client.names(), ['getPrimaryLinkReadiness', 'confirm', 'getPrimaryLinkInvitations', 'approveCompanionCode', 'bootstrapPrimaryCompanion']);
+    assert.deepEqual(client.names(), ['getPrimaryLinkReadiness', 'getPrimaryLinkInvitations', 'confirm', 'approveCompanionCode', 'bootstrapPrimaryCompanion']);
     assert.deepEqual(client.calls[3], ['approveCompanionCode', 'ABCD1234', { invitationId: id('b') }]);   // the newest of the three duplicates
     assert.deepEqual(client.calls[4], ['bootstrapPrimaryCompanion', { history: 'store' }]);
     assert.equal(result.status, 'sent');
@@ -559,6 +594,10 @@ test('runLinkQr checks readiness, asks if partial, approves the QR, then bootstr
     const client = fake({ readiness: PARTIAL({ origin: 'enabled' }) });
     const result = await L.runLinkQr({ client, payload: 'https://wa.me/settings/linked_devices#x', confirm: client.confirm, print: client.print });
     assert.deepEqual(client.names(), ['getPrimaryLinkReadiness', 'confirm', 'approveCompanionQr', 'bootstrapPrimaryCompanion']);
+    // The QR names its own browser; the question says it is the one behind the QR.
+    const [, ask] = client.calls.find(c => c[0] === 'confirm');
+    assert.match(ask.question, /QR/);
+    assert.ok(!/\[y\/N\]/i.test(ask.question));
     assert.equal(client.calls[2][1], 'https://wa.me/settings/linked_devices#x');
     assert.deepEqual(client.calls[3], ['bootstrapPrimaryCompanion', { history: 'store' }]);
     assert.equal(result.status, 'sent');

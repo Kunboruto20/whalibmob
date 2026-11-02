@@ -20,6 +20,8 @@
 //                 an answer is { result } or { error: { code, ... } }, with
 //                 optional emit: [[event, payload], ...] sent first
 //   verify        what verifyCode resolves with
+//   storeOpenError  a code PrimaryMessageStore.open throws, for a store that
+//                 will not open
 //
 // `node --test` runs every .js under test/, helpers included, so without
 // WA_FAKE_CLIENT this does nothing at all.
@@ -92,6 +94,10 @@ function install(file) {
   }
 
   lib.WhalibmobClient = FakeClient;
+  if (scenario.storeOpenError) {
+    const { PrimaryMessageStore } = require(path.join(__dirname, '..', '..', 'lib', 'primary', 'MessageStore'));
+    PrimaryMessageStore.open = () => { throw Object.assign(new Error(scenario.storeOpenError), { code: scenario.storeOpenError }); };
+  }
   if (scenario.verify) {
     lib.verifyCode = async (store, code) => { log('verifyCode', [code]); return scenario.verify; };
   }
