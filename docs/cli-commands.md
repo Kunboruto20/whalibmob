@@ -372,6 +372,17 @@ wa> /read   919634847671
 wa> /unread 919634847671
 ```
 
+Incoming messages are marked read as they arrive, which is what senders see as
+the blue ticks. To stop that for this shell, and to turn it back on:
+
+```sh
+wa> /autoread off
+auto read receipts  off
+wa> /autoread on
+```
+
+The library option behind it is `new WhalibmobClient({ autoRead: false })`.
+
 #### Mute / Unmute
 
 ```sh
@@ -969,7 +980,7 @@ wa> /connect 919634847671 pair
 # link to an existing account by 8-digit pairing code
 wa> /pair 919634847671
 
-# or link by scanning a QR drawn in the terminal
+# or link by scanning a QR drawn in the terminal (/qr works too)
 wa> /qrcode 919634847671
 
 # with a code you chose yourself (exactly 8 characters)
@@ -980,6 +991,15 @@ wa> /disconnect
 
 # force a reconnection
 wa> /reconnect
+
+# when /connect reports that WhatsApp files the account under another form of
+# the number (Brazilian mobiles with and without the ninth digit, for example),
+# move the session's files to that number, then connect with it
+wa> /fixnumber
+renaming session +5511987654321 → +551187654321...
+  moved 6 file(s)
+now connect with the number WhatsApp uses:
+  /connect 551187654321
 
 # show current session info
 wa> /session
@@ -1085,6 +1105,7 @@ Each step, with its output in full, is in [Linking WhatsApp Web from the CLI](li
 | **Chat Management** | |
 | `/read <jid>` | Mark chat as read |
 | `/unread <jid>` | Mark chat as unread |
+| `/autoread on\|off` | Send read receipts for incoming messages automatically (on by default) |
 | `/mute <jid> [minutes]` | Mute a chat (indefinitely if no minutes given) |
 | `/unmute <jid>` | Unmute a chat |
 | `/pin <jid>` | Pin a chat |
@@ -1156,7 +1177,8 @@ Each step, with its output in full, is in [Linking WhatsApp Web from the CLI](li
 | **Connection** | |
 | `/connect <phone> [sms\|pair]` | Connect to WhatsApp — picks the method from the session files when unset |
 | `/pair <phone> [code]` | Link to an existing account by 8-digit pairing code |
-| `/qrcode <phone>` | Link to an existing account by scanning a QR drawn in the terminal |
+| `/qrcode <phone>` | Link to an existing account by scanning a QR drawn in the terminal (`/qr` is the same) |
+| `/fixnumber` | Re-file the session under the number WhatsApp uses, after `/connect` reported a mismatch |
 | `/disconnect` | Disconnect current session |
 | `/reconnect` | Force reconnection |
 | `/session` | Show session info |

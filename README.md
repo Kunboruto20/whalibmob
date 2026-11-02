@@ -157,7 +157,7 @@ async function main() {
 main().catch(err => { console.error(err.message || err); process.exit(1) })
 ```
 
-The client reconnects by itself after a dropped connection — do not create a new one on `disconnected`. Prefer no code at all? The [CLI](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli-getting-started.md#cli--getting-started) does the same in two commands. A brand-new account is watched closely by WhatsApp's anti-abuse checks, so send the first messages to people who have your number saved — see [Accounts](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts.md#why-registration-can-be-blocked--the-anti-abuse-landscape).
+The client reconnects by itself after a dropped connection — do not create a new one on `disconnected`. Prefer no code at all? The [CLI](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli-getting-started.md#cli--getting-started) does the same in a few commands: request the code, register, connect, then `/send`. A brand-new account is watched closely by WhatsApp's anti-abuse checks, so send the first messages to people who have your number saved — see [Accounts](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts.md#why-registration-can-be-blocked--the-anti-abuse-landscape).
 
 
 ## Approving a Companion Device

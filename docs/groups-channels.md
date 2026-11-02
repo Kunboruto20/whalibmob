@@ -94,6 +94,19 @@ await client.changeGroupSetting('120363000000000000@g.us', 'edit_group_info', 'a
 await client.changeGroupSetting('120363000000000000@g.us', 'add_participants', 'all')
 ```
 
+The same settings, one call each:
+
+```js
+const g = '120363000000000000@g.us'
+
+await client.setGroupAnnounce(g, true)               // only admins can send messages
+await client.setGroupLocked(g, true)                 // only admins can edit the subject, description and icon
+await client.setGroupJoinApprovalMode(g, true)       // new members wait for an admin's approval
+await client.setGroupMemberAddMode(g, 'admin_add')   // 'admin_add' | 'all_member_add'
+```
+
+Each throws when the server refuses (for example when you are not an admin).
+
 ### Leave a Group
 
 ```js
@@ -111,17 +124,27 @@ console.log(link)
 ### Revoke Invite Code
 
 ```js
-await client.revokeGroupInvite('120363000000000000@g.us')
+// the old link stops working; the new one comes back
+const newLink = await client.revokeGroupInvite('120363000000000000@g.us')
+// revokeGroupInviteLink() is the same call
 ```
 
 ### Join Using Invitation Code
 
-> [!NOTE]
-> Pass only the code portion — do not include `https://chat.whatsapp.com/`
+Pass the code or the whole `https://chat.whatsapp.com/…` link:
 
 ```js
 const jid = await client.acceptGroupInvite('AbCdEfGhIjK')
-console.log('joined', jid)
+console.log('joined', jid)   // null when the link was refused
+```
+
+A group can make joins wait for an admin's approval. `joinGroupWithLink()` says
+which happened, and throws with the reason when the link is refused (revoked or
+not valid):
+
+```js
+const { jid, pendingApproval } = await client.joinGroupWithLink('https://chat.whatsapp.com/AbCdEfGhIjK')
+console.log(pendingApproval ? 'waiting for approval in' : 'joined', jid)
 ```
 
 ### Query Invite Info from Link
@@ -133,7 +156,7 @@ Fetch a group's metadata from an invite code or full URL **without** joining the
 const info = await client.queryGroupInviteInfo('AbCdEfGhIjKlMnOpQrStUv')
 
 // or pass the full URL — the code is extracted automatically
-const info = await client.queryGroupInviteInfo('https://chat.whatsapp.com/AbCdEfGhIjKlMnOpQrStUv')
+const sameInfo = await client.queryGroupInviteInfo('https://chat.whatsapp.com/AbCdEfGhIjKlMnOpQrStUv')
 
 console.log(info)
 // {
@@ -218,6 +241,14 @@ console.log(meta.subject, meta.participants.length + ' members')
 
 Both addresses are filled in on every participant whichever way round the server
 named them, so you never have to resolve a LID by hand to know who somebody is.
+
+The metadata is cached for a few minutes. To read past the cache:
+
+```js
+await client.getGroupMetadata(groupJid, { force: true })   // ask the server now
+client.invalidateGroupMetadata(groupJid)                   // the next read asks the server
+const members = await client.refreshGroupMembers(groupJid) // just the participants array
+```
 
 ### Get Request Join List
 
