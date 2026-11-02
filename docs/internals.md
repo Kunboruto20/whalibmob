@@ -206,6 +206,7 @@ These variables override individual fields on top of the selected profile:
 | `WA_DEVICE_BUILD` | Build fingerprint (e.g. `UP1A.231005.007`) |
 | `WA_DEVICE_MODEL_ID` | Model ID slug (e.g. `samsung-sm-s928b`) |
 | `WA_DEVICE_RAM` | Usable RAM in GiB, as Android reports it (e.g. `7.53`). Each named profile carries its own; set this only for a different memory variant of the same model. |
+| `WA_DEVICE_BOARD` | Android only: the board name, as the phone reports it in `Build.BOARD`, announced in the user agent. Unset by default, and then left out, as the app does when the board is empty. Set it only to the real board of the model you announce. |
 
 ### Declaring your SIM
 
@@ -236,6 +237,7 @@ nothing changes from before.
 |---|---|
 | `WA_VERSION` | Pin the WhatsApp version (e.g. `2.24.13.80`). Skips the live store fetch, and is announced on connect **in place of the version stored in the session**. The CLI also reads it from a `.env` file in the working directory, so one left there is announced by every connect from that directory — which is how a working session starts being refused with [405](#when-the-server-answers-405-on-connect). Pin it deliberately, unset it when done. |
 | `WA_STATIC_TOKEN` | Override the static token used in registration token computation. iOS only — Android has no static token. Overrides both the consumer and the Business constant. |
+| `WA_GP_HASH` | Android only: the `_gp` value (base64) registration sends, the hash of the app's declared permissions. Used only when no APK material supplies it (see [Device Attestation](attestation.md#device-attestation--play-integrity-and-app-attest)); otherwise a value observed from a current client is sent. Set it when a new WhatsApp version changes the permission list. |
 | `WA_BUSINESS` | Register and connect as WhatsApp Business (`1`/`true`/`yes`/`on`). Decides the announced platform, the User-Agent, which APK the token material comes from, and the `vname` certificate. See [Registering a WhatsApp Business account](registration.md#registering-a-whatsapp-business-account). |
 
 ### When the server answers 405 on connect

@@ -275,18 +275,15 @@ The library automatically writes these files to `sessionDir` per account. You do
 
 ### Reading the History Store
 
-After history sync completes you can read the on-disk files directly:
+After history sync completes, the client hands both files back parsed. On a
+companion they are the `.web.` files; either call returns `null` until the first
+history sync has written one:
 
 ```js
-const fs   = require('fs')
-const path = require('path')
-
-const sessDir = path.join(process.env.HOME, '.waSession')
-const phone   = '919634847671'
-
 // ── Read chats ────────────────────────────────────────────────────────────────
-const histPath = path.join(sessDir, phone + '.history.json')
-const hist     = JSON.parse(fs.readFileSync(histPath, 'utf8'))
+const hist = client.getHistoryStore()     // <phone>.history.json, parsed
+const msgs = client.getMessagesStore()    // <phone>.messages.json, parsed
+if (!hist || !msgs) throw new Error('no history synced yet')
 
 // List all chats sorted by last message time
 const chats = Object.values(hist.chats)
@@ -306,12 +303,54 @@ const myPn = hist.lidPnMap[myLid]
 console.log('PN:', myPn)
 
 // ── Read message metadata ─────────────────────────────────────────────────────
-const msgPath = path.join(sessDir, phone + '.messages.json')
-const msgs    = JSON.parse(fs.readFileSync(msgPath, 'utf8'))
 const msgList = Object.values(msgs).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
 console.log('Total messages indexed:', msgList.length)
 console.log('Latest:', msgList[0])
 ```
+
+Without a client, read the files themselves. They sit in the number's own
+folder, which `sessionDirFor()` resolves (it also finds a session kept in the
+older layout, loose in the base folder):
+
+```js
+const fs   = require('fs')
+const os   = require('os')
+const path = require('path')
+const { sessionDirFor } = require('whalibmob')
+
+const phone = '919634847671'
+const dir   = sessionDirFor(path.join(os.homedir(), '.waSession'), phone)
+const hist  = JSON.parse(fs.readFileSync(path.join(dir, phone + '.history.json'), 'utf8'))
+```
+
+### LID ↔ Phone Number on a Live Client
+
+Messages more and more often arrive from a LID (`…@lid`) rather than a phone
+number. The client keeps the pairs it has learned — from history sync, from
+message senders and from earlier sessions — and answers from memory, without a
+request to the server:
+
+```js
+client.getLIDForPN('919634847671@s.whatsapp.net')   // '112345678901234@lid', or null
+client.getPNForLID('112345678901234@lid')           // '919634847671@s.whatsapp.net', or null
+```
+
+Both accept a bare number or a full JID, device suffix included, and return
+`null` for a pair the client has not seen yet.
+
+### Asking for Older Messages
+
+On a companion, `fetchMessageHistory()` asks the phone for messages older than
+one you already have. The answer arrives later, as an ordinary `history_sync`:
+
+```js
+// key and timestamp of the oldest message you hold in that chat
+const oldest = { remoteJid: '919634847671@s.whatsapp.net', id: '3EB0A1B2C3D4E5F6', fromMe: false }
+await client.fetchMessageHistory(50, oldest, 1730000000000)   // count, key, timestamp in ms
+```
+
+The phone decides how much it sends, and sends nothing for a chat it no longer
+holds.
 
 `hist.chats` schema per chat entry:
 

@@ -733,6 +733,9 @@ const sent = await client.bootstrapPrimaryCompanion({ history: 'store' })
 | `getPrimaryLinkLockHolder()` | Who holds the link journal lock, read without breaking it: `{ holder }`, `null` when none is held. Throws `PRIMARY_LINK_BUSY` while this process holds the journal. |
 | `unlockPrimaryLink({ holder })` | Breaks the link journal lock, as `/link-unlock` does after its yes. With `holder` (as `getPrimaryLinkLockHolder()` returned it), only that holder: a lock that names another one by then is left alone, with `PRIMARY_LINK_STORE_BUSY` and `err.holder`. Returns `{ holder }` (`null` when none was held) and throws `PRIMARY_LINK_BUSY` while this process holds the journal. |
 | `getPrimaryLinkInvitations()` | Each pending request carries `companion`, the browser's short fingerprint (`null` when the request has none). A label, never authorisation. |
+| `listLinkedDevices()` | This number's companions, from a fresh device list asked of the server: `[{ deviceId, keyIndex }]`. The phone itself (device 0) is left out. |
+| `getPrimaryLinkStatus()` | Read-only: the fresh device list plus the link's non-secret progress: `phase`, `confirmed`, `method` (`'code'` or `'qr'`), `linkedAt`, `deviceId`, `bootstrapPhase`, `delivered` (what the history handed over held) and, once a bootstrap has started, `bootstrap.resumable`. |
+| `retireAbsentPrimaryLink({ timeoutMs, signal })` | What `/link-retire` runs. Abandons an approval that never became a device, at least 5 minutes after it was sent, and only once two fresh server lists match the list from before it. Never removes a device or reuses the key index it had reserved. Returns `{ status: 'abandoned', operationId }`. |
 
 A store started by `init()` counts as switched on at that moment (`origin: 'enabled'`). To have the store count as kept "since registration", as the CLI does, open it once at registration time, right after `verifyCode()` has registered the number and before its first `init()`:
 

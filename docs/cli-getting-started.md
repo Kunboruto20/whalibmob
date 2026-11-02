@@ -345,6 +345,20 @@ The debug prompt works the same in both modes. Answer `y` at startup, or pass `-
 wa pair 919634847671 --debug
 ```
 
+#### The two questions at startup
+
+A command that connects asks two things first: `do you want debug full?` (print
+every stanza) and whether you want to donate. Neither is asked when input is not
+a terminal (a script, a pipe, a service), nor by commands that never connect
+(`version`, `help`, `apk-material`, `refresh-version`, `migrate-sessions`). To
+answer them in advance:
+
+| Setting | Effect |
+|---|---|
+| `--debug` or `WA_DEBUG=1` | Print every stanza, without asking |
+| `--no-debug`, `--quiet`, `-q` or `WA_DEBUG=0` | Print none, without asking |
+| `WA_NO_DONATE=1` | Skip the donation question |
+
 From inside the shell:
 
 ```sh

@@ -163,8 +163,72 @@ Instale a CLI globalmente:
 npm install -g whalibmob
 ```
 
+## Início Rápido
+
+Um único script que registra o número na primeira execução e depois conecta e envia uma mensagem. Salve-o como `quick-start.js`, ajuste `PHONE` e `TO` e rode `node quick-start.js`.
+
+```js
+const {
+  WhalibmobClient, createNewStore, loadStore, saveStore,
+  requestSmsCode, verifyCode, storeFileFor
+} = require('whalibmob')
+const os = require('os')
+const path = require('path')
+const readline = require('readline/promises')
+
+const PHONE    = '5511987654321'               // seu número: código do país + número, sem '+'
+const TO       = '5511912345678'               // para quem enviar
+const BASE_DIR = path.join(os.homedir(), '.waSession')
+
+async function register(phone) {
+  const store = createNewStore(phone, { name: 'Meu Bot' })
+  await requestSmsCode(store, 'sms')           // ou 'voice'; lança um erro quando recusado
+
+  const rl   = readline.createInterface({ input: process.stdin, output: process.stdout })
+  const code = (await rl.question('código de 6 dígitos: ')).replace(/\D/g, '')
+  rl.close()
+
+  const result = await verifyCode(store, code) // atualiza `store` no lugar
+  if (!['ok', 'sent', 'verified'].includes(result.status)) {
+    throw new Error('o registro falhou: ' + JSON.stringify(result))
+  }
+  store.registered  = true
+  store.codePending = false
+  // Salvo só depois de registrado, então um arquivo de sessão sempre quer dizer uma conta ativa.
+  saveStore(store, storeFileFor(BASE_DIR, store.phoneNumber))
+  if (store.phoneNumber !== phone) {
+    // O WhatsApp pode arquivar a conta sob uma forma um pouco diferente do número.
+    console.log(`O WhatsApp conhece esta conta como +${store.phoneNumber}: ajuste PHONE para '${store.phoneNumber}'`)
+  }
+  return store.phoneNumber
+}
+
+async function main() {
+  let phone = PHONE
+  // Registrar de novo substituiria a conta, então uma sessão salva é usada como está.
+  if (!loadStore(storeFileFor(BASE_DIR, phone))) phone = await register(phone)
+
+  const client = new WhalibmobClient({ sessionDir: BASE_DIR })
+  client.on('connected',    () => console.log('conectado como +' + phone))
+  client.on('reconnecting', ({ attempt }) => console.log('reconectando, tentativa', attempt))
+  client.on('auth_failure', ({ reason }) => { console.error('a sessão terminou:', reason); process.exit(1) })
+  client.on('message', msg => {
+    const d = msg.decoded
+    if (d && d.type === 'text') console.log('mensagem de', msg.from + ':', d.text)
+  })
+
+  await client.init(phone)                     // resolve assim que o login é aceito
+  await client.sendText(TO, 'Olá do whalibmob!')
+}
+
+main().catch(err => { console.error(err.message || err); process.exit(1) })
+```
+
+O cliente se reconecta sozinho depois de uma queda de conexão: não crie um novo no evento `disconnected`. Prefere não escrever código? A [CLI](#cli--primeiros-passos) faz o mesmo em poucos comandos: pedir o código, registrar, conectar e então `/send`. Uma conta recém-criada é observada de perto pelas verificações antiabuso do WhatsApp, então envie as primeiras mensagens para pessoas que têm o seu número salvo; veja [Por que o Registro Pode Ser Bloqueado](#por-que-o-registro-pode-ser-bloqueado--o-cenário-de-antiabuso).
+
 ## Índice
 
+- [Início Rápido](#início-rápido)
 - [Atestação de Dispositivo — Play Integrity e App Attest](#atestação-de-dispositivo--play-integrity-e-app-attest)
 - [CLI — Primeiros Passos](#cli--primeiros-passos)
   - [Instalar a CLI](#instalar-a-cli)
@@ -240,6 +304,7 @@ npm install -g whalibmob
   - [Comando de Perfil Comercial](#comando-de-perfil-comercial-cli)
   - [Comandos de Registro (no shell)](#comandos-de-registro-no-shell)
   - [Comandos de Conexão (no shell)](#comandos-de-conexão-no-shell)
+  - [Comandos de Companion (Aprovando o WhatsApp Web)](#comandos-de-companion-aprovando-o-whatsapp-web)
   - [Tabela Completa de Referência de Comandos](#tabela-completa-de-referência-de-comandos)
 - [API da Biblioteca](#api-da-biblioteca)
   - [Conectando a Conta](#conectando-a-conta)
@@ -274,6 +339,15 @@ npm install -g whalibmob
     - [Lidando com Reconexões](#lidando-com-reconexões)
     - [Sabendo em Qual Modo Você Está](#sabendo-em-qual-modo-você-está)
     - [Duas Sessões em um Único Número](#duas-sessões-em-um-único-número)
+  - [Aprovando um Dispositivo Companion (Papel Primário)](#aprovando-um-dispositivo-companion-papel-primário)
+    - [Aprovar por código de pareamento](#aprovar-por-código-de-pareamento)
+    - [Aprovar por QR](#aprovar-por-qr)
+    - [O fluxo awaiting_confirmation → reconcile](#o-fluxo-awaiting_confirmation--reconcile)
+    - [Vinculando o WhatsApp Web pela CLI](#vinculando-o-whatsapp-web-pela-cli)
+    - [O que o Histórico Cobre](#o-que-o-histórico-cobre)
+    - [Vinculando de Novo](#vinculando-de-novo)
+    - [Quando Algo Para no Meio](#quando-algo-para-no-meio)
+    - [API da Biblioteca para o Histórico de Conversas](#api-da-biblioteca-para-o-histórico-de-conversas)
   - [O Número sob o Qual o WhatsApp Arquiva sua Conta](#o-número-sob-o-qual-o-whatsapp-arquiva-sua-conta)
   - [Quando o Registro É Recusado por Falta de Consentimento](#quando-o-registro-é-recusado-por-falta-de-consentimento)
   - [O Push Token](#o-push-token)
@@ -283,6 +357,7 @@ npm install -g whalibmob
   - [Roteando o Tráfego por um Proxy](#roteando-o-tráfego-por-um-proxy)
     - [O que Passa por Ele](#o-que-passa-por-ele)
   - [Salvando e Restaurando Sessões](#salvando-e-restaurando-sessões)
+    - [Arquivos que o Primário Guarda para Companions Vinculados](#arquivos-que-o-primário-guarda-para-companions-vinculados)
     - [Mantendo a Versão Anunciada Atualizada](#mantendo-a-versão-anunciada-atualizada)
     - [Pré-chaves de Uso Único](#pré-chaves-de-uso-único)
     - [De Onde Vem a Pasta](#de-onde-vem-a-pasta)
@@ -304,6 +379,8 @@ npm install -g whalibmob
     - [Ouvindo os Eventos de Sincronização de Histórico](#ouvindo-os-eventos-de-sincronização-de-histórico)
     - [Arquivos Persistentes Gravados em Disco](#arquivos-persistentes-gravados-em-disco)
     - [Lendo o History Store](#lendo-o-history-store)
+    - [LID ↔ Número de Telefone num Cliente Ativo](#lid--número-de-telefone-num-cliente-ativo)
+    - [Pedindo Mensagens Mais Antigas](#pedindo-mensagens-mais-antigas)
     - [tcToken — Defesa contra o Erro 463](#tctoken--defesa-contra-o-erro-463)
     - [Quando o 463 Significa que a Conta Está Restrita](#quando-o-463-significa-que-a-conta-está-restrita)
     - [O que É Automático e o que Você Precisa Fazer](#o-que-é-automático-e-o-que-você-precisa-fazer)
@@ -625,6 +702,69 @@ A CLI pergunta uma única vez, na primeira execução, como chamar essa pasta, e
 `~/.whalibmob.json`. Cada número ganha a sua própria pasta lá dentro — veja
 [Salvando e Restaurando Sessões](#salvando-e-restaurando-sessões).
 
+As opções podem vir antes do comando ou depois dele, e `--nome=valor` é o mesmo
+que `--nome valor`: `wa --session /data/my-sessions connect 919634847671`.
+
+**Um número registrado guarda um registro das suas mensagens.** A CLI grava o
+que o número envia e recebe na pasta da sessão, a partir do registro (para um
+número registrado antes, a partir da primeira conexão com o registro ligado),
+para que um companion vinculado depois (o WhatsApp Web, veja
+[Comandos de Companion](#comandos-de-companion-aprovando-o-whatsapp-web)) possa
+receber isso como histórico de conversas. Passe `--no-message-store` para não
+guardar nada:
+
+```sh
+wa connect 919634847671 --no-message-store
+```
+
+Sem registro não há nada para entregar, e o `/link-code` avisa isso. A
+biblioteca faz o contrário e não guarda nada a menos que seja pedido
+([`messageStore`](#api-da-biblioteca-para-o-histórico-de-conversas)).
+
+Se os arquivos do registro estiverem danificados, o armazenamento se recusa a
+abrir (`PRIMARY_MESSAGE_STORE_LOG_CORRUPT` ou
+`PRIMARY_MESSAGE_STORE_SNAPSHOT_CORRUPT`) e as mensagens continuam sem ele. O
+`--reset-message-store` o começa de novo: os arquivos danificados são mantidos,
+renomeados para `<arquivo>.corrupt-<hora>`, e o registro começa de agora,
+contado como ligado nesse momento. Ele não pode ser combinado com
+`--no-message-store`.
+
+```sh
+wa connect 919634847671 --reset-message-store
+```
+
+O registro de um número fica aberto em um programa de cada vez. Um segundo `wa`
+na mesma pasta de sessão, aqui ou em outro processo, tem o registro recusado
+(`PRIMARY_MESSAGE_STORE_BUSY`) e roda sem ele; o erro nomeia quem o segura
+(pid, host, desde quando). Feche o outro, ou espere ele terminar, e então
+`/reconnect`.
+
+Um `wa` que caiu onde o seu fim não pode ser provado daqui (rodava em outra
+máquina ou em outro contêiner, o seu pid passou para outro programa, ou ele
+morreu antes de escrever o seu nome na trava) deixa o registro recusado para
+sempre. O `--unlock-message-store` é a saída: antes de o registro abrir, ele
+mostra quem segura a trava e pergunta `[y/N]`; Enter é não, e só `y` a quebra.
+Responda `y` apenas quando nenhum outro `wa` estiver usando o número. Um `wa`
+que na verdade ainda estava rodando para de guardar mensagens na sua próxima
+gravação (`PRIMARY_MESSAGE_STORE_LOST`), e o que ele guardou continua lá.
+
+```sh
+wa connect 919634847671 --unlock-message-store
+the message store of +919634847671 is locked by pid 4242 on old-box, since 2026-11-02 15:31
+  Break it only if no other wa is using this number: one that stopped, or ran on a machine or in a container that no longer runs it.
+  A wa that is in fact still running stops keeping messages at its next write; what it already kept stays in the store.
+break the lock held by pid 4242 on old-box?  [y/N] y
+broke the message store lock held by pid 4242 on old-box
+```
+
+Ele age uma vez, no primeiro número para o qual a execução abre um registro:
+`wa connect`, o `/connect` do shell quando o `wa` foi iniciado com ele, ou um
+registro (`/reg confirm`, `wa registration --register` num terminal). O
+`wa listen` não pode perguntar: com a opção e uma trava segurada, ele nomeia
+quem a segura e sai. Registrar um número de novo põe o registro anterior de
+lado sob a mesma trava, então um registro que outro `wa` segura não é movido: o
+aviso nomeia quem o segura.
+
 > [!IMPORTANT]
 > **Se isso for recusado com `405`, não registre o número de novo.** A conta
 > está bem; o servidor recusou a versão que a conexão anunciou. Verifique se existe uma
@@ -688,6 +828,20 @@ O prompt de debug funciona igual nos dois modos. Responda `y` na inicialização
 ```sh
 wa pair 919634847671 --debug
 ```
+
+#### As duas perguntas da inicialização
+
+Um comando que conecta pergunta duas coisas antes: `do you want debug full?`
+(imprimir cada stanza) e se você quer fazer uma doação. Nenhuma das duas é
+feita quando a entrada não é um terminal (um script, um pipe, um serviço), nem
+pelos comandos que nunca conectam (`version`, `help`, `apk-material`,
+`refresh-version`, `migrate-sessions`). Para respondê-las de antemão:
+
+| Configuração | Efeito |
+|---|---|
+| `--debug` ou `WA_DEBUG=1` | Imprime cada stanza, sem perguntar |
+| `--no-debug`, `--quiet`, `-q` ou `WA_DEBUG=0` | Não imprime nenhuma, sem perguntar |
+| `WA_NO_DONATE=1` | Pula a pergunta da doação |
 
 De dentro do shell:
 
@@ -1085,6 +1239,18 @@ pinned  (this session only — no app state key)
 wa> /read   919634847671
 wa> /unread 919634847671
 ```
+
+As mensagens recebidas são marcadas como lidas conforme chegam, que é o que o
+remetente vê como os tiques azuis. Para parar com isso neste shell, e para ligar
+de novo:
+
+```sh
+wa> /autoread off
+auto read receipts  off
+wa> /autoread on
+```
+
+A opção da biblioteca por trás disso é `new WhalibmobClient({ autoRead: false })`.
 
 #### Silenciar / Reativar Som
 
@@ -1683,7 +1849,7 @@ wa> /connect 919634847671 pair
 # link to an existing account by 8-digit pairing code
 wa> /pair 919634847671
 
-# or link by scanning a QR drawn in the terminal
+# or link by scanning a QR drawn in the terminal (/qr works too)
 wa> /qrcode 919634847671
 
 # with a code you chose yourself (exactly 8 characters)
@@ -1694,6 +1860,15 @@ wa> /disconnect
 
 # force a reconnection
 wa> /reconnect
+
+# when /connect reports that WhatsApp files the account under another form of
+# the number (Brazilian mobiles with and without the ninth digit, for example),
+# move the session's files to that number, then connect with it
+wa> /fixnumber
+renaming session +5511987654321 → +551187654321...
+  moved 6 file(s)
+now connect with the number WhatsApp uses:
+  /connect 551187654321
 
 # show current session info
 wa> /session
@@ -1707,6 +1882,55 @@ wa> /help
 # disconnect and exit the shell
 wa> /quit
 ```
+
+---
+
+### Comandos de Companion (Aprovando o WhatsApp Web)
+
+Um número registrado pelo whalibmob é o dispositivo primário da conta. Estes comandos permitem que ele aprove o **WhatsApp Web** como companion e lhe entregue o histórico de conversas que o programa guardou para o número. Eles exigem o número conectado como primário (`wa connect <telefone>`, com `--sms` se o número também tiver uma sessão de companion); uma sessão de companion recebe `PRIMARY_LINK_PRIMARY_REQUIRED`.
+
+O fluxo inteiro, cada comando digitado como mostrado:
+
+```sh
+wa connect 447949738354 --session ~/whalibmob_auth
+```
+
+1. No WhatsApp Web escolha **Conectar com número de telefone** e digite `447949738354`. O Web mostra um código de 8 caracteres, válido por cerca de três minutos. O shell imprime `link request   companion c0ffee01   code window 2:50   id a1a1a1a1`.
+2. `wa> /link-code ABCD-EFGH` — o hífen, as maiúsculas e um espaço entre as metades não importam.
+3. Com mais de um navegador pedindo, nada é aprovado e o shell lista todos. Repita com o número ou o id do seu: `/link-code ABCD-EFGH 2`.
+4. Se o histórico é sabidamente parcial, o shell imprime a cobertura e pergunta `[y/N]`; Enter é não.
+5. O sucesso diz `history handed to the companion: 12 chats, 340 messages, 20.0 KB (sent inline), first link`, depois onde a captura começou e, para um histórico parcial, o que foi descartado e perdido. Um histórico acima de 64 KiB comprimido sobe antes como um blob, anunciado como `uploading history (2.0 MB)... this can take a few minutes`; espere. Confira:
+
+```
+wa +447949738354> /linked-devices
+linked devices  +447949738354
+  #0   this phone (primary)
+  #12  companion   key index 3   linked 2026-11-02 15:31 by code   binding unconfirmed   history delivered (12 chats, 340 msgs)
+```
+
+Cada passo, com a saída completa, está em [Vinculando o WhatsApp Web pela CLI](#vinculando-o-whatsapp-web-pela-cli).
+
+| Comando | O que faz |
+|---|---|
+| `/link-invitations` | Lista os pedidos de pareamento aguardando, uma linha por navegador, o mais novo primeiro. |
+| `/link-code CÓDIGO [n\|id]` | Aprova o código de 8 caracteres do Web e depois envia as conversas. `n\|id` escolhe o pedido quando mais de um navegador está pedindo: o seu número na lista, ou 6 ou mais caracteres do seu id. Ordem: verificação de prontidão, escolha do pedido, o `[y/N]` quando o histórico é parcial, a aprovação, o histórico. Uma recusa em qualquer ponto antes da aprovação não aprova nada. |
+| `/link-qr PAYLOAD` | O mesmo para um QR: `PAYLOAD` é o texto que o QR codifica, ou o seu link `https://wa.me/settings/linked_devices#...`. |
+| `/link-status` | Em que ponto estão o vínculo e a entrega: a fase, o vínculo com o navegador, o bootstrap, os companions e o próximo passo. |
+| `/linked-devices` | Os companions deste número: slot, key index, quando e como (por código ou por QR) foi vinculado, se o vínculo está confirmado, e as conversas e mensagens do histórico que recebeu. |
+| `/link-bootstrap [--resume] [--resend-uncertain]` | Envia as conversas para um companion aprovado, ou continua uma entrega que parou. `--resume` continua depois do último passo aceito (inofensivo quando não há nenhum). `--resend-uncertain` também envia mais uma vez um passo cuja resposta nunca veio; sozinho, conta como um resume. Não existe reenvio às cegas. |
+| `/link-confirm ARQUIVO\|JSON` | Confirma uma aprovação com o JSON de prova pública do companion: um arquivo, ou o próprio JSON na linha. |
+| `/link-retire` | Limpa uma aprovação cujo companion nunca apareceu ou foi desconectado. Funciona quando a aprovação tem 5 minutos e o companion já sumiu da lista de dispositivos. |
+| `/link-unlock` | Mostra quem segura a trava do diário de vínculo e pergunta `[y/N]` antes de quebrá-la; Enter é não. Para uma trava deixada por um programa que não existe mais, cujo fim não pode ser provado daqui (outra máquina ou contêiner, um formato de trava antigo). |
+
+**O que o histórico cobre.** Só o que o armazenamento guardou desde que começou: desde o registro, para um número registrado aqui, ou desde a primeira vez que o armazenamento foi ligado, para qualquer outro. Ele guarda 100 mensagens por conversa e 20 000 no total, saindo as mais antigas primeiro. As perdas são informadas, e o shell pergunta `[y/N]` a menos que o armazenamento tenha guardado tudo desde o registro sem descartar nada.
+
+**O que nunca é transferido.** O conteúdo de mensagens apagadas para todos, expiradas e de visualização única, e as reações e votos de enquete (são ignorados, então não aparecem no novo dispositivo). Uma mensagem de um tipo que a biblioteca não decodifica é guardada como recebida e entregue sem mudanças.
+
+**Limites.** Um segundo companion enquanto um ainda está vinculado não é suportado; o shell recusa logo de início. O vínculo fica `unconfirmed` a menos que o JSON de prova pública do companion seja reconciliado com `/link-confirm`; não se sabe de nenhum WhatsApp Web padrão que ofereça essa prova. Os motivos estão em [O que o Histórico Cobre](#o-que-o-histórico-cobre).
+
+**Vincular de novo.** Desconecte no Web (Menu → Desconectar); espere até que `/linked-devices` não o liste mais; rode `/link-retire` (5 minutos depois da aprovação, se sobrou uma retenção); rode `/link-code` de novo. O Web recebe o histórico de novo, com a mesma chave de app state. Veja [Vinculando de Novo](#vinculando-de-novo).
+
+**Quando para no meio.** O `/link-status` diz o que fazer. `/link-bootstrap --resume` continua; `/link-bootstrap --resume --resend-uncertain` reenvia só um passo cuja resposta nunca veio; um passo que o WhatsApp recusou nunca é reenviado. O `/link-unlock` quebra a trava do diário de vínculo só quando você o roda: uma trava deixada por um processo morto na mesma máquina é recuperada sem ele, e qualquer outro dono é informado como ocupado, com quem a segura. Veja [Quando Algo Para no Meio](#quando-algo-para-no-meio).
 
 ---
 
@@ -1750,6 +1974,7 @@ wa> /quit
 | **Gerenciamento de Conversas** | |
 | `/read <jid>` | Marca a conversa como lida |
 | `/unread <jid>` | Marca a conversa como não lida |
+| `/autoread on\|off` | Envia confirmações de leitura das mensagens recebidas automaticamente (ligado por padrão) |
 | `/mute <jid> [minutes]` | Silencia uma conversa (indefinidamente se nenhum minuto for informado) |
 | `/unmute <jid>` | Reativa o som de uma conversa |
 | `/pin <jid>` | Fixa uma conversa |
@@ -1808,10 +2033,21 @@ wa> /quit
 | `/reg check <phone>` | Verifica se o número tem WhatsApp |
 | `/reg code <phone> [method] [--name "Name"]` | Solicita o código de verificação, opcionalmente nomeando a conta |
 | `/reg confirm <phone> <code> [--name "Name"]` | Conclui o registro |
+| **Companions (só no primário)** | |
+| `/link-invitations` | Lista os pedidos de pareamento aguardando do WhatsApp Web |
+| `/link-code CÓDIGO [n\|id]` | Aprova o código de 8 caracteres do Web e depois envia as conversas |
+| `/link-qr PAYLOAD` | Aprova o QR do Web (o seu texto ou o link `wa.me`) e depois envia as conversas |
+| `/link-status` | Em que ponto estão o vínculo e a entrega das conversas |
+| `/linked-devices` | Os companions deste número |
+| `/link-bootstrap [--resume] [--resend-uncertain]` | Envia as conversas, ou continua uma entrega que parou |
+| `/link-confirm ARQUIVO\|JSON` | Confirma uma aprovação com a prova pública do companion |
+| `/link-retire` | Limpa uma aprovação cujo companion nunca apareceu |
+| `/link-unlock` | Quebra uma trava do diário de vínculo deixada por um programa que não existe mais |
 | **Conexão** | |
 | `/connect <phone> [sms\|pair]` | Conecta ao WhatsApp — escolhe o método pelos arquivos de sessão quando não informado |
 | `/pair <phone> [code]` | Vincula a uma conta existente por código de pareamento de 8 dígitos |
-| `/qrcode <phone>` | Vincula a uma conta existente escaneando um QR desenhado no terminal |
+| `/qrcode <phone>` | Vincula a uma conta existente escaneando um QR desenhado no terminal (`/qr` é o mesmo) |
+| `/fixnumber` | Rearquiva a sessão sob o número que o WhatsApp usa, depois que o `/connect` informou uma divergência |
 | `/disconnect` | Desconecta a sessão atual |
 | `/reconnect` | Força uma reconexão |
 | `/session` | Mostra as informações da sessão |
@@ -2825,6 +3061,329 @@ await client.connectWeb(PHONE)  // web / companion, over WebSocket
 
 Use duas instâncias de `WhalibmobClient` se quiser os dois ao mesmo tempo.
 
+## Aprovando um Dispositivo Companion (Papel Primário)
+
+*Vinculação de companions no papel primário contribuída por BayLinux.*
+
+As seções acima cobrem este cliente no papel de **companion**, o dispositivo que entra numa conta existente. Esta seção é o outro papel: uma conta que você já tem como **primário** (uma sessão móvel aberta com `init`) aprovando um companion *separado*, que apresenta um código de pareamento de 8 dígitos ou um QR de dispositivos vinculados. É o equivalente programático de abrir **Dispositivos conectados** no celular e autorizar um novo dispositivo. Tudo roda no socket do primário atual, sem nunca pedir SMS nem chamar `connectWeb` neste cliente.
+
+A propriedade que define tudo é a cautela: **o cliente nunca informa um dispositivo como `linked` só com a resposta do IQ de pareamento.** Uma confirmação do servidor, incluindo um aviso `retry-ts` ou uma resposta que chega depois de um timeout, não é tratada como sucesso. A aprovação primeiro chega a `awaiting_confirmation`, e o dispositivo só passa a `linked` quando uma prova independente do companion é fornecida *e* uma lista de dispositivos recém-buscada no servidor confirma o novo dispositivo e o seu key index. No caminho, a aprovação valida o vínculo das chaves (opcionalmente contra um `expectedNoiseKey` / `expectedIdentityKey` que você passa), recusa um código ou QR repetido (cada um é lembrado como um hash com salt), só interpreta um QR quando ele é um payload `wa.me/settings/linked_devices` bem formado, e zera o segredo de uso único assim que ele é usado.
+
+### Aprovar por código de pareamento
+
+```js
+const invitations = client.getPrimaryLinkInvitations(); // bounded, cached pending alerts
+const result = await client.approveCompanionCode(code, {
+  invitationId: invitations[0].id,          // explicit when more than one is pending
+  getCompanionProof: async () => proof       // independent SDK proof; see below
+});
+// result.status === 'linked'  → result.deviceId / result.keyIndex are set
+```
+
+Quando há exatamente um convite não expirado no socket, você pode pular a consulta e deixar o cliente esperar por ele:
+
+```js
+const result = await client.linkCompanionWithCode(code, { waitMs: 45000, timeoutMs: 90000 });
+```
+
+### Aprovar por QR
+
+```js
+const result = await client.linkCompanionWithQr(qrPayloadOrWaMeUrl, {
+  getCompanionProof: async () => proof
+});
+```
+
+As duas chamadas de QR (`linkCompanionWithQr` e a sua irmã explícita `approveCompanionQr`) fazem as mesmas verificações de prova e confirmação que o caminho por código de pareamento.
+
+### O fluxo `awaiting_confirmation` → reconcile
+
+Se você não passa `getCompanionProof`, a chamada retorna assim que a aprovação foi enviada de forma durável:
+
+```js
+const result = await client.linkCompanionWithCode(code); // { status: 'awaiting_confirmation', operationId }
+// ...obtain the companion's public binding proof out of band...
+const confirmed = await client.reconcilePrimaryLink(proof); // verifies signatures + a fresh server list
+// confirmed.status === 'linked'
+```
+
+O `reconcilePrimaryLink` verifica de novo a reserva já enviada, as duas assinaturas do SDK e uma lista nova do servidor antes de confirmar; ele nunca repete o pedido de pareamento. O progresso pode ser acompanhado pelos eventos `primary_link_invitation`, `primary_link_progress`, `primary_linked` e `primary_link_error`, e `getPrimaryLinkStatus()` devolve o estado durável não secreto a qualquer momento. O `primary_link_progress` traz uma `phase`: `awaiting_confirmation` quando a aprovação saiu, e `history_uploading`, com os `bytes` do blob, logo antes de começar o upload de um histórico grande demais para ir embutido (o que pode levar minutos).
+
+### Vinculando o WhatsApp Web pela CLI
+
+A CLI faz tudo isso por você e depois entrega ao novo companion o histórico de conversas que este programa guardou para o número. Funciona num número registrado pelo whalibmob, conectado como **primário**. Um número conectado como companion não pode aprovar um (`PRIMARY_LINK_PRIMARY_REQUIRED`); se um número tem os dois tipos de sessão e o `wa connect` escolhe o errado, acrescente `--sms`. Mantenha o shell aberto até as conversas carregarem no Web.
+
+```sh
+wa connect 447949738354 --session ~/whalibmob_auth
+```
+
+**1. Peça um código no WhatsApp Web.** No Web escolha **Conectar com número de telefone** e digite o mesmo número. O Web mostra um código de 8 caracteres. O shell anuncia o pedido quando ele chega, numa linha própria, e desenha o prompt de novo embaixo; o código vale por cerca de três minutos a partir daí (o `code window` faz a contagem regressiva):
+
+```
+  link request   companion c0ffee01   code window 2:50   id a1a1a1a1
+wa +447949738354>
+```
+
+**2. Digite o código no shell.** Todos estes são o mesmo código. O hífen, as maiúsculas e um espaço entre as duas metades não importam; um código nunca contém as letras I, O ou U, nem o dígito 0:
+
+```
+wa +447949738354> /link-code ABCD-EFGH
+wa +447949738354> /link-code ABCD EFGH
+wa +447949738354> /link-code abcdefgh
+```
+
+**3. Escolha um navegador, se for perguntado.** O Web envia cada pedido mais de uma vez, e cada aba aberta do Web acrescenta os seus. O shell junta os pedidos de um navegador numa linha só. Com um único navegador ele segue direto. Com mais de um, não aprova nada e lista todos, o mais novo primeiro (o `/link-invitations` mostra a mesma lista a qualquer momento):
+
+```
+more than one browser is asking to link, so nothing was approved. Choose the one this code belongs to.
+pairing requests waiting, newest first:
+  1  browser deadbe02   1 request   newest id b2b2b2b2b2b2   expires in 2m 53s
+  2  browser c0ffee01   1 request   newest id a1a1a1a1a1a1   expires in 2m 48s
+  Requests with the same browser label come from one browser (Web sends each more than once).
+  The label is a short fingerprint, not proof of who is behind it.
+  Choose one by its id (it does not move; 6 or more characters):  /link-code CODE <id>
+  or by its number (numbers shift as requests expire):  /link-code CODE <number>
+  or close the other Web tabs and wait 3 minutes.
+```
+
+Rode o comando de novo com o número ou o id do pedido que pertence à sua página do Web: `/link-code ABCD-EFGH 2`, ou `/link-code ABCD-EFGH a1a1a1`. O rótulo do navegador são os primeiros 8 caracteres hexadecimais de um hash da chave do navegador (`companion` num `PrimaryLinkInvitation`). Ele distingue os pedidos; não autoriza nada.
+
+Para ver a escolha você mesmo, abra o Web em dois navegadores diferentes, ou em dois perfis de navegador, e peça um código em cada um. Duas abas do mesmo perfil não são dois navegadores: elas compartilham a chave do navegador, então os seus pedidos trazem o mesmo rótulo e são juntados numa linha.
+
+**4. Confirme a cobertura, se for perguntado.** Antes de aprovar qualquer coisa, o shell verifica se o vínculo pode ser concluído, e que histórico enviaria. Se esse histórico é sabidamente parcial (veja [O que o Histórico Cobre](#o-que-o-histórico-cobre)), ele imprime o que está e o que não está nele e pergunta uma vez, nomeando o navegador. Enter, ou qualquer coisa que não seja `y` ou `yes`, é não, e nada é aprovado:
+
+```
+wa +447949738354> /link-code ABCD-EFGH 2
+ready to link (first link)
+history to send: 12 chats, 340 messages
+  capture period             since 2026-09-14 10:00 - the store was switched on then, so anything earlier was never captured
+  retained range             2026-09-14 10:05 to 2026-11-02 15:20; 25 older messages were dropped to stay within the store's limits
+  known or possible losses   2 received messages could not be decrypted
+This is only what this program captured, not everything the account has ever sent or received.
+approve the link with browser c0ffee01 (request a1a1a1a1) and send it this history?  [y/N] y
+```
+
+Quando o armazenamento guardou tudo desde o registro e não descartou nada, não há pergunta; ele imprime uma linha, `ready to link (first link): 12 chats, 340 messages to send`, e segue.
+
+**5. Como é o sucesso.**
+
+```
+approving with the request a1a1a1a1a1a1...
+  link       approval sent, not confirmed with a companion proof
+approval sent. The binding to the browser stays unconfirmed unless you confirm it with /link-confirm FILE|JSON (needs the companion's public proof JSON).
+sending the stored history to the companion...
+history handed to the companion: 12 chats, 340 messages, 20.0 KB (sent inline), first link
+capture period: since the store was switched on, after registration, so anything earlier was never captured
+25 older messages had been dropped from the store before this
+known or possible losses: 1 recorded by the store (messages it saw and could not keep, or a time it was not capturing), so this history is partial
+The history is handed over; whether Web has finished showing it cannot be seen from here. If Web stays on "Loading chats", run /link-status.
+```
+
+As linhas depois da primeira repetem, para registro, o que a verificação antes da aprovação encontrou no histórico que foi: onde a captura começou, quantas mensagens antigas tinham sido descartadas, e quantas perdas o armazenamento registrou (uma sequência de mensagens que ele não pôde guardar conta como uma). Um histórico guardado inteiro desde o registro diz `capture period: since registration: the store has been on since this number was registered` e nada mais.
+
+Um histórico acima de 64 KiB comprimido é enviado por upload em vez de ir embutido, e a linha então diz `(uploaded as a blob)`. Um pequeno bloco RECENT a 100% sempre vem depois do histórico, enviado como blob seja qual for o tamanho do histórico: o Web só considera a sincronização completa quando um chega, e até lá mostra "Sincronizando mensagens mais antigas" na conversa e, depois de dois minutos, "Sincronização pausada". Antes de o upload começar o shell diz quanto vai subir, `uploading history (2.0 MB)... this can take a few minutes`, e nada mais até terminar. O upload tem um tempo próprio, fora dos 90 segundos que o resto da entrega recebe: um minuto, e mais um segundo para cada 16 KiB de histórico (ou seja, um upload mais lento que cerca de 128 kbit/s), no máximo 20 minutos. O Web deve então mostrar as conversas. O shell não vê a tela do Web, então "entregue" é tudo o que ele pode afirmar. Depois:
+
+```
+wa +447949738354> /linked-devices
+linked devices  +447949738354
+  #0   this phone (primary)
+  #12  companion   key index 3   linked 2026-11-02 15:31 by code   binding unconfirmed   history delivered (12 chats, 340 msgs)
+```
+
+`#12` é o slot de dispositivo do companion, `key index` o seu lugar na lista de dispositivos da conta, `linked` a hora em que a aprovação passou (no seu horário local) e `by code` ou `by qr` como. `binding unconfirmed` é normal para um vínculo do Web, veja [Limites do Histórico](#limites-do-histórico). `history delivered` dá as conversas e mensagens do histórico que foi entregue. Tudo isso fica no diário de vínculo, então lê-se igual depois de reiniciar. Os números do exemplo são inventados.
+
+O `/link-status` diz em que ponto o vínculo está e o que fazer em seguida:
+
+```
+wa +447949738354> /link-status
+link       approval sent, not confirmed with a companion proof, started 2026-11-02 15:31
+binding    unconfirmed (no companion proof has been reconciled)
+bootstrap  sent
+companions #12 key index 3
+next       if you have the companion's public proof JSON, run /link-confirm FILE|JSON; if the companion never appeared, /link-retire works once the approval is 5 minutes old
+```
+
+O `/link-qr PAYLOAD` aceita o texto que um QR do Web codifica (ou o seu link `https://wa.me/settings/linked_devices#...`) no lugar de um código, e os passos depois dele são os mesmos. Todos os comandos estão na [referência da CLI](#comandos-de-companion-aprovando-o-whatsapp-web); um vínculo que falha imprime o que aconteceu, o passo a dar e um código de erro estável para informar.
+
+### O que o Histórico Cobre
+
+O histórico é o **armazenamento de mensagens do primário**: um registro, guardado em disco ao lado da sessão, das mensagens que este programa enviou e recebeu para o número. Não é uma cópia de tudo o que a conta já teve.
+
+- **Desde quando.** Só o que o armazenamento guardou desde que começou. Para um número registrado aqui pela CLI, o armazenamento começa no registro, e o shell diz `since registration`. Para qualquer outro número ele começa na primeira vez que o número é conectado com o armazenamento ligado, e o shell diz `the store was switched on then, so anything earlier was never captured`. A CLI mantém o armazenamento, a menos que você passe `--no-message-store`; a biblioteca não (veja [a API da biblioteca](#api-da-biblioteca-para-o-histórico-de-conversas)). Registrar um número de novo começa um armazenamento novo; o anterior é posto de lado, guardado e nunca entregue (veja [Sessões](#arquivos-que-o-primário-guarda-para-companions-vinculados)).
+- **Quanto.** A retenção padrão é de **100 mensagens por conversa e 20 000 no total**. Passado um limite, saem as mais antigas primeiro: dentro de uma conversa, a sua mensagem mais antiga; para as 20 000 no total, da conversa que está quieta há mais tempo. O shell informa quantas foram descartadas.
+- **O que ele sabe que perdeu** é informado, não escondido: uma mensagem recebida que não pôde ser decifrada, uma que foi vista e nunca salva (o programa parou no meio), um intervalo durante o qual o armazenamento não estava aberto (uma execução com `--no-message-store`, ou um cliente sem `messageStore` ligado), e um intervalo durante o qual ele não conseguia gravar no disco (`messages were not saved from ... to ... (the store could not write to disk)`).
+- **Um armazenamento danificado** não é aberto (`PRIMARY_MESSAGE_STORE_LOG_CORRUPT`, `PRIMARY_MESSAGE_STORE_SNAPSHOT_CORRUPT`), e não há histórico para entregar até ele começar de novo: rode o wa com `--reset-message-store` (a opção da biblioteca `messageStore: { setAsideCorrupt: true }`). Os arquivos danificados são mantidos, renomeados para `<arquivo>.corrupt-<hora>`, e o histórico começa de novo a partir desse momento, como um armazenamento ligado nessa hora.
+- **Um armazenamento que outro programa segura** não é aberto (`PRIMARY_MESSAGE_STORE_BUSY`, que nomeia quem o segura: pid, host e desde quando); as mensagens continuam sem ele, e nada é guardado nesse meio-tempo. Feche o outro wa. Quando nenhum está rodando mas a trava continua (ele caiu onde o seu fim não pode ser provado daqui: outra máquina ou contêiner, um pid passado depois para outro processo), inicie o wa com `--unlock-message-store`: ele mostra quem segura a trava e pergunta `[y/N]` antes de quebrá-la. Um programa que na verdade ainda a segurava para de guardar mensagens na sua próxima gravação (`PRIMARY_MESSAGE_STORE_LOST`).
+- **Quando ele pergunta.** O `getPrimaryLinkReadiness()` liga `needsConfirmation`, e o shell pergunta `[y/N]`, a menos que o armazenamento tenha guardado tudo desde o registro, sem perda conhecida e sem nada descartado. Um armazenamento ligado depois, uma origem que ele não sabe dizer, qualquer perda ou qualquer mensagem descartada: tudo isso faz perguntar. Na prática, uma conversa com mais de 100 mensagens faz todo vínculo perguntar.
+- **Contatos inteiros.** Um contato que o armazenamento viu tanto pelo número de telefone quanto pelo LID vai como uma conversa só, como o celular mostra. As edições são aplicadas à mensagem que editam, uma mensagem apagada para todos é enterrada como descrito abaixo, e uma que você apaga só para você com este programa é descartada.
+- **Mídia.** Os arquivos não são guardados. Uma mensagem de mídia vai como a mensagem, com as chaves que traz; se o Web ainda consegue baixar o arquivo depende de os servidores do WhatsApp ainda o terem.
+
+O armazenamento guarda o conteúdo das mensagens em disco, sem criptografia, em arquivos que só você pode ler (modo `0600`) na pasta da sessão. Trate essa pasta como você já trata as chaves dela.
+
+#### Nunca transferido
+
+- **Conteúdo apagado para todos, expirado e de visualização única.** Ele sai do armazenamento no momento em que isso é conhecido e nunca é entregue a um companion. Uma mensagem apagada para todos vai como um marcador de mensagem apagada (o seu id e a sua hora, nada do que dizia). Uma mensagem temporária expirada e uma mensagem de visualização única ficam totalmente de fora. Os bytes de visualização única nunca são gravados nos arquivos do armazenamento. Uma mensagem apagada ou expirada depois de guardada teve os seus bytes gravados uma vez, no log só de acréscimo do armazenamento (`<telefone>.primary-messages.log`) e talvez no seu snapshot; o armazenamento se compacta na volta seguinte do event loop depois de saber da remoção ou da expiração, e depois disso eles somem dos arquivos. Ele fica sabendo de uma expiração quando abre, quando é lido, e verificando uma vez por hora enquanto está aberto. Se essa compactação falhar (disco cheio), os bytes ficam até a próxima que der certo: quando o armazenamento é fechado, ou quando o log cresceu mais ou menos o tamanho do snapshot (pelo menos cerca de 1 MiB ou 5 000 linhas).
+- **Reações e votos de enquete.** São ignorados: não são guardados, então não aparecem no novo dispositivo.
+- **Posts de status e canais.** Não são guardados.
+
+#### Limites do Histórico
+
+- **Uma mensagem de um tipo que a biblioteca não decodifica** é guardada exatamente como foi recebida e entregue sem mudanças. O Web a lê por conta própria; o que o Web mostra então é obra do Web.
+- **Um segundo companion enquanto um ainda está vinculado não é suportado.** O histórico só pode ser entregue ao primeiro e único companion. `/link-code` e `/link-qr` verificam isso primeiro e recusam (`PRIMARY_BOOTSTRAP_EXISTING_COMPANIONS_UNSUPPORTED`) antes de aprovar qualquer coisa; desconecte o primeiro no Web (Menu → Desconectar), espere até que `/linked-devices` não o liste mais, e vincule de novo.
+- **O vínculo fica "unconfirmed" a menos que o JSON de prova pública de um companion seja reconciliado** com `/link-confirm ARQUIVO|JSON`. A prova é o vínculo assinado pelo próprio companion entre o seu dispositivo e a sua conta; o JSON traz só as partes públicas, e o `/link-confirm` verifica as duas assinaturas e uma lista de dispositivos nova antes de informar `confirmed`. Não se sabe de nenhum WhatsApp Web padrão que ofereça essa prova, então com um navegador comum espere que o vínculo fique sem confirmação. Isso não é um vínculo que falhou: o `/linked-devices` mostra o companion que a lista de dispositivos do WhatsApp informa. Quer dizer que este programa não ligou, de forma independente, esse dispositivo ao navegador que você aprovou.
+- **O que o Web faz com ele não pode ser visto daqui.** "Entregue" é o que o shell afirma, não "o Web terminou de carregar".
+- **Um novo vínculo sobre um app state que andou é recusado.** Veja [Vinculando de Novo](#vinculando-de-novo).
+- **A opção `delta` é experimental.** Ela põe o que chegou ao armazenamento depois do corte do histórico no bloco RECENT que segue todo histórico. O Web lê um bloco RECENT como mensagens mais antigas de conversas que já tem, então as mais novas nele não aparecem ali; elas chegam ao Web ao vivo, como qualquer mensagem depois que o companion está vinculado. A CLI nunca a usa.
+
+### Vinculando de Novo
+
+O Web pode ser vinculado de novo depois de desconectado, e recebe o histórico de novo. O shell chama isso de re-link, e ele reutiliza a chave de app state que compartilhou da primeira vez.
+
+1. Desconecte no Web (Menu → Desconectar).
+2. Espere até que `/linked-devices` não liste mais o companion (`no companion linked`).
+3. Rode `/link-retire`. Uma aprovação que nunca foi confirmada deixa uma retenção para trás, que recusa qualquer nova aprovação (`PRIMARY_LINK_RECONCILIATION_REQUIRED`); o `/link-retire` a limpa. Ele funciona 5 minutos depois da aprovação, e só quando o companion já sumiu da lista de dispositivos; antes disso ele diz `The unfinished approval is less than 5 minutes old`, e enquanto o companion ainda aparece na lista ele recusa. Ele nunca remove um dispositivo. Uma aprovação confirmada não deixa retenção, e este passo não é necessário.
+4. Rode `/link-code` de novo, com um código novo do Web. Cada código funciona uma vez.
+
+```
+wa +447949738354> /linked-devices
+linked devices  +447949738354
+  #0   this phone (primary)
+  no companion linked
+wa +447949738354> /link-retire
+retired the unfinished approval (operation 0f0e0d0c); nothing was linked
+link       retired; nothing was linked, started 2026-11-02 15:31
+binding    unconfirmed (no companion proof has been reconciled)
+bootstrap  sent
+companions none
+```
+
+O shell então diz `re-link` onde dizia `first link`. O histórico é o que o armazenamento tem agora, então inclui o que foi guardado desde o primeiro vínculo.
+
+Um re-link é recusado quando a cópia do WhatsApp do app state que este programa escreveu (`critical_block`) andou além da sua, por exemplo porque o Web vinculado escreveu nele: este programa não busca nem aplica mudanças posteriores do servidor. A verificação de prontidão para antes de aprovar qualquer coisa, com `PRIMARY_BOOTSTRAP_FOREIGN_STATE` (`WhatsApp's app-state could not be verified`, ou `was written by another key`). Desconecte no Web e tente o re-link de novo; se continuar recusado, deixe a pasta da sessão como está e informe o problema.
+
+### Quando Algo Para no Meio
+
+Uma aprovação e a entrega do histórico são dois passos. Se o segundo para, a aprovação continua valendo e o Web fica em "Carregando conversas" até o histórico ser enviado. O `/link-status` diz até onde chegou e o que fazer. Não aprove de novo por causa de uma entrega que parou.
+
+```
+/link-bootstrap                          send the history for an approved companion, once
+/link-bootstrap --resume                 continue the last attempt after its last accepted step
+/link-bootstrap --resume --resend-uncertain
+                                         also send once more a step whose reply never came
+```
+
+Não existe reenvio às cegas. Um `/link-bootstrap` simples depois de uma tentativa é recusado como já tentado (`PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED`); o `--resume` continua a tentativa registrada, e é inofensivo quando nenhuma foi registrada. Um passo que foi enviado e não teve resposta em 15 segundos para a tentativa com `PRIMARY_BOOTSTRAP_ACK_UNCERTAIN`, o primeiro código que você vê; um `--resume` simples depois disso para com `PRIMARY_BOOTSTRAP_KEY_SHARE_UNCERTAIN` ou `PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN`, e só o `--resend-uncertain` envia esse passo de novo, com o mesmo id de mensagem. Uma entrega parada pelo próprio limite de tempo (`PRIMARY_LINK_TIMEOUT`, 90 segundos sem contar o upload do histórico), um cancelamento, uma conexão que caiu, um disco que recusou o diário ou um upload do histórico que falhou ou estourou o tempo (`PRIMARY_BOOTSTRAP_UPLOAD_FAILED`, `PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT`) mantém todos os passos que concluiu: o shell e o `/link-status` apontam para `--resume`, com `--resend-uncertain` quando a parada veio enquanto um passo estava sem resposta. Um passo que o outro lado **recusou** nunca é enviado de novo; o shell então diz para começar do zero (desconectar no Web, `/linked-devices`, `/link-retire`, `/link-code` com um código novo). Uma conexão que cai no meio da entrega deixa o vínculo incerto, e o `--resume` o continua. O `--resend-uncertain` sozinho conta como um resume, e o shell diz isso.
+
+#### Testando uma entrega interrompida
+
+Para testar um resume à mão, o bootstrap pode ser feito parar numa fase da sua escolha. Defina `WA_DEBUG_BOOTSTRAP_STOP_AFTER` com a fase, e o programa se mata no momento em que essa fase é escrita no diário de vínculo: o mesmo que `kill -9`, sem limpeza, então o que fica no disco é o que uma queda real deixa.
+
+```sh
+WA_DEBUG_BOOTSTRAP_STOP_AFTER=history_uploaded wa connect 447949738354
+# /link-code ...   the program dies right after the history blob is uploaded and recorded
+wa connect 447949738354
+# /link-bootstrap --resume   uploads the same pinned bytes again, and sends them
+```
+
+As fases, em ordem: `prepared`, `key_share_sending`, `key_share_accepted`, `critical_patch_sending`, `critical_patch_accepted`, `history_prepared`, `history_uploaded` (só para um blob), `history_sending`, `history_accepted`, depois `delta_prepared`, `delta_uploaded`, `delta_sending` e `delta_accepted` (o bloco RECENT que segue todo histórico), e `sent`. Um re-link não tem as fases `critical_patch_*`. Só um destes nomes liga isso; qualquer outro valor, ou a variável sem valor, não faz nada. Uma parada em `key_share_sending`, `history_sending` ou `delta_sending` vem antes de essa mensagem sair, e o resume então para com `..._UNCERTAIN` e pede `--resend-uncertain`; uma parada em `critical_patch_sending` é resolvida no resume lendo de volta a cópia do servidor. O programa reiniciado assume a trava do diário sozinho, como depois de qualquer queda na mesma máquina. É uma ajuda para testes: nunca a deixe definida.
+
+O diário de vínculo (`<telefone>.primary-linking.json`) é protegido por um arquivo de trava ao lado dele, para que dois programas não possam escrevê-lo ao mesmo tempo. Um primário conectado pega a trava na sua primeira atividade de vínculo (qualquer comando de vínculo, inclusive o `/link-status`, ou um pedido de pareamento chegando do Web) e a mantém até desconectar ou a conexão fechar; enquanto isso, outro programa na mesma sessão recebe `PRIMARY_LINK_STORE_BUSY`. Quando um programa morre segurando a trava:
+
+- **Um dono morto na mesma máquina é recuperado automaticamente.** A trava nomeia o processo, a máquina, o boot e o namespace de processos do seu dono; quando tudo isso bate com esta máquina e o processo não existe mais, o próximo programa assume a trava sem perguntar.
+- **Qualquer outra coisa é informada como ocupada, com o dono, e deixada como está.** Um dono em outra máquina ou em outro contêiner, uma trava de uma versão mais antiga e um processo que está apenas pausado não podem ser provados mortos daqui:
+
+  ```
+  error: Another process (pid 4242 on old-box, since 2026-11-02 15:31) holds the link journal for this number.
+    next: Close that program; if it is gone for good (another machine or container, or an old lock), run /link-unlock to break the lock.
+    (PRIMARY_LINK_STORE_BUSY)
+  ```
+
+- **O `/link-unlock` mostra o dono e só quebra a trava quando você diz sim.** Confira se o dono realmente não existe mais: um dono que na verdade ainda está rodando descobre que a sua trava sumiu na próxima gravação e para ali (`PRIMARY_LINK_STORE_LOST`), com o diário intacto. Enter, ou qualquer coisa que não seja `y` ou `yes`, deixa a trava como está. O que é quebrado é o dono que lhe foi mostrado: se outro programa pegou a trava até você responder, nada é quebrado e esse outro é informado no lugar. Ele recusa enquanto este mesmo programa segura o diário (`PRIMARY_LINK_BUSY`), e uma recuperação ainda em andamento nesta máquina recebe o aviso de esperar um minuto e desbloquear de novo.
+
+  ```
+  wa +447949738354> /link-unlock
+  the link journal is locked by pid 4242 on old-box, since 2026-11-02 15:31
+    Break it only if that program is gone: stopped, or on a machine or in a container that no longer runs it.
+    A program that is in fact still running stops at its next write to the journal, which is left intact.
+  break the lock held by pid 4242 on old-box?  [y/N] y
+  broke the link journal lock held by pid 4242 on old-box
+    next: retry the command that reported the journal busy
+  ```
+
+### API da Biblioteca para o Histórico de Conversas
+
+A CLI é uma camada fina sobre estas chamadas. O armazenamento fica **desligado por padrão na biblioteca**; a CLI o liga.
+
+```js
+const { WhalibmobClient } = require('whalibmob')
+
+// true keeps the defaults (100 messages a chat, 20 000 in all); an object bounds them
+const client = new WhalibmobClient({
+  sessionDir,
+  messageStore: { perChat: 200, maxMessages: 50000 }
+})
+client.on('primary_message_store_error', ({ code, op }) => console.warn('store:', code, op))
+await client.init('447949738354')   // primary sessions only; a companion never opens one
+
+const kept = client.getPrimaryMessageStore()
+// null when the store is off, before the first login, after disconnect(), or if it could not be read;
+// otherwise { seq, capture: { since, origin, lc }, chats, records, losses, retained: { evicted }, pushNames, counts }
+// `records` holds the message bytes, so treat it like the files it is read from.
+
+const verdict = await client.getPrimaryLinkReadiness()
+// { ready, mode: 'first' | 'relink' | null, blockers: [{ code, detail }], history, needsConfirmation }
+// It approves nothing and sends no message or patch: only two read-only IQs, the device list and a
+// critical_block read. On first use it may create the link journal and its lock, as any link call does.
+if (!verdict.ready) throw new Error(verdict.blockers.map(b => b.code).join(', '))
+if (verdict.needsConfirmation) { /* show verdict.history and ask before going on */ }
+
+const [invitation] = client.getPrimaryLinkInvitations()   // { id, expiresAt, companion }
+await client.approveCompanionCode(code, { invitationId: invitation.id })
+const sent = await client.bootstrapPrimaryCompanion({ history: 'store' })
+// { status: 'sent', mode, operationId, delta, history: { chats, records, bytes, inline, losses, evicted, captureOrigin } }
+```
+
+| Chamada | O que faz |
+|---|---|
+| `messageStore` (opção do cliente) | Desligado a menos que seja `true` ou `{ perChat, maxMessages, setAsideCorrupt }`. Sem ele, `bootstrapPrimaryCompanion({ history: 'store' })` lança `PRIMARY_MESSAGE_STORE_DISABLED` e a verificação de prontidão informa um bloqueio. `setAsideCorrupt: true` é o que o `--reset-message-store` passa: os arquivos danificados do armazenamento são renomeados para `<arquivo>.corrupt-<hora>` e um armazenamento novo começa. |
+| `getPrimaryMessageStore()` | O snapshot do armazenamento, ou `null`. Nunca lança erro; uma falha é dita no `primary_message_store_error`. Um armazenamento cuja trava foi quebrada de outro lugar diz `PRIMARY_MESSAGE_STORE_LOST` ali uma vez e é solto; o próximo login o abre de novo, ou diz quem o segura (`PRIMARY_MESSAGE_STORE_BUSY`, com `err.holder`). |
+| `PrimaryMessageStore.readHolder({ dir, phone })` | Quem segura a trava do armazenamento de um número, lido sem quebrá-la: `{ v, pid, host, bootId, procStart, token, gen, at, pidNs, legacy }`, ou `null` quando ninguém segura. Vem de `Primary.MessageStore`; `dir` é a pasta da sessão do número. Lança `PRIMARY_MESSAGE_STORE_BUSY` enquanto este processo tem o armazenamento aberto. |
+| `PrimaryMessageStore.breakLock({ dir, phone, holder })` | Quebra a trava do armazenamento, como o `--unlock-message-store` faz depois do seu sim, para um dono que não pode ser provado morto. Com `holder` (como `readHolder()` o devolveu), só esse dono: uma trava que nesse meio-tempo nomeia outro é deixada como está, com `PRIMARY_MESSAGE_STORE_BUSY` e `err.holder`. Um único quebrador vence; a trava fica então livre para a próxima abertura. Um dono que ainda está rodando para na sua próxima gravação (`PRIMARY_MESSAGE_STORE_LOST`). Devolve `{ holder }` (`null` quando ninguém segurava); nunca quebra uma trava que este processo segura (`PRIMARY_MESSAGE_STORE_BUSY`). |
+| `getPrimaryLinkReadiness({ timeoutMs, signal })` | Se um vínculo pode ser concluído, descoberto antes de qualquer aprovação. Cada bloqueio tem um `code` estável e um `detail`. |
+| `bootstrapPrimaryCompanion({ history, upload, resume, resendUncertain, delta, timeoutMs, uploadTimeoutMs })` | O compartilhamento da chave, o patch de app state e o histórico. `history: 'store'` lê o armazenamento deste cliente; uma função que devolve um snapshot envia um histórico seu. O `upload` só é usado acima de 64 KiB comprimido e, por padrão, é o upload de mídia `md-msg-hist`. `resume` e `resendUncertain` são como acima. `delta` é experimental e não foi verificado num Web real. `timeoutMs` (de 1 000 a 90 000, padrão 90 000) é o tempo para tudo menos o upload (`PRIMARY_LINK_TIMEOUT`); o upload corre num relógio próprio, `uploadTimeoutMs` (de 1 000 a 3 600 000), por padrão um minuto mais um segundo para cada 16 KiB, no máximo 20 minutos (`PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT`). Um erro de um bootstrap que já tinha começado traz `resumable`: se `resume: true` pode continuar de onde parou; `getPrimaryLinkStatus().bootstrap.resumable` diz o mesmo. |
+| `getPrimaryLinkLockHolder()` | Quem segura a trava do diário de vínculo, lido sem quebrá-la: `{ holder }`, ou `null` quando ninguém segura. Lança `PRIMARY_LINK_BUSY` enquanto este processo segura o diário. |
+| `unlockPrimaryLink({ holder })` | Quebra a trava do diário de vínculo, como o `/link-unlock` faz depois do seu sim. Com `holder` (como `getPrimaryLinkLockHolder()` o devolveu), só esse dono: uma trava que nesse meio-tempo nomeia outro é deixada como está, com `PRIMARY_LINK_STORE_BUSY` e `err.holder`. Devolve `{ holder }` (`null` quando ninguém segurava) e lança `PRIMARY_LINK_BUSY` enquanto este processo segura o diário. |
+| `getPrimaryLinkInvitations()` | Cada pedido pendente traz `companion`, a impressão digital curta do navegador (`null` quando o pedido não tem). Um rótulo, nunca uma autorização. |
+| `listLinkedDevices()` | Os companions deste número, a partir de uma lista de dispositivos nova pedida ao servidor: `[{ deviceId, keyIndex }]`. O próprio celular (dispositivo 0) fica de fora. |
+| `getPrimaryLinkStatus()` | Só leitura: a lista de dispositivos nova mais o progresso não secreto do vínculo: `phase`, `confirmed`, `method` (`'code'` ou `'qr'`), `linkedAt`, `deviceId`, `bootstrapPhase`, `delivered` (o que o histórico entregue continha) e, depois que um bootstrap começou, `bootstrap.resumable`. |
+| `retireAbsentPrimaryLink({ timeoutMs, signal })` | O que o `/link-retire` roda. Abandona uma aprovação que nunca virou um dispositivo, pelo menos 5 minutos depois de enviada, e só quando duas listas novas do servidor batem com a lista de antes dela. Nunca remove um dispositivo nem reutiliza o key index que ela tinha reservado. Devolve `{ status: 'abandoned', operationId }`. |
+
+Um armazenamento iniciado pelo `init()` conta como ligado nesse momento (`origin: 'enabled'`). Para que o armazenamento conte como guardado "desde o registro", como a CLI faz, abra-o uma vez na hora do registro, logo depois de `verifyCode()` ter registrado o número e antes do seu primeiro `init()`:
+
+```js
+const { sessionDirFor, Primary, verifyCode } = require('whalibmob')
+const { PrimaryMessageStore } = Primary.MessageStore
+
+// store: the registration store you passed to requestSmsCode(); sessionDir: the folder
+// you will give new WhalibmobClient({ sessionDir }); code: the one the SMS brought
+await verifyCode(store, code)
+const phone = store.phoneNumber
+PrimaryMessageStore.open({ dir: sessionDirFor(sessionDir, phone), phone, origin: 'registration', lc: store.connectionLc || 0 }).close()
+```
+
+O pacote também exporta as peças: `Primary.MessageStore` (`PrimaryMessageStore`, `STATUS`), `Primary.HistoryExport` (`buildHistorySync`, `buildNotification`, `recordsAfter`, `exportedCounts`) e `Primary.Readiness` (`evaluateReadiness`, `gatherFacts`), e `Cli.LinkCommands`, a lógica por trás dos comandos de vínculo da CLI sem nenhum terminal, para uma interface sua:
+
+```js
+const { Cli } = require('whalibmob')
+const result = await Cli.LinkCommands.runLinkCode({
+  client, code: 'ABCD-EFGH',
+  selector: undefined,                                   // a group number or an id prefix, when more than one browser is asking
+  confirm: async (readiness, ask) => askTheUser(ask.question),  // called only when the history is partial; no function is a no
+  print: line => console.log(line)
+})
+// result.status: 'sent' | 'choose' (several browsers, nothing approved) | 'aborted'
+```
+
 ## O Número sob o Qual o WhatsApp Arquiva sua Conta
 
 O WhatsApp nem sempre guarda uma conta sob o número que você digita. Os celulares brasileiros são o exemplo clássico: eles ganharam um nono dígito, e o WhatsApp mantém as contas mais antigas na forma de oito dígitos. `5596976042705` e `559676042705` são a mesma conta, mas só o segundo é o que o servidor reconhece.
@@ -3120,7 +3679,12 @@ whalibmob_auth/
 │   ├── 919634847671.appState.json
 │   ├── 919634847671.appStateKeys.json
 │   ├── 919634847671.history.json
-│   └── 919634847671.messages.json
+│   ├── 919634847671.messages.json
+│   ├── 919634847671.primary-messages.log        ← what the primary kept, to hand a companion
+│   ├── 919634847671.primary-messages.json
+│   ├── 919634847671.primary-messages.write-failed ← only while a disk failure is not yet recorded
+│   ├── 919634847671.primary-history-outbox.json ← only while a handover is under way
+│   └── 919634847671.primary-linking.json        ← the link journal
 └── 5568936182750/
     └── …
 ```
@@ -3132,12 +3696,43 @@ Uma conta passa a ser um diretório: copie-o para mover um número para outra m�
 apague-o para se livrar de um, arquive-o para guardar. Nada precisa ser garimpado
 de uma pilha por prefixo.
 
+Os cinco arquivos `primary-*` só existem num número que age como dispositivo primário
+e guarda mensagens ou vincula um companion; veja
+[Arquivos que o Primário Guarda para Companions Vinculados](#arquivos-que-o-primário-guarda-para-companions-vinculados).
+
 > [!NOTE]
 > **As sessões escritas por versões anteriores continuam funcionando onde estão.** O
 > layout é decidido por número: um número cujos arquivos estão soltos no diretório
 > base é deixado exatamente como está, e só números novos ganham uma pasta. Nada
 > é movido a menos que você peça — o `wa migrate-sessions` faz isso, para um número ou para
 > todos eles, e rodá-lo de novo é seguro.
+
+### Arquivos que o Primário Guarda para Companions Vinculados
+
+Um número registrado aqui é o dispositivo primário da conta. Quando ele guarda um registro das suas mensagens e aprova um companion como o WhatsApp Web ([como](#vinculando-o-whatsapp-web-pela-cli)), aparecem mais arquivos ao lado dos outros: os dois do armazenamento de mensagens e o diário de vínculo, de forma permanente; o marcador de falha de gravação do armazenamento, enquanto o disco o recusa; a caixa de saída do histórico, enquanto uma entrega está em andamento; e um arquivo de trava ao lado do armazenamento e outro ao lado do diário, enquanto um programa os tem abertos. Todos são criados legíveis só por você (modo `0600`).
+
+| Arquivo | Chave no backend | O que guarda |
+|---|---|---|
+| `<telefone>.primary-messages.log` | `primary-messages-log` | O diário do armazenamento de mensagens, um evento JSON por linha, acrescentado conforme as mensagens são enviadas e recebidas. Os bytes das mensagens estão nele, em base64, sem criptografia. |
+| `<telefone>.primary-messages.json` | `primary-messages` | O mesmo armazenamento, compactado: as conversas, as mensagens guardadas (as 100 mais novas por conversa e 20 000 no total, por padrão), o que ele sabe que perdeu, e onde a captura começou (`origin`: `registration` ou `enabled`). O diário é incorporado a ele (uma compactação) quando cresceu mais ou menos o quanto este snapshot guarda, e nunca menos que cerca de 1 MiB ou 5 000 linhas, para que um armazenamento grande não seja reescrito a cada megabyte; também quando o armazenamento é fechado ao desconectar, e na volta seguinte do event loop depois que uma mensagem é apagada para todos ou expira, para que os seus bytes saiam dos arquivos na hora. A expiração é verificada quando o armazenamento abre, quando é lido, e uma vez por hora enquanto está aberto. |
+| `<telefone>.primary-messages.write-failed` | `primary-messages-write-failed` | Vazio. Existe só enquanto o disco está recusando as gravações do armazenamento e esse intervalo ainda não foi anotado; a sua data de modificação é quando as recusas começaram. A próxima gravação que dá certo (ou, depois de uma queda, a próxima abertura) registra o intervalo como uma perda, `messages were not saved from ... to ...`, e apaga o arquivo. Ele pertence ao armazenamento e se move com ele. Uma cópia entre backends mantém o arquivo, mas não a sua data. |
+| `<telefone>.primary-history-outbox.json` | `primary-history-outbox` | O histórico esperando para sair para um companion, fixado antes de ser enviado para que um resume envie exatamente esses bytes. Texto puro e, para um blob, a chave que o abre. Só enquanto uma entrega está em andamento: é apagado quando a entrega termina, ou quando nunca mais poderá ser enviada. |
+| `<telefone>.primary-linking.json` | `primary-linking` | O diário de vínculo: aprovações começadas e não terminadas, os pedidos de pareamento aguardando, o estado do vínculo com os key indexes dos companions, e até onde o bootstrap chegou. Ligado ao número e à sua chave de identidade por um digest, e recusado para qualquer outro número. |
+| `<telefone>.primary-messages.lock` | nenhuma | Quem tem o armazenamento de mensagens aberto agora (pid, host, boot, hora de início), para que um segundo programa na mesma sessão o tenha recusado (`PRIMARY_MESSAGE_STORE_BUSY`, que nomeia o dono). Pertence a um processo em execução, não ao número, e nunca se move: existe desde o login que abre o armazenamento até ele ser fechado, e uma deixada por um processo que morreu nesta máquina é assumida pelo próximo. Uma cujo dono não pode ser provado morto (outra máquina ou contêiner, um pid passado depois para outro processo, uma trava cujo autor morreu antes de preenchê-la) fica até você quebrá-la: inicie o wa com `--unlock-message-store`, que mostra o dono e pergunta antes. Um programa que na verdade ainda a segurava para de guardar mensagens na sua próxima gravação (`PRIMARY_MESSAGE_STORE_LOST`). |
+| `<telefone>.primary-linking.json.lock` | nenhuma | Quem segura o diário agora (pid, host, boot, hora de início). Um primário conectado a pega na sua primeira atividade de vínculo (qualquer comando de vínculo, inclusive o `/link-status`, ou um pedido de pareamento chegando do Web) e a mantém até desconectar ou a conexão fechar. Pertence a um processo em execução, não ao número, e é o arquivo que o `/link-unlock` quebra. |
+
+As chaves de backend servem para o `copySession` e os backends abaixo. O próprio cliente continua gravando arquivos. Uma sessão de companion (`.web.`) nunca grava estes arquivos, mas uma cópia `<telefone>.web.primary-*` também é listada, para que uma mudança não deixe nenhuma para trás.
+
+O que os arquivos fazem quando uma sessão é movida ou rearquivada:
+
+- **`wa migrate-sessions` (e `migrateSession()`)** move o armazenamento (inclusive o seu marcador de falha de gravação, com a data), a caixa de saída e o diário junto com todo o resto. Os dois arquivos `.lock` nunca se movem, nem ali nem em lugar nenhum: cada um pertence a um processo.
+- **Rearquivar sob o número que o WhatsApp usa** ([veja](#o-número-sob-o-qual-o-whatsapp-arquiva-sua-conta); `adoptCanonicalNumber()`) renomeia o armazenamento de mensagens, o seu marcador de falha de gravação e a caixa de saída com o número, para que o histórico acompanhe a conta. O **diário de vínculo não é renomeado**: ele está ligado ao número para o qual foi escrito, e uma cópia renomeada seria recusada. Ele fica com o nome antigo, com a sua trava, e o novo número começa um diário próprio, então uma aprovação deixada pela metade sob o nome antigo não é vista sob o novo. A trava do armazenamento também não é renomeada.
+- **Registrar o número de novo na CLI** começa um armazenamento de mensagens novo. O anterior é posto de lado, como `<telefone>.primary-messages.log.before-<hora>` e `<telefone>.primary-messages.json.before-<hora>` (e o seu marcador de falha de gravação, se deixou um); ele é guardado e nunca entregue a um companion. Com `--no-message-store` o armazenamento anterior também é posto de lado, e nenhum novo começa. A mudança acontece sob a trava do armazenamento: se outro wa tem o armazenamento aberto nessa hora, nada é movido, e o aviso nomeia quem o segura.
+- **`--no-message-store`** não grava nenhum arquivo do armazenamento. Uma execução posterior com o armazenamento ligado registra que houve um intervalo em que ele não estava aberto, como uma perda.
+- **`--reset-message-store`** começa de novo um armazenamento cujos arquivos estão danificados. Os arquivos danificados ficam na pasta, renomeados para `<telefone>.primary-messages.log.corrupt-<hora>` e `<telefone>.primary-messages.json.corrupt-<hora>` (e o marcador, se houver); eles são guardados, nunca lidos e nunca entregues a um companion, e o armazenamento novo conta como ligado nesse momento.
+- **`--unlock-message-store`** quebra uma trava do armazenamento cujo dono não pode ser provado morto. Antes de abrir o armazenamento do número que está sendo conectado ou registrado, ele mostra quem segura a trava (pid, host, desde quando) e pergunta `[y/N]`; Enter é não. O `wa listen` não pode perguntar, então nomeia o dono e recusa. Quebre-a só quando nenhum outro wa estiver usando o número.
+
+Estes arquivos guardam o conteúdo das mensagens em texto claro. Faça backup, mova e apague-os do mesmo jeito que você faz com as chaves ao lado deles.
 
 ### Mantendo a Versão Anunciada Atualizada
 
@@ -3949,18 +4544,13 @@ A biblioteca grava automaticamente estes arquivos no `sessionDir`, por conta. Vo
 
 ### Lendo o History Store
 
-Depois que a sincronização de histórico termina, você pode ler os arquivos em disco diretamente:
+Depois que a sincronização de histórico termina, o cliente devolve os dois arquivos já interpretados. Num companion são os arquivos `.web.`; as duas chamadas devolvem `null` até a primeira sincronização de histórico ter gravado um deles:
 
 ```js
-const fs   = require('fs')
-const path = require('path')
-
-const sessDir = path.join(process.env.HOME, '.waSession')
-const phone   = '919634847671'
-
 // ── Read chats ────────────────────────────────────────────────────────────────
-const histPath = path.join(sessDir, phone + '.history.json')
-const hist     = JSON.parse(fs.readFileSync(histPath, 'utf8'))
+const hist = client.getHistoryStore()     // <phone>.history.json, parsed
+const msgs = client.getMessagesStore()    // <phone>.messages.json, parsed
+if (!hist || !msgs) throw new Error('no history synced yet')
 
 // List all chats sorted by last message time
 const chats = Object.values(hist.chats)
@@ -3980,12 +4570,46 @@ const myPn = hist.lidPnMap[myLid]
 console.log('PN:', myPn)
 
 // ── Read message metadata ─────────────────────────────────────────────────────
-const msgPath = path.join(sessDir, phone + '.messages.json')
-const msgs    = JSON.parse(fs.readFileSync(msgPath, 'utf8'))
 const msgList = Object.values(msgs).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
 console.log('Total messages indexed:', msgList.length)
 console.log('Latest:', msgList[0])
 ```
+
+Sem um cliente, leia os próprios arquivos. Eles ficam na pasta própria do número, que o `sessionDirFor()` resolve (ele também encontra uma sessão guardada no layout antigo, solta na pasta base):
+
+```js
+const fs   = require('fs')
+const os   = require('os')
+const path = require('path')
+const { sessionDirFor } = require('whalibmob')
+
+const phone = '919634847671'
+const dir   = sessionDirFor(path.join(os.homedir(), '.waSession'), phone)
+const hist  = JSON.parse(fs.readFileSync(path.join(dir, phone + '.history.json'), 'utf8'))
+```
+
+### LID ↔ Número de Telefone num Cliente Ativo
+
+As mensagens chegam cada vez mais de um LID (`…@lid`) em vez de um número de telefone. O cliente guarda os pares que aprendeu (da sincronização de histórico, dos remetentes das mensagens e de sessões anteriores) e responde da memória, sem pedir nada ao servidor:
+
+```js
+client.getLIDForPN('919634847671@s.whatsapp.net')   // '112345678901234@lid', or null
+client.getPNForLID('112345678901234@lid')           // '919634847671@s.whatsapp.net', or null
+```
+
+As duas aceitam um número puro ou um JID completo, com sufixo de dispositivo, e devolvem `null` para um par que o cliente ainda não viu.
+
+### Pedindo Mensagens Mais Antigas
+
+Num companion, o `fetchMessageHistory()` pede ao celular mensagens mais antigas do que uma que você já tem. A resposta chega depois, como um `history_sync` comum:
+
+```js
+// key and timestamp of the oldest message you hold in that chat
+const oldest = { remoteJid: '919634847671@s.whatsapp.net', id: '3EB0A1B2C3D4E5F6', fromMe: false }
+await client.fetchMessageHistory(50, oldest, 1730000000000)   // count, key, timestamp in ms
+```
+
+O celular decide quanto envia, e não envia nada para uma conversa que já não tem.
 
 Esquema de `hist.chats` por entrada de conversa:
 
@@ -4897,6 +5521,18 @@ const results = await client.hasWhatsapp(['919634847671', '12345678901'])
 // returns array of JIDs that have WhatsApp
 ```
 
+Se uma sessão salva ainda é aquela com que o número está registrado, perguntado
+ao servidor de registro (`/exist`) sem conectar:
+
+```js
+const { loadStore, storeFileFor, checkIfRegistered } = require('whalibmob')
+
+const store  = loadStore(storeFileFor(sessionDir, '919634847671'))
+const answer = await checkIfRegistered(store)
+// the server's answer as it came: status 'ok' when this session's keys are the registered ones
+console.log(answer.status, answer.reason)
+```
+
 ### Buscar o Recado do Perfil
 
 ```js
@@ -4914,6 +5550,26 @@ const url = await client.queryPicture('919634847671')
 // also works for groups
 const groupUrl = await client.queryPicture('120363000000000000@g.us')
 ```
+
+Para os próprios bytes, ou para mais do que a URL:
+
+```js
+const fs = require('fs')
+
+// the JPEG, or null when there is no picture or privacy hides it
+const jpeg = await client.downloadProfilePicture('919634847671')
+if (jpeg) fs.writeFileSync('avatar.jpg', jpeg)
+
+// { id, url, type, directPath, hash } — or null
+const info = await client.queryPictureInfo('919634847671', {
+  preview:    true,       // the small thumbnail instead of the full image
+  existingId: '1730000000' // the id you already hold: null when it has not changed
+})
+```
+
+As duas aceitam as mesmas opções. `isCommunity: true` pede a foto de uma
+comunidade. Uma consulta recusada (`404` quando não há foto, `401` / `403` quando
+a privacidade a esconde) volta como `null`; qualquer outra recusa lança um erro.
 
 ### Assinar a Presença
 
@@ -4972,7 +5628,7 @@ await client.changeProfilePicture(null)
 
 // change a group's picture (you must be admin)
 // returns the new picture id, or 'remove' when the picture was taken down
-const picId = await client.changeGroupPicture('120363000000000000@g.us',
+const groupPicId = await client.changeGroupPicture('120363000000000000@g.us',
   fs.readFileSync('./group.jpg'))
 
 // pass null to remove the current picture
@@ -5443,6 +6099,19 @@ await client.changeGroupSetting('120363000000000000@g.us', 'edit_group_info', 'a
 await client.changeGroupSetting('120363000000000000@g.us', 'add_participants', 'all')
 ```
 
+As mesmas configurações, uma chamada cada:
+
+```js
+const g = '120363000000000000@g.us'
+
+await client.setGroupAnnounce(g, true)               // only admins can send messages
+await client.setGroupLocked(g, true)                 // only admins can edit the subject, description and icon
+await client.setGroupJoinApprovalMode(g, true)       // new members wait for an admin's approval
+await client.setGroupMemberAddMode(g, 'admin_add')   // 'admin_add' | 'all_member_add'
+```
+
+Cada uma lança um erro quando o servidor recusa (por exemplo, quando você não é administrador).
+
 ### Sair de um Grupo
 
 ```js
@@ -5460,17 +6129,27 @@ console.log(link)
 ### Revogar o Código de Convite
 
 ```js
-await client.revokeGroupInvite('120363000000000000@g.us')
+// the old link stops working; the new one comes back
+const newLink = await client.revokeGroupInvite('120363000000000000@g.us')
+// revokeGroupInviteLink() is the same call
 ```
 
 ### Entrar Usando o Código de Convite
 
-> [!NOTE]
-> Passe apenas a parte do código — não inclua `https://chat.whatsapp.com/`
+Passe o código ou o link inteiro `https://chat.whatsapp.com/…`:
 
 ```js
 const jid = await client.acceptGroupInvite('AbCdEfGhIjK')
-console.log('joined', jid)
+console.log('joined', jid)   // null when the link was refused
+```
+
+Um grupo pode fazer as entradas esperarem a aprovação de um administrador. O
+`joinGroupWithLink()` diz qual dos dois aconteceu, e lança um erro com o motivo
+quando o link é recusado (revogado ou inválido):
+
+```js
+const { jid, pendingApproval } = await client.joinGroupWithLink('https://chat.whatsapp.com/AbCdEfGhIjK')
+console.log(pendingApproval ? 'waiting for approval in' : 'joined', jid)
 ```
 
 ### Consultar Informações do Convite pelo Link
@@ -5482,7 +6161,7 @@ Busca os metadados de um grupo a partir de um código de convite ou URL completa
 const info = await client.queryGroupInviteInfo('AbCdEfGhIjKlMnOpQrStUv')
 
 // or pass the full URL — the code is extracted automatically
-const info = await client.queryGroupInviteInfo('https://chat.whatsapp.com/AbCdEfGhIjKlMnOpQrStUv')
+const sameInfo = await client.queryGroupInviteInfo('https://chat.whatsapp.com/AbCdEfGhIjKlMnOpQrStUv')
 
 console.log(info)
 // {
@@ -5567,6 +6246,14 @@ console.log(meta.subject, meta.participants.length + ' members')
 
 Os dois endereços são preenchidos em cada participante, seja qual for a forma como o servidor
 os nomeou, então você nunca precisa resolver um LID na mão para saber quem é alguém.
+
+Os metadados ficam em cache por alguns minutos. Para passar por cima do cache:
+
+```js
+await client.getGroupMetadata(groupJid, { force: true })   // ask the server now
+client.invalidateGroupMetadata(groupJid)                   // the next read asks the server
+const members = await client.refreshGroupMembers(groupJid) // just the participants array
+```
 
 ### Obter a Lista de Solicitações de Entrada
 
@@ -5989,6 +6676,7 @@ Estas variáveis sobrescrevem campos individuais por cima do perfil selecionado:
 | `WA_DEVICE_BUILD` | Fingerprint da build (ex.: `UP1A.231005.007`) |
 | `WA_DEVICE_MODEL_ID` | Slug do ID do modelo (ex.: `samsung-sm-s928b`) |
 | `WA_DEVICE_RAM` | RAM utilizável em GiB, como o Android reporta (ex.: `7.53`). Cada perfil nomeado carrega a sua; defina isto só para uma variante de memória diferente do mesmo modelo. |
+| `WA_DEVICE_BOARD` | Só Android: o nome da placa, como o celular o informa em `Build.BOARD`, anunciado no user agent. Sem valor por padrão, e então deixado de fora, como o app faz quando a placa está vazia. Defina-o só com a placa real do modelo que você anuncia. |
 
 ### Declarando o seu SIM
 
@@ -6019,6 +6707,7 @@ ambas sem definir e nada muda em relação a antes.
 |---|---|
 | `WA_VERSION` | Fixa a versão do WhatsApp (ex.: `2.24.13.80`). Pula a busca ao vivo na loja, e é anunciada na conexão **no lugar da versão armazenada na sessão**. A CLI também a lê de um arquivo `.env` no diretório de trabalho, então uma deixada ali é anunciada por toda conexão feita a partir daquele diretório — que é como uma sessão funcional começa a ser recusada com [405](#quando-o-servidor-responde-405-na-conexão). Fixe-a deliberadamente e remova-a quando terminar. |
 | `WA_STATIC_TOKEN` | Sobrescreve o token estático usado no cálculo do token de registro. Somente iOS — o Android não tem token estático. Sobrescreve tanto a constante do consumidor quanto a do Business. |
+| `WA_GP_HASH` | Só Android: o valor `_gp` (base64) que o registro envia, o hash das permissões declaradas pelo app. Usado só quando nenhum material de APK o fornece (veja [Atestação de Dispositivo](#atestação-de-dispositivo--play-integrity-e-app-attest)); caso contrário é enviado um valor observado num cliente atual. Defina-o quando uma nova versão do WhatsApp muda a lista de permissões. |
 | `WA_BUSINESS` | Registra e conecta como WhatsApp Business (`1`/`true`/`yes`/`on`). Decide a plataforma anunciada, o User-Agent, de qual APK vem o material do token, e o certificado `vname`. Veja [Registrando uma conta WhatsApp Business](#registrando-uma-conta-whatsapp-business). |
 
 ### Quando o servidor responde 405 na conexão

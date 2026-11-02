@@ -23,6 +23,18 @@ const results = await client.hasWhatsapp(['919634847671', '12345678901'])
 // returns array of JIDs that have WhatsApp
 ```
 
+Whether a saved session is still the one the number is registered with, asked
+of the registration server (`/exist`) without connecting:
+
+```js
+const { loadStore, storeFileFor, checkIfRegistered } = require('whalibmob')
+
+const store  = loadStore(storeFileFor(sessionDir, '919634847671'))
+const answer = await checkIfRegistered(store)
+// the server's answer as it came: status 'ok' when this session's keys are the registered ones
+console.log(answer.status, answer.reason)
+```
+
 ### Fetch Profile About
 
 ```js
@@ -40,6 +52,26 @@ const url = await client.queryPicture('919634847671')
 // also works for groups
 const groupUrl = await client.queryPicture('120363000000000000@g.us')
 ```
+
+For the bytes themselves, or for more than the URL:
+
+```js
+const fs = require('fs')
+
+// the JPEG, or null when there is no picture or privacy hides it
+const jpeg = await client.downloadProfilePicture('919634847671')
+if (jpeg) fs.writeFileSync('avatar.jpg', jpeg)
+
+// { id, url, type, directPath, hash } — or null
+const info = await client.queryPictureInfo('919634847671', {
+  preview:    true,       // the small thumbnail instead of the full image
+  existingId: '1730000000' // the id you already hold: null when it has not changed
+})
+```
+
+Both take the same options. `isCommunity: true` asks for a community's picture.
+A refused query (`404` for no picture, `401` / `403` when privacy hides it) comes
+back as `null`; any other refusal throws.
 
 ### Subscribe to Presence
 
@@ -98,7 +130,7 @@ await client.changeProfilePicture(null)
 
 // change a group's picture (you must be admin)
 // returns the new picture id, or 'remove' when the picture was taken down
-const picId = await client.changeGroupPicture('120363000000000000@g.us',
+const groupPicId = await client.changeGroupPicture('120363000000000000@g.us',
   fs.readFileSync('./group.jpg'))
 
 // pass null to remove the current picture
