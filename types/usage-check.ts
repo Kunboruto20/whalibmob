@@ -206,3 +206,161 @@ async function checkLinkCommands(client: wa.WhalibmobClient, readiness: wa.Prima
   await L.runLinkCode({ client, code: 12345678 });
 }
 void checkLinkCommands;
+
+// ─── The primary message store, and the history handed to a companion ────────
+
+async function checkPrimaryMessageStore(sessionDir: string, phone: string) {
+  // Off unless asked for. `true` keeps 100 messages a chat and 20 000 in all;
+  // an object bounds them.
+  const defaults = new wa.WhalibmobClient({ sessionDir, messageStore: true });
+  const bounded = new wa.WhalibmobClient({ sessionDir, messageStore: { perChat: 200, maxMessages: 50000 } });
+  const perChatOnly = new wa.WhalibmobClient({ sessionDir, messageStore: { perChat: 50 } });
+  void bounded; void perChatOnly;
+  // @ts-expect-error A bound is a number.
+  void new wa.WhalibmobClient({ messageStore: { perChat: '100' } });
+
+  defaults.on('primary_message_store_error', e => { const code: string = e.code; const op: string = e.op; void code; void op; });
+  await defaults.init(phone);
+
+  const kept: wa.PrimaryMessageSnapshot | null = defaults.getPrimaryMessageStore();
+  if (!kept) return;
+  const origin: string = kept.capture.origin;
+  const since: number = kept.capture.since;
+  const evicted: number = kept.retained.evicted;
+  const chats: number = kept.counts.chats;
+  void origin; void since; void evicted; void chats;
+  for (const chat of kept.chats) {
+    const name: string | undefined = chat.name;
+    const lid: string | undefined = chat.lidJid;
+    for (const record of kept.records[chat.id]) {
+      const gone: 'revoked' | 'expired' | 'view-once' | undefined = record.tombstone;
+      const raw: Buffer | undefined = record.raw;
+      const timer: number | undefined = record.expiration;
+      void gone; void raw; void timer;
+    }
+    void name; void lid;
+  }
+  const reason: string | undefined = kept.losses[0]?.reason;
+  void reason;
+  // @ts-expect-error The snapshot is null when the store is off, not undefined.
+  const nope: wa.PrimaryMessageSnapshot = defaults.getPrimaryMessageStore();
+  void nope;
+}
+void checkPrimaryMessageStore;
+
+async function checkPrimaryBootstrap(client: wa.WhalibmobClient) {
+  const sent: wa.PrimaryBootstrapResult = await client.bootstrapPrimaryCompanion({ history: 'store' });
+  const mode: 'first' | 'relink' = sent.mode;
+  const chats: number = sent.history.chats;
+  const records: number = sent.history.records;
+  const losses: number | null = sent.history.losses;
+  const origin: string | null = sent.history.captureOrigin;
+  void mode; void chats; void records; void losses; void origin;
+
+  // Recovery: continue the recorded attempt; send again only a step whose reply never came.
+  await client.bootstrapPrimaryCompanion({ history: 'store', resume: true });
+  await client.bootstrapPrimaryCompanion({ history: 'store', resume: true, resendUncertain: true });
+  // Experimental, and not verified on real WhatsApp Web.
+  const withDelta = await client.bootstrapPrimaryCompanion({ history: 'store', delta: true });
+  const newer: number | undefined = withDelta.delta?.records;
+  void newer;
+
+  // A history of your own, in the store's snapshot shape.
+  await client.bootstrapPrimaryCompanion({
+    history: async () => ({ seq: 0, chats: [], records: {}, pushNames: [] }),
+    upload: async () => { throw new Error('not needed below 64 KiB'); }
+  });
+  // @ts-expect-error The history is required: there is nothing to default to.
+  await client.bootstrapPrimaryCompanion({});
+  // @ts-expect-error 'store' is the one name; anything else is a function.
+  await client.bootstrapPrimaryCompanion({ history: 'file' });
+}
+void checkPrimaryBootstrap;
+
+function checkPrimaryUnlock(client: wa.WhalibmobClient) {
+  // Breaks a lock only when the caller says so. Null when none was held.
+  const { holder } = client.unlockPrimaryLink();
+  if (!holder) return;
+  const pid: number | null = holder.pid;
+  const host: string | null = holder.host;
+  const since: number | null = holder.at;
+  const legacy: boolean = holder.legacy;
+  const mutex: true | undefined = holder.mutex;
+  void pid; void host; void since; void legacy; void mutex;
+}
+void checkPrimaryUnlock;
+
+function checkPrimaryInvitationFingerprint(client: wa.WhalibmobClient) {
+  for (const invitation of client.getPrimaryLinkInvitations()) {
+    // A short fingerprint of the browser's key; null when the request has none.
+    const label: string | null = invitation.companion;
+    // @ts-expect-error The fingerprint can be null, so it is not a string as it stands.
+    const asText: string = invitation.companion;
+    void label; void asText;
+  }
+  const groups = wa.Cli.LinkCommands.groupInvitations(client.getPrimaryLinkInvitations());
+  const browser: string | null = groups[0].companion;
+  void browser;
+}
+void checkPrimaryInvitationFingerprint;
+
+// The modules behind the store, the encoder and the readiness check.
+function checkPrimaryNamespace() {
+  void wa.Primary.MessageStore.PrimaryMessageStore;
+  void wa.Primary.HistoryExport.buildHistorySync;
+  void wa.Primary.HistoryExport.exportedCounts;
+  void wa.Primary.Readiness.evaluateReadiness;
+  void wa.Primary.Readiness.gatherFacts;
+}
+void checkPrimaryNamespace;
+
+// ─── What the decoder keeps for a store that holds a message verbatim ────────
+
+function checkDecodedForCapture(buf: Buffer) {
+  const decoded: DecodedMessage = wa.MessageProto.decodeMessageContainer(buf);
+
+  // The disappearing-messages timer in force when a message was sent, in seconds.
+  const timer: number | undefined = decoded.contextInfo?.expiration;
+  void timer;
+
+  // The message a device-sent envelope wrapped, as the bytes it came in.
+  if (decoded.deviceSentMeta) {
+    const inner: Buffer | undefined = decoded.deviceSentMeta.messageRaw;
+    const chat: string | undefined = decoded.deviceSentMeta.destinationJid;
+    void inner; void chat;
+  }
+}
+void checkDecodedForCapture;
+
+function checkDecodedProtocol(protocol: wa.DecodedProtocol) {
+  // The type as the number it arrived as; `subtype` is only its name.
+  const type: number | undefined = protocol.protocolType;
+  // The message a revoke or an edit acts on.
+  const target = protocol.key;
+  if (target) {
+    const id: string = target.id;
+    const fromMe: boolean = target.fromMe;
+    const remote: string = target.remoteJid;
+    const sender: string | undefined = target.participant;
+    void id; void fromMe; void remote; void sender;
+  }
+  // Seconds, and zero means messages no longer disappear.
+  const seconds: number | undefined = protocol.ephemeralExpiration;
+  // An edit's new content, as the bytes it came in.
+  const edited: Buffer | undefined = protocol.editedMessageRaw;
+  void type; void seconds; void edited;
+  // @ts-expect-error The protocol type is a number, never its name.
+  const asName: string = protocol.protocolType;
+  // @ts-expect-error An edit's content is bytes.
+  const asText: string = protocol.editedMessageRaw;
+  void asName; void asText;
+}
+void checkDecodedProtocol;
+
+function checkMediaPaths() {
+  // Message media, and the one upload type that is not a message.
+  const paths = wa.MediaService.MEDIA_PATH;
+  const history: { path: string; keyName: string } = paths['md-msg-hist'];
+  void history;
+}
+void checkMediaPaths;

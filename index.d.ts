@@ -312,6 +312,11 @@ export interface DecodedContextInfo {
   quotedMessage?: DecodedMessage;
   /** The quoted message's raw protobuf bytes, for re-encoding it verbatim. */
   quotedMessageRaw?: Buffer;
+  /**
+   * The chat's disappearing-messages timer in force when this was sent, in seconds.
+   * Absent when the message had none: zero is left out rather than reported.
+   */
+  expiration?: number;
 }
 
 export interface DecodedBase {
@@ -375,6 +380,12 @@ export interface DeviceSentMeta {
   destinationJid?: Jid;
   /** Hash of the participant list the sending device used, when it set one. */
   phash?: string;
+  /**
+   * The message the envelope wrapped, as the bytes it came in. Whatever the
+   * decoder understood of it, a store that records what this account sent from
+   * another device can keep it verbatim.
+   */
+  messageRaw?: Buffer;
 }
 
 export interface DecodedText extends DecodedBase {
@@ -426,6 +437,18 @@ export interface DecodedGroupInvite extends DecodedBase {
 export interface DecodedProtocol extends DecodedBase {
   type: 'protocol';
   subtype: string;
+  /**
+   * The protocol message's type as the number it arrived as (`0` revoke, `3`
+   * ephemeral setting, `14` edit, …); `subtype` is only its name, and a type the
+   * decoder has no name for becomes a bare string of the number.
+   */
+  protocolType?: number;
+  /** The message a revoke or an edit acts on. Absent when the protocol message names none. */
+  key?: { remoteJid: Jid; fromMe: boolean; id: string; participant?: Jid };
+  /** For an ephemeral setting: how long messages now live, in seconds. `0` means they no longer disappear. */
+  ephemeralExpiration?: number;
+  /** For an edit: the new content, a `Message`, as the bytes it came in. */
+  editedMessageRaw?: Buffer;
 }
 
 export type DecodedMessage =
@@ -1030,7 +1053,7 @@ export interface PrimaryBootstrapOptions {
   resendUncertain?: boolean;
   /**
    * After the history, send what reached the store since it was pinned, as a RECENT chunk: only the chats with
-   * something new and the push names of those chats and senders. Not yet verified on real WhatsApp Web (spec §8).
+   * something new and the push names of those chats and senders. Experimental: not verified on real WhatsApp Web, so leave it off unless you are testing it.
    */
   delta?: boolean;
   /** Retry a key share the server refused with 479, once, with the same key. */
@@ -1994,7 +2017,12 @@ export declare const StoreMigrate: {
  * `client.downloadMedia()`. Everything it exports is typed.
  */
 export declare const MediaService: {
-  /** Upload path and HKDF info string per media type. */
+  /**
+   * Upload path and HKDF info string per media type. Besides the message media
+   * types it holds one that is not a message: `'md-msg-hist'`, the encrypted
+   * chat-history blob a primary uploads when it links a companion and the history
+   * is too large to send inline (over 64 KiB deflated).
+   */
   MEDIA_PATH: Record<string, { path: string; keyName: string }>;
   encryptMedia(plaintext: Buffer, mediaKey: Buffer, keyName: string): EncryptedMedia;
   decryptMedia(encryptedWithMac: Buffer, mediaKey: Buffer, keyName: string): Buffer;
@@ -2290,7 +2318,7 @@ export type LinkQrResult =
  */
 export interface LinkCommandsModule {
   /**
-   * The commands the messages point to (spec 6.9): `/link-code`, `/link-qr`, `/link-invitations`, `/link-status`,
+   * The commands the messages point to: `/link-code`, `/link-qr`, `/link-invitations`, `/link-status`,
    * `/linked-devices`, `/link-retire`, `/link-confirm FILE|JSON`, `/link-bootstrap --resume` (also under `resend`, with
    * `--resend-uncertain`) and `/link-unlock`, with the CLI's own `/connect`, `/disconnect`, `/reconnect`, `/reg` and `/name`.
    */

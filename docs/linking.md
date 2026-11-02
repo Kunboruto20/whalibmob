@@ -488,6 +488,233 @@ const confirmed = await client.reconcilePrimaryLink(proof); // verifies signatur
 
 `reconcilePrimaryLink` re-verifies the already-sent reservation, both SDK signatures and a fresh server list before confirming — it never replays the pairing request. Progress is observable through the `primary_link_invitation`, `primary_link_progress`, `primary_linked` and `primary_link_error` events, and `getPrimaryLinkStatus()` returns the non-secret durable state at any time.
 
+### Linking WhatsApp Web from the CLI
+
+The CLI runs all of the above for you and then hands the new companion the chat history this program has kept for the number. It works on a number registered through whalibmob, connected as the **primary**. A number connected as a companion cannot approve one (`PRIMARY_LINK_PRIMARY_REQUIRED`); if a number holds both kinds of session and `wa connect` picks the wrong one, add `--sms`. Keep the shell open until the chats have loaded in Web.
+
+```sh
+wa connect 447949738354 --session ~/whalibmob_auth
+```
+
+**1. Ask for a code on WhatsApp Web.** On Web choose **Link with phone number** and enter the same phone number. Web shows an 8-character code. The shell announces the request as it arrives; the code is good for about three minutes from then (the `code window` counts it down):
+
+```
+wa +447949738354>   link request   companion c0ffee01   code window 2:50   id a1a1a1a1
+```
+
+**2. Type the code into the shell.** These are all the same code. The dash, the case and a space between the two halves do not matter; a code never contains the letters I, O or U, or the digit 0:
+
+```
+wa +447949738354> /link-code ABCD-EFGH
+wa +447949738354> /link-code ABCD EFGH
+wa +447949738354> /link-code abcdefgh
+```
+
+**3. Choose a browser, if asked.** Web sends each request more than once, and every open Web tab adds its own. The shell folds the requests of one browser into one line. With a single browser it goes straight on. With more than one it approves nothing and lists them, newest first (`/link-invitations` shows the same list at any time):
+
+```
+more than one browser is asking to link, so nothing was approved. Choose the one this code belongs to.
+pairing requests waiting, newest first:
+  1  browser deadbe02   1 request   newest id b2b2b2b2b2b2   expires in 2m 53s
+  2  browser c0ffee01   1 request   newest id a1a1a1a1a1a1   expires in 2m 48s
+  Requests with the same browser label come from one browser (Web sends each more than once).
+  The label is a short fingerprint, not proof of who is behind it.
+  Choose one by its id (it does not move; 6 or more characters):  /link-code CODE <id>
+  or by its number (numbers shift as requests expire):  /link-code CODE <number>
+  or close the other Web tabs and wait 3 minutes.
+```
+
+Run the command again with the number or the id of the request that belongs to your Web page: `/link-code ABCD-EFGH 2`, or `/link-code ABCD-EFGH a1a1a1`. The browser label is the first 8 hex characters of a hash of the browser's key (`companion` on a `PrimaryLinkInvitation`). It tells requests apart; it does not authorise anything.
+
+**4. Confirm the coverage, if asked.** Before it approves anything, the shell checks that the link can be finished, and what history it would send. If that history is known to be partial (see [What the History Covers](#what-the-history-covers)) it prints what is and is not in it and asks once, naming the browser. Enter, or anything but `y` or `yes`, is no, and nothing is approved:
+
+```
+wa +447949738354> /link-code ABCD-EFGH 2
+ready to link (first link)
+history to send: 12 chats, 340 messages
+  capture period             since 2026-09-14 10:00 - the store was switched on then, so anything earlier was never captured
+  retained range             2026-09-14 10:05 to 2026-11-02 15:20; 25 older messages were dropped to stay within the store's limits
+  known or possible losses   2 received messages could not be decrypted
+This is only what this program captured, not everything the account has ever sent or received.
+approve the link with browser c0ffee01 (request a1a1a1a1) and send it this history?  [y/N] y
+```
+
+When the store has kept everything since registration and dropped nothing, there is no question; it prints one line, `ready to link (first link): 12 chats, 340 messages to send`, and carries on.
+
+**5. What success looks like.**
+
+```
+approving with the request a1a1a1a1a1a1...
+  link       approval sent, not confirmed with a companion proof
+approval sent. The binding to the browser stays unconfirmed unless you confirm it with /link-confirm FILE|JSON (needs the companion's public proof JSON).
+sending the stored history to the companion...
+history handed to the companion: 12 chats, 340 messages, 20.0 KB (sent inline), first link
+The history is handed over; whether Web has finished showing it cannot be seen from here. If Web stays on "Loading chats", run /link-status.
+```
+
+A history over 64 KiB deflated is uploaded rather than sent inline, and the line then reads `(uploaded as a blob)`. Web should now show the chats. The shell cannot see Web's screen, so "handed over" is all it can claim. Then:
+
+```
+wa +447949738354> /linked-devices
+linked devices  +447949738354
+  #0   this phone (primary)
+  #12  companion   key index 3   linked 2026-11-02 15:31   binding unconfirmed   history delivered (12 chats, 340 msgs)
+```
+
+`#12` is the companion's device slot, `key index` its place in the account's device list, and `linked` the time the approval was made (your local time). `binding unconfirmed` is normal for a Web link, see [Limits](#limits). `history delivered` carries the counts only for a handover made in this run of the shell; after a restart it says `history delivered` without them. The example numbers are made up.
+
+`/link-status` says where the link stands and what to do next:
+
+```
+wa +447949738354> /link-status
+link       approval sent, not confirmed with a companion proof, started 2026-11-02 15:31
+binding    unconfirmed (no companion proof has been reconciled)
+bootstrap  sent
+companions #12 key index 3
+next       if you have the companion's public proof JSON, run /link-confirm FILE|JSON; if the companion never appeared, /link-retire works once the approval is 5 minutes old
+```
+
+`/link-qr PAYLOAD` takes the text a Web QR encodes (or its `https://wa.me/settings/linked_devices#...` link) in place of a code, and the steps after it are the same. Every command is in the [CLI reference](cli.md#companion-commands-approving-whatsapp-web); a link that fails prints what happened, the step to take, and a stable error code to report.
+
+### What the History Covers
+
+The history is the **primary message store**: a record, kept on disk beside the session, of the messages this program sent and received for the number. It is not a copy of everything the account has ever had.
+
+- **Since when.** Only what the store kept since it began. For a number registered here with the CLI, the store starts at registration, and the shell says `since registration`. For any other number it starts the first time the number is connected with the store on, and the shell says `the store was switched on then, so anything earlier was never captured`. The CLI keeps the store unless you pass `--no-message-store`; the library does not (see [the library API](#library-api-for-the-chat-history)). Registering a number again starts a new store; the earlier one is set aside, kept and never handed over (see [Sessions](accounts-sessions.md#files-the-primary-keeps-for-linked-companions)).
+- **How much.** Retention defaults to **100 messages per chat and 20 000 in all**. Past a limit the oldest go first: within a chat, its oldest message; for the 20 000 in all, from the chat that has been quiet longest. The shell reports how many were dropped.
+- **What it knows it lost** is reported, not hidden: a received message that could not be decrypted, one that was seen and never saved (the program stopped in between), and a stretch during which the store was not open (a run with `--no-message-store`, or a client that did not have `messageStore` on).
+- **When it asks.** `getPrimaryLinkReadiness()` sets `needsConfirmation`, and the shell asks `[y/N]`, unless the store has kept everything since registration with no known loss and nothing dropped. A store switched on later, an origin it cannot tell, any loss, or any dropped message all ask. In practice a chat past 100 messages makes every link ask.
+- **Whole contacts.** A contact the store saw both by phone number and by LID goes over as one conversation, as the phone shows it. Edits are applied to the message they edit, a message deleted for everyone is buried as described below, and one you delete for yourself with this program is dropped.
+- **Media.** The files are not stored. A media message goes over as the message, with the keys it carries; whether Web can still fetch the file depends on WhatsApp's servers still holding it.
+
+The store holds message content on disk, unencrypted, in files only you can read (mode `0600`) in the session folder. Treat that folder the way you already treat its keys.
+
+#### Never transferred
+
+- **Revoked, expired and view-once content.** It is dropped from the store the moment it is known and is never handed to a companion. A message deleted for everyone goes over as a deleted-message marker (its id and time, none of what it said). An expired disappearing message and a view-once message are left out entirely. View-once bytes are never written to the store's files at all. A message's bytes as first received can stay in the store's append-only log (`<phone>.primary-messages.log`) until its next compaction, which happens when the store is closed on disconnect or when the log passes about 1 MiB or 5 000 lines; after that they are gone from the files.
+- **Reactions and poll votes.** They are skipped: not stored, so they do not appear on the new device.
+- **Status posts and channels.** Not kept.
+
+#### Limits
+
+- **A message of a type the library does not decode** is kept exactly as it was received and handed over unchanged. Web reads it itself; what Web then shows is Web's doing.
+- **A second companion while one is still linked is not supported.** The history can only be handed to the first and only companion. `/link-code` and `/link-qr` check this first and refuse (`PRIMARY_BOOTSTRAP_EXISTING_COMPANIONS_UNSUPPORTED`) before anything is approved; log the first one out of Web (Menu → Log out), wait until `/linked-devices` no longer lists it, then link again.
+- **The binding stays "unconfirmed" unless a companion's public proof JSON is reconciled** with `/link-confirm FILE|JSON`. The proof is the companion's own signed binding between its device and your account; the JSON carries its public parts only, and `/link-confirm` checks both signatures and a fresh device list before it reports `confirmed`. Standard WhatsApp Web is not known to offer such a proof, so with an ordinary browser expect the binding to stay unconfirmed. That is not a failed link: `/linked-devices` shows the companion WhatsApp's device list reports. It means this program has not independently tied that device to the browser you approved.
+- **What Web does with it cannot be seen from here.** "Handed over" is the shell's claim, not "Web finished loading".
+- **The `delta` option is experimental.** It would send what reached the store after the history was cut, as a second chunk. It has not been verified on real WhatsApp Web, and the CLI never uses it.
+
+### Linking Again
+
+Web can be linked again after it has been logged out, and gets the history again. The shell calls it a re-link, and it reuses the app-state key it shared the first time.
+
+1. Log out on Web (Menu → Log out).
+2. Wait until `/linked-devices` no longer lists the companion (`no companion linked`).
+3. Run `/link-retire`. An approval that was never confirmed leaves a hold behind, which refuses any new approval (`PRIMARY_LINK_RECONCILIATION_REQUIRED`); `/link-retire` clears it. It works 5 minutes after the approval, and only when the companion is gone from the device list; sooner it says `The unfinished approval is less than 5 minutes old`, and while the companion is still listed it refuses. It never removes a device. An approval that was confirmed leaves no hold, and this step is not needed.
+4. Run `/link-code` again, with a new code from Web. Each code works once.
+
+```
+wa +447949738354> /linked-devices
+linked devices  +447949738354
+  #0   this phone (primary)
+  no companion linked
+wa +447949738354> /link-retire
+retired the unfinished approval (operation 0f0e0d0c); nothing was linked
+link       retired; nothing was linked, started 2026-11-02 15:31
+binding    unconfirmed (no companion proof has been reconciled)
+bootstrap  sent
+companions none
+```
+
+The shell then says `re-link` where it said `first link`. The history is whatever the store holds now, so it includes what was kept since the first link.
+
+### When Something Stops Part-Way
+
+An approval and the handover of the history are two steps. If the second one stops, the approval stands and Web waits on "Loading chats" until the history is sent. `/link-status` says how far it got and what to do. Do not approve again for a handover that stopped.
+
+```
+/link-bootstrap                          send the history for an approved companion, once
+/link-bootstrap --resume                 continue the last attempt after its last accepted step
+/link-bootstrap --resume --resend-uncertain
+                                         also send once more a step whose reply never came
+```
+
+There is no blind resend. A plain `/link-bootstrap` after an attempt is refused as already attempted (`PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED`); `--resume` continues the recorded attempt instead, and is harmless when none was recorded. A step that was sent and never answered stops the attempt with `PRIMARY_BOOTSTRAP_KEY_SHARE_UNCERTAIN` or `PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN`; only `--resend-uncertain` sends it again, under the same message id. A step the other side **refused** is never sent again; the shell then tells you to start over (log out on Web, `/linked-devices`, `/link-retire`, `/link-code` with a new code). A dropped connection mid-handover leaves the link uncertain and `--resume` continues it. `--resend-uncertain` on its own counts as a resume, and the shell says so.
+
+The link journal (`<phone>.primary-linking.json`) is guarded by a lock file beside it, so that two programs cannot write it at once. When a program dies holding it:
+
+- **A dead holder on the same machine is recovered automatically.** The lock names its holder's process, machine, boot and process namespace; when all of those match this machine and the process is gone, the next program takes the lock over without being asked.
+- **Anything else is reported as busy, with the holder, and left alone.** A holder on another machine or in another container, a lock from an older version, and a process that is merely paused cannot be proven dead from here:
+
+  ```
+  error: Another process (pid 4242 on old-box, since 2026-11-02 15:31) holds the link journal for this number.
+    next: Close that program; if it is gone for good (another machine or container, or an old lock), run /link-unlock to break the lock.
+    (PRIMARY_LINK_STORE_BUSY)
+  ```
+
+- **`/link-unlock` breaks the lock, and only when you run it.** Check first that the holder is really gone: a holder that is in fact still running finds its lock gone at its next write and stops there (`PRIMARY_LINK_STORE_LOST`). It reports who held it (`broke the link journal lock held by pid 4242 on old-box`) or that none was held. It refuses while this very program holds the journal (`PRIMARY_LINK_BUSY`), and a recovery that is still running on this machine is told to wait a minute and unlock again.
+
+### Library API for the Chat History
+
+The CLI is a thin layer over these. The store is **off by default in the library**; the CLI turns it on.
+
+```js
+const { WhalibmobClient } = require('whalibmob')
+
+// true keeps the defaults (100 messages a chat, 20 000 in all); an object bounds them
+const client = new WhalibmobClient({
+  sessionDir,
+  messageStore: { perChat: 200, maxMessages: 50000 }
+})
+client.on('primary_message_store_error', ({ code, op }) => console.warn('store:', code, op))
+await client.init('447949738354')   // primary sessions only; a companion never opens one
+
+const kept = client.getPrimaryMessageStore()
+// null when the store is off, before the first login, after disconnect(), or if it could not be read;
+// otherwise { seq, capture: { since, origin, lc }, chats, records, losses, retained: { evicted }, pushNames, counts }
+// `records` holds the message bytes, so treat it like the files it is read from.
+
+const verdict = await client.getPrimaryLinkReadiness()
+// { ready, mode: 'first' | 'relink' | null, blockers: [{ code, detail }], history, needsConfirmation }
+// Read-only: it approves nothing, sends nothing and writes no link state.
+if (!verdict.ready) throw new Error(verdict.blockers.map(b => b.code).join(', '))
+if (verdict.needsConfirmation) { /* show verdict.history and ask before going on */ }
+
+const [invitation] = client.getPrimaryLinkInvitations()   // { id, expiresAt, companion }
+await client.approveCompanionCode(code, { invitationId: invitation.id })
+const sent = await client.bootstrapPrimaryCompanion({ history: 'store' })
+// { status: 'sent', mode, operationId, delta, history: { chats, records, bytes, inline, losses, evicted, captureOrigin } }
+```
+
+| Call | What it does |
+|---|---|
+| `messageStore` (client option) | Off unless `true` or `{ perChat, maxMessages }`. Without it `bootstrapPrimaryCompanion({ history: 'store' })` throws `PRIMARY_MESSAGE_STORE_DISABLED` and readiness reports a blocker. |
+| `getPrimaryMessageStore()` | The store's snapshot, or `null`. Never throws; a failure is said on `primary_message_store_error`. |
+| `getPrimaryLinkReadiness({ timeoutMs, signal })` | Whether a link can be finished, found out before anything is approved. Each blocker has a stable `code` and a `detail`. |
+| `bootstrapPrimaryCompanion({ history, upload, resume, resendUncertain, delta })` | The key share, the app-state patch and the history. `history: 'store'` reads this client's store; a function returning a snapshot sends a history of your own. `upload` is used only above 64 KiB deflated and defaults to the `md-msg-hist` media upload. `resume` and `resendUncertain` are as above. `delta` is experimental and not verified on real Web. |
+| `unlockPrimaryLink()` | Breaks the link journal lock, as `/link-unlock` does. Returns `{ holder }` (`null` when none was held) and throws `PRIMARY_LINK_BUSY` while this process holds the journal. |
+| `getPrimaryLinkInvitations()` | Each pending request carries `companion`, the browser's short fingerprint (`null` when the request has none). A label, never authorisation. |
+
+A store started by `init()` counts as switched on at that moment (`origin: 'enabled'`). To have the store count as kept "since registration", as the CLI does, open it once at registration time:
+
+```js
+const { sessionDirFor, Primary } = require('whalibmob')
+const { PrimaryMessageStore } = Primary.MessageStore
+PrimaryMessageStore.open({ dir: sessionDirFor(base, phone), phone, origin: 'registration', lc: store.connectionLc || 0 }).close()
+```
+
+The package also exports the pieces: `Primary.MessageStore` (`PrimaryMessageStore`, `STATUS`), `Primary.HistoryExport` (`buildHistorySync`, `buildNotification`, `recordsAfter`, `exportedCounts`) and `Primary.Readiness` (`evaluateReadiness`, `gatherFacts`), and `Cli.LinkCommands`, the logic behind the CLI's link commands with no terminal in it, for a front end of your own:
+
+```js
+const { Cli } = require('whalibmob')
+const result = await Cli.LinkCommands.runLinkCode({
+  client, code: 'ABCD-EFGH',
+  selector: undefined,                                   // a group number or an id prefix, when more than one browser is asking
+  confirm: async (readiness, ask) => askTheUser(ask.question),  // called only when the history is partial; no function is a no
+  print: line => console.log(line)
+})
+// result.status: 'sent' | 'choose' (several browsers, nothing approved) | 'aborted'
+```
+
 
 ---
 
