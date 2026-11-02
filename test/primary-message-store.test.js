@@ -1191,8 +1191,8 @@ process.stdin.once('data', () => {
   try { s.recordIncoming({ id: 'K2', chat: ${JSON.stringify(CHAT)}, ts: 6, raw: Buffer.from('k2'), info: { kind: 'content' } }); }
   catch (e) { code = e.code; }
   s.close();
-  process.stdout.write(code + '\\n');
-  process.exit(0);
+  // Exit once the line is out: a pipe may still be writing it.
+  process.stdout.write(code + '\\n', () => process.exit(0));
 });
 `;
 
