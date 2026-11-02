@@ -374,6 +374,19 @@ cstoken = HMAC-SHA256(nctSalt, recipient-LID)
 
 The `nctSalt` is an account-wide secret the server distributes over app state, so only a **companion (QR / pairing-code) session** ever holds one — a primary (SMS) session has none and sends no cstoken, exactly as the real primary does until it has minted its own. When a companion session receives the salt it fires a `nct_salt` event and persists it; from then on, any first DM without a tctoken carries a `<cstoken>` derived for that recipient's LID. Like the rest of this section it is fully automatic — there is nothing to call.
 
+**Watching tokens.** The lifecycle stays automatic, but you can see it. Every time a token is stored — issued by the server for us, or pushed by a contact — the client emits `tctoken`. Token bytes are never exposed.
+
+```js
+client.on('tctoken', ({ jid, timestamp, size, source }) => {
+  console.log('tctoken', source, 'for', jid, size + 'B')   // source: 'issued' | 'received'
+})
+
+client.getTcTokens()          // [{ jid, timestamp, size, expired }]
+client.hasTcToken(jid)        // true → the next DM to jid carries a stored tctoken
+```
+
+`hasTcToken(jid)` answers the question behind most 463 errors: when it is `true` the next send attaches the token and needs no issuance; when it is `false` the library has to ask the server for one, and a restricted account is refused at exactly that step.
+
 <a id="account-restriction"></a>
 
 ### When 463 Means the Account Is Restricted
