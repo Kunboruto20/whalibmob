@@ -872,3 +872,72 @@ test('add-ons that act on another message are not kept', async t => {
     }
     assert.deepEqual(f.snapshot().losses, []);
 });
+
+// A reply: ExtendedTextMessage { text = 1, contextInfo = 17 }, its
+// ContextInfo { stanzaID = 1, participant = 2, quotedMessage = 3,
+// mentionedJID = 15 }, beside a messageContextInfo { messageSecret = 3 } so a
+// send adds nothing to it.
+const replyParts = quoted => {
+    const context = q => Buffer.concat([field(1, Buffer.from('QUOTED1')), field(2, Buffer.from(PEER)),
+        ...(q ? [field(3, q)] : []), field(15, Buffer.from(OTHER))]);
+    const textReply = q => Buffer.concat([field(6, Buffer.concat([field(1, Buffer.from('cevap')), field(17, context(q))])),
+        field(35, field(3, Buffer.alloc(32, 9)))]);
+    return { reply: textReply(quoted), stripped: textReply(null) };
+};
+
+test('a reply quoting a view-once message is kept, without the quote', async t => {
+    const f = fixture(t);
+    f.login();
+    const secret = Buffer.from('MEDIAKEY-SECRET');
+    const image = Buffer.concat([field(1, Buffer.from('https://mmg/i')), field(8, secret)]);
+    const video = Buffer.concat([field(1, Buffer.from('https://mmg/v')), field(6, secret)]);
+    // The quote is a viewOnceMessageV2 around an image.
+    const { reply, stripped } = replyParts(field(55, wrapped(field(3, image))));
+    await f.receive(dm('RQ1', reply));
+    // The same reply inside a disappearing-chat envelope: every length on the
+    // way down to the quote changes, and nothing else.
+    await f.receive(dm('RQ2', field(40, wrapped(reply))));
+    // A companion's reply, and one this client sends.
+    await f.receive(dm('RQ3', encode({ deviceSentMessage: { destinationJID: OTHER, message: reply } }), { from: OWN_DEVICE }));
+    const sender = f.useSender();
+    await sender._sendMessage(GROUP, 'RQ4', reply, 'text', {});
+    // An image replying to a video that is view-once by its own flag:
+    // ImageMessage { URL = 1, mediaKey = 8, contextInfo = 17 }.
+    const ownKey = Buffer.from('IMAGE-OWN-KEY');
+    const imageReply = q => field(3, Buffer.concat([field(1, Buffer.from('https://mmg/r')), field(8, ownKey),
+        field(17, Buffer.concat([field(1, Buffer.from('QUOTED2')), field(2, Buffer.from(PEER)), ...(q ? [field(3, q)] : [])]))]));
+    await f.receive(dm('RQ5', imageReply(field(9, Buffer.concat([video, varintField(20, 1)])))));
+    const stored = (chat, id) => records(f, chat).find(r => r.id === id);
+    for (const [chat, id, expected] of [[PEER, 'RQ1', stripped], [PEER, 'RQ2', field(40, wrapped(stripped))],
+        [OTHER, 'RQ3', stripped], [GROUP, 'RQ4', stripped], [PEER, 'RQ5', imageReply(null)]]) {
+        const r = stored(chat, id);
+        assert.ok(r, id);
+        assert.equal(r.tombstone, undefined, id);
+        assert.ok(r.raw.equals(expected), id);
+    }
+    assert.ok(stored(PEER, 'RQ5').raw.includes(ownKey));
+    assert.equal(logHolds(f.dir, secret), false);
+    assert.deepEqual(f.errors, []);
+});
+
+test('a reply quoting an ordinary message is kept byte for byte', async t => {
+    const f = fixture(t);
+    f.login();
+    const { reply } = replyParts(encode({ conversation: 'alintilanan' }));
+    await f.receive(dm('RQ6', reply));
+    const [r] = records(f, PEER);
+    assert.equal(r.tombstone, undefined);
+    assert.ok(r.raw.equals(reply));
+});
+
+test('a reply whose way to the quote cannot be read is kept only as a stub', async t => {
+    const f = fixture(t);
+    f.login();
+    // The contextInfo claims a quote of 127 bytes and holds one.
+    const broken = field(6, Buffer.concat([field(1, Buffer.from('cevap')), field(17, Buffer.from([0x1a, 0x7f, 0x01]))]));
+    await f.receive(dm('RQ7', broken));
+    const [r] = records(f, PEER);
+    assert.equal(r.id, 'RQ7');
+    assert.equal(r.tombstone, 'view-once');
+    assert.equal(r.raw, undefined);
+});
