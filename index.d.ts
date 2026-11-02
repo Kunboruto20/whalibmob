@@ -901,7 +901,15 @@ export interface PrimaryADVState {
 }
 /** Decode only public browser binding fields; reconcilePrimaryLink still verifies them. */
 export declare function parseWhatsAppWebPublicProof(input: string | unknown): PrimaryCompanionProof;
-export interface PrimaryLinkInvitation { id: string; expiresAt: number; }
+export interface PrimaryLinkInvitation {
+  id: string; expiresAt: number;
+  /**
+   * First 8 hex characters of sha256 over the companion's raw 32-byte noise key.
+   * Requests from one browser share it; a different companion has a different one.
+   * A fingerprint only, never authorization. null if the stored invitation has no usable noise key.
+   */
+  companion: string | null;
+}
 export interface PrimaryLinkResult {
   status: 'linked' | 'awaiting_confirmation'; operationId: string;
   deviceId?: number; keyIndex?: number;

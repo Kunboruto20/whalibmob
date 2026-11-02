@@ -120,6 +120,9 @@ export { media, decode, poll, retry, internals, sameThing, freshLocation, retryO
 async function checkPrimaryLinkedApi(client: wa.WhalibmobClient, code: string, proof: wa.PrimaryCompanionProof) {
   const invitations = client.getPrimaryLinkInvitations();
   if (!invitations.length) return;
+  const companion: string | null = invitations[0].companion;
+  client.on('primary_link_invitation', (event: wa.PrimaryLinkInvitation) => { const same: string | null = event.companion; void same; });
+  void companion;
   const result: wa.PrimaryLinkResult = await client.approveCompanionCode(code, {
     invitationId: invitations[0].id,
     getCompanionProof: async () => proof
