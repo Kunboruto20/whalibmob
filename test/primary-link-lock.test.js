@@ -1,0 +1,333 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const readline = require('node:readline');
+const { spawn, spawnSync } = require('node:child_process');
+const { PrimaryLinkStore } = require('../lib/PrimaryLinkStore');
+const { WhalibmobClient } = require('../lib/Client');
+const { createNewStore } = require('../lib/Store');
+
+// The primary link journal is guarded by a lock file. A process that crashed
+// used to leave that file behind, and every later link attempt failed with
+// PRIMARY_LINK_STORE_BUSY until someone deleted it by hand.
+//
+// Taking a lock over is only safe when its owner is provably gone: a paused
+// owner is alive, an owner on another host cannot be checked, two recoverers
+// can race, and an owner that lost its lock can still try to write. So a lock
+// is taken over automatically only from a dead process on this same boot of
+// this same host, through a single-winner mutex, and every journal write checks
+// that the lock and the journal's generation are still this owner's. Anything
+// else stays BUSY until an operator breaks the lock explicitly.
+
+const STORE = path.join(__dirname, '..', 'lib', 'PrimaryLinkStore.js');
+const BINDING = 'synthetic-binding';
+const RECEIPT = 'a'.repeat(64);
+
+function scratch(t) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'primary-link-lock-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const file = path.join(dir, 'journal.json');
+    return { dir, file, lock: file + '.lock' };
+}
+
+// The other process. It is passed to `node -e` rather than kept as a file under
+// test/, so `node --test` never runs it on its own. 'crash' opens the store and
+// dies without closing it; 'hold' opens it and waits for commands on stdin.
+function child() {
+    const fs = require('node:fs');
+    const [storeModule, file, binding, mode] = process.argv.slice(1);
+    const { PrimaryLinkStore } = require(storeModule);
+    // Synchronous, so nothing is still buffered when the process is killed.
+    const say = line => fs.writeSync(1, line + '\n');
+    const store = new PrimaryLinkStore(file, binding);
+    if (mode === 'crash') {
+        say(JSON.stringify({ pid: process.pid, token: store.token, gen: store.gen }));
+        process.kill(process.pid, 'SIGKILL');
+    }
+    else {
+        say('ready');
+        require('node:readline').createInterface({ input: process.stdin })
+            .on('line', command => {
+                if (command === 'update') {
+                    try {
+                        store.update(s => { s.receipts = [...s.receipts, 'c'.repeat(64)]; });
+                        say('wrote');
+                    }
+                    catch (error) {
+                        say('error ' + error.code);
+                    }
+                }
+                else if (command === 'close') {
+                    store.close();
+                    say('closed');
+                }
+            })
+            .on('close', () => process.exit(0));
+    }
+}
+const CHILD = '(' + child + ')()';
+
+// A process that opened the store and died the way a crash or a SIGKILL does:
+// its lock stays behind, naming a pid nothing runs any more.
+function crashed(file) {
+    const r = spawnSync(process.execPath, ['-e', CHILD, STORE, file, BINDING, 'crash'], { encoding: 'utf8', timeout: 10000 });
+    if (r.error)
+        throw r.error;
+    assert.equal(r.signal, 'SIGKILL', 'the child did not die as planned\n' + r.stderr);
+    const said = JSON.parse(r.stdout);
+    assert.equal(said.pid, r.pid);
+    return said;
+}
+
+// A process that holds the store until the test ends. It is killed in t.after
+// whether the test passed or not, and every wait on its output has a deadline
+// rather than a sleep.
+function holding(t, file) {
+    const proc = spawn(process.execPath, ['-e', CHILD, STORE, file, BINDING, 'hold'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stderr = '', ended = null;
+    const lines = [], waiting = [];
+    proc.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
+    readline.createInterface({ input: proc.stdout }).on('line', line => {
+        if (waiting.length)
+            waiting.shift().resolve(line);
+        else
+            lines.push(line);
+    });
+    const end = reason => {
+        ended = new Error(reason + '\n' + stderr);
+        for (const w of waiting.splice(0))
+            w.reject(ended);
+    };
+    proc.on('error', error => end('could not start the child: ' + error.message));
+    proc.on('exit', (code, signal) => end('the child exited (' + (code ?? signal) + ') before answering'));
+    // A write to a child that already died fails with EPIPE; the wait reports it.
+    proc.stdin.on('error', () => { });
+    t.after(() => new Promise(resolve => {
+        if (proc.exitCode !== null || proc.signalCode !== null)
+            return resolve();
+        proc.once('exit', () => resolve());
+        proc.kill('SIGKILL');
+    }));
+    proc.next = () => new Promise((resolve, reject) => {
+        if (lines.length)
+            return resolve(lines.shift());
+        if (ended)
+            return reject(ended);
+        const timer = setTimeout(() => reject(new Error('the child said nothing for 10 s\n' + stderr)), 10000);
+        waiting.push({
+            resolve: line => { clearTimeout(timer); resolve(line); },
+            reject: error => { clearTimeout(timer); reject(error); }
+        });
+    });
+    proc.send = command => proc.stdin.write(command + '\n');
+    return proc;
+}
+
+function caught(fn) {
+    try {
+        fn();
+    }
+    catch (error) {
+        return error;
+    }
+    assert.fail('expected a throw');
+}
+
+function open(t, file, options) {
+    const store = new PrimaryLinkStore(file, BINDING, options);
+    t.after(() => store.close());
+    return store;
+}
+
+test('dead same-host holder is taken over automatically', t => {
+    const { dir, file } = scratch(t);
+    const dead = crashed(file);
+    const store = open(t, file);
+    const holder = PrimaryLinkStore.readHolder(file);
+    assert.equal(holder.token, store.token);
+    assert.equal(holder.pid, process.pid);
+    assert.equal(holder.legacy, false);
+    assert.equal(store.gen, dead.gen + 1);
+    // The new generation is on the journal before anything else is written.
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).leaseGen, store.gen);
+    // The takeover mutex and the renamed dead lock are gone.
+    assert.deepEqual(fs.readdirSync(dir).sort(), ['journal.json', 'journal.json.lock']);
+    store.update(s => { s.receipts = [RECEIPT]; });
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).receipts, [RECEIPT]);
+});
+
+// A stopped process is alive. Its pid answers signal 0, so it keeps its lock.
+test('live paused holder gives BUSY and keeps working after SIGCONT', { skip: process.platform === 'win32' && 'no SIGSTOP on Windows' }, async t => {
+    const { file } = scratch(t);
+    const owner = holding(t, file);
+    assert.equal(await owner.next(), 'ready');
+    owner.kill('SIGSTOP');
+    const busy = caught(() => new PrimaryLinkStore(file, BINDING));
+    assert.equal(busy.code, 'PRIMARY_LINK_STORE_BUSY');
+    assert.equal(busy.holder.pid, owner.pid);
+    owner.kill('SIGCONT');
+    owner.send('update');
+    assert.equal(await owner.next(), 'wrote');
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).receipts, ['c'.repeat(64)]);
+    owner.send('close');
+    assert.equal(await owner.next(), 'closed');
+    assert.equal(PrimaryLinkStore.readHolder(file), null);
+});
+
+test('two recoverers interleaved yield exactly one owner', t => {
+    const { file } = scratch(t);
+    const dead = crashed(file);
+    let second;
+    // B arrives while A holds the takeover mutex and has not renamed yet.
+    const a = open(t, file, { hooks: { beforeTakeoverRename() { second = caught(() => new PrimaryLinkStore(file, BINDING)); } } });
+    assert.ok(second, 'the hook did not run');
+    assert.equal(second.code, 'PRIMARY_LINK_STORE_BUSY');
+    assert.equal(second.holder.pid, dead.pid);
+    assert.equal(PrimaryLinkStore.readHolder(file).token, a.token);
+    // And with A done, A is alive: the next one is refused because of A.
+    const third = caught(() => new PrimaryLinkStore(file, BINDING));
+    assert.equal(third.code, 'PRIMARY_LINK_STORE_BUSY');
+    assert.equal(third.holder.token, a.token);
+});
+
+test('old owner after an explicit break fails LOST and writes nothing', t => {
+    const { dir, file } = scratch(t);
+    const a = open(t, file);
+    const broken = PrimaryLinkStore.breakLock(file);
+    assert.equal(broken.holder.token, a.token);
+    assert.equal(PrimaryLinkStore.readHolder(file), null);
+    const b = open(t, file);
+    assert.ok(b.gen > a.gen);
+    const before = fs.readFileSync(file);
+    assert.throws(() => a.update(s => { s.receipts = [RECEIPT]; }), { code: 'PRIMARY_LINK_STORE_LOST' });
+    assert.deepEqual(fs.readFileSync(file), before);
+    assert.deepEqual(fs.readdirSync(dir).sort(), ['journal.json', 'journal.json.lock']);
+});
+
+test('final write is fenced too', t => {
+    const { file } = scratch(t);
+    const a = open(t, file);
+    a.update(s => { s.receipts = [RECEIPT]; });
+    PrimaryLinkStore.breakLock(file);
+    const b = open(t, file);
+    b.update(s => { s.receipts = [...s.receipts, 'b'.repeat(64)]; });
+    const written = fs.readFileSync(file);
+    // A's last word, as a close-time failure mark would be, after B has written.
+    assert.throws(() => a.update(s => { s.receipts = []; }), { code: 'PRIMARY_LINK_STORE_LOST' });
+    assert.deepEqual(fs.readFileSync(file), written);
+    assert.deepEqual(JSON.parse(written.toString()).receipts, [RECEIPT, 'b'.repeat(64)]);
+});
+
+// The lock check alone is not the fence: a journal already written by a later
+// generation refuses an owner even while that owner's lock file looks intact.
+test('a later generation on the journal fences an owner whose lock looks intact', t => {
+    const { file } = scratch(t);
+    const a = open(t, file);
+    const journal = JSON.parse(fs.readFileSync(file, 'utf8'));
+    journal.leaseGen = a.gen + 1;
+    fs.writeFileSync(file, JSON.stringify(journal));
+    const before = fs.readFileSync(file);
+    assert.throws(() => a.update(s => { s.receipts = [RECEIPT]; }), { code: 'PRIMARY_LINK_STORE_LOST' });
+    assert.deepEqual(fs.readFileSync(file), before);
+});
+
+test('regressed journal gives CONFLICT', t => {
+    const { file } = scratch(t);
+    const dead = crashed(file);
+    // The journal names a generation newer than the lock that was left behind.
+    const journal = JSON.parse(fs.readFileSync(file, 'utf8'));
+    journal.leaseGen = dead.gen + 5;
+    fs.writeFileSync(file, JSON.stringify(journal));
+    const before = fs.readFileSync(file);
+    assert.throws(() => new PrimaryLinkStore(file, BINDING), { code: 'PRIMARY_LINK_STORE_CONFLICT' });
+    assert.deepEqual(fs.readFileSync(file), before);
+    // The refused opener keeps nothing.
+    assert.equal(PrimaryLinkStore.readHolder(file), null);
+});
+
+// Locks written before this change hold a bare pid: no host, no boot, nothing
+// that could prove the pid is this machine's. Even a dead pid stays BUSY.
+test('legacy plain-pid lock gives BUSY unless broken', t => {
+    const { file, lock } = scratch(t);
+    const dead = crashed(file);
+    fs.writeFileSync(lock, String(dead.pid), { mode: 0o600 });
+    const busy = caught(() => new PrimaryLinkStore(file, BINDING));
+    assert.equal(busy.code, 'PRIMARY_LINK_STORE_BUSY');
+    assert.equal(busy.holder.legacy, true);
+    assert.equal(busy.holder.pid, dead.pid);
+    // Broken by the opener itself, which counts a legacy lock as generation 0...
+    const forced = new PrimaryLinkStore(file, BINDING, { breakLock: true });
+    assert.equal(forced.gen, 1);
+    assert.equal(PrimaryLinkStore.readHolder(file).token, forced.token);
+    forced.close();
+    // ...or by an operator, with the next opener starting a fresh lock.
+    fs.writeFileSync(lock, String(dead.pid), { mode: 0o600, flag: 'wx' });
+    assert.equal(PrimaryLinkStore.breakLock(file).holder.pid, dead.pid);
+    const store = open(t, file);
+    assert.equal(PrimaryLinkStore.readHolder(file).token, store.token);
+});
+
+// Containers restart with small pids, so an old lock can name a pid that a new,
+// unrelated process now has. The start time tells them apart.
+test('pid reuse with a different start time is treated as dead', { skip: process.platform !== 'linux' && 'reads /proc' }, t => {
+    const { file, lock } = scratch(t);
+    const own = new PrimaryLinkStore(file, BINDING);
+    const mine = PrimaryLinkStore.readHolder(file);
+    own.close();
+    const { legacy, ...lease } = mine;
+    fs.writeFileSync(lock, JSON.stringify({ ...lease, procStart: '1', token: 'e'.repeat(32) }), { mode: 0o600, flag: 'wx' });
+    assert.equal(legacy, false);
+    const store = open(t, file);
+    assert.equal(PrimaryLinkStore.readHolder(file).token, store.token);
+    assert.equal(store.gen, mine.gen + 1);
+});
+
+test('close removes only its own lock', t => {
+    const { file } = scratch(t);
+    const a = open(t, file);
+    PrimaryLinkStore.breakLock(file);
+    const b = open(t, file);
+    a.close();
+    assert.equal(PrimaryLinkStore.readHolder(file).token, b.token);
+    b.close();
+    assert.equal(PrimaryLinkStore.readHolder(file), null);
+});
+
+// The public way out of BUSY for a lock no automatic check can clear.
+function primary(t, dir) {
+    const client = new WhalibmobClient({ sessionDir: dir, refreshVersion: false });
+    client._store = createNewStore('15550000123');
+    client._store.registered = true;
+    t.after(() => client._closePrimaryLinking());
+    return client;
+}
+
+test('unlockPrimaryLink refuses while this process holds the store', t => {
+    const { dir } = scratch(t);
+    const file = path.join(dir, '15550000123.primary-linking.json');
+    const one = primary(t, dir), other = primary(t, dir);
+    one._primaryLinkingForSession();
+    const token = PrimaryLinkStore.readHolder(file).token;
+    assert.throws(() => one.unlockPrimaryLink(), { code: 'PRIMARY_LINK_BUSY' });
+    // Another client in the same process may not break it either.
+    assert.throws(() => other.unlockPrimaryLink(), { code: 'PRIMARY_LINK_BUSY' });
+    assert.equal(PrimaryLinkStore.readHolder(file).token, token);
+    assert.equal(one._primaryLinking.journal.token, token);
+});
+
+test('unlockPrimaryLink breaks a lock no process here can prove dead', t => {
+    const { dir } = scratch(t);
+    const file = path.join(dir, '15550000123.primary-linking.json');
+    const client = primary(t, dir);
+    fs.writeFileSync(file + '.lock', '4242', { mode: 0o600 });
+    assert.throws(() => client._primaryLinkingForSession(), { code: 'PRIMARY_LINK_STORE_BUSY' });
+    const { holder } = client.unlockPrimaryLink();
+    assert.equal(holder.legacy, true);
+    assert.equal(holder.pid, 4242);
+    assert.equal(PrimaryLinkStore.readHolder(file), null);
+    const linking = client._primaryLinkingForSession();
+    assert.equal(PrimaryLinkStore.readHolder(file).token, linking.journal.token);
+});

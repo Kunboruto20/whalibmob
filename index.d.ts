@@ -919,6 +919,20 @@ export interface PrimaryLinkCommonOptions {
   timeoutMs?: number; signal?: AbortSignal;
   getCompanionProof?: (context: { operationId: string }) => Promise<PrimaryCompanionProof>;
 }
+/**
+ * Who holds a primary link journal, as its lock file says. `legacy` is a lock in
+ * the older bare-pid format, or one that cannot be read: only `pid` (if any) and
+ * `at` (the file's mtime) are known. `err.holder` on PRIMARY_LINK_STORE_BUSY.
+ */
+export interface PrimaryLinkHolder {
+  v: number; pid: number | null; host: string | null; bootId: string | null;
+  /** Linux only: the holder's start time, field 22 of /proc/<pid>/stat. */
+  procStart: string | null;
+  token: string | null; gen: number | null; at: number | null;
+  /** Linux only: the holder's pid namespace. */
+  pidNs: string | null;
+  legacy: boolean;
+}
 export interface PrimaryLinkOptions extends PrimaryLinkCommonOptions { invitationId: string; }
 export interface PrimaryCodeLinkOptions extends PrimaryLinkCommonOptions {
   /** Optional only when exactly one unexpired invitation is available. */
@@ -973,6 +987,14 @@ export declare class WhalibmobClient extends EventEmitter {
   bootstrapEmptyPrimaryCompanion(options: { getInitialHistory: () => Promise<{ source: 'owned_primary_store'; messageCount: 0; conversationCount: 0 }>; recoverRejected?: boolean; signal?: AbortSignal }): Promise<{ status: 'sent'; browserReady: false; operationId: string }>;
   /** Initial import only; must match a fresh server list, cannot overwrite existing ADV. */
   seedPrimaryLinkState(state: PrimaryADVState): Promise<void>;
+  /**
+   * Break the primary link lock when PRIMARY_LINK_STORE_BUSY names a holder that
+   * cannot be proven dead from here (another host or container, a bare-pid lock).
+   * Breaking it is the caller's decision; a holder still running stops at its next
+   * write with PRIMARY_LINK_STORE_LOST. Throws PRIMARY_LINK_BUSY while this
+   * process holds the store. Returns the holder broken, or null if none.
+   */
+  unlockPrimaryLink(): { holder: PrimaryLinkHolder | null };
   disconnect(opts?: DisconnectOptions): void;
   /**
    * Unlink this device from the account, the way the Linked Devices screen on
