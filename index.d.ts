@@ -2016,4 +2016,5 @@ export declare const PrimaryBootstrap: LibModule;
 /** `whalibmob/lib/primary/` — what a primary keeps for the companions it links. */
 export declare const Primary: {
   MessageStore: LibModule;
+  HistoryExport: LibModule;
 };

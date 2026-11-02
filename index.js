@@ -214,9 +214,11 @@ const Signal = Object.assign({},
   });
 
 // lib/primary/ — what this account keeps while it is the primary device, so
-// it has a history to hand the companions it links.
+// it has a history to hand the companions it links, and the encoder that
+// hands it over.
 const Primary = {
-  MessageStore: require('./lib/primary/MessageStore')
+  MessageStore:  require('./lib/primary/MessageStore'),
+  HistoryExport: require('./lib/primary/HistoryExport')
 };
 
 // App state — lib/appstate/. AppStateStore.js is spread because the flat
