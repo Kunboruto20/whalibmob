@@ -122,6 +122,13 @@ async function checkPrimaryLinkedApi(client: wa.WhalibmobClient, code: string, p
   if (!invitations.length) return;
   const companion: string | null = invitations[0].companion;
   client.on('primary_link_invitation', (event: wa.PrimaryLinkInvitation) => { const same: string | null = event.companion; void same; });
+  client.on('primary_link_progress', (event) => {
+    const op: string = event.operationId;
+    if (event.phase === 'history_uploading') { const bytes: number = event.bytes; void bytes; }
+    // @ts-expect-error Only an upload says how many bytes.
+    else { const none = event.bytes; void none; }
+    void op;
+  });
   void companion;
   const result: wa.PrimaryLinkResult = await client.approveCompanionCode(code, {
     invitationId: invitations[0].id,

@@ -376,6 +376,14 @@ test('a busy store names who holds it and points at --unlock-message-store; a ta
     assert.deepEqual(L.explainError('PRIMARY_MESSAGE_STORE_BUSY', { holder: null }), L.explainError('PRIMARY_MESSAGE_STORE_BUSY'));
 });
 
+test('a link\'s progress is one line: the phase in /link-status words, an upload with its size', () => {
+    assert.equal(L.formatLinkProgress({ phase: 'history_uploading', operationId: 'x', bytes: 2 * 1048576 }), 'uploading history (2.0 MB)... this can take a few minutes');
+    assert.equal(L.formatLinkProgress({ phase: 'history_uploading', bytes: 70000 }), 'uploading history (68.4 KB)... this can take a few minutes');
+    assert.equal(L.formatLinkProgress({ phase: 'history_uploading' }), 'uploading history... this can take a few minutes');
+    assert.equal(L.formatLinkProgress({ phase: 'awaiting_confirmation', operationId: 'x' }), L.formatLinkStatus({ phase: 'awaiting_confirmation' })[0]);
+    assert.equal(typeof L.formatLinkProgress(null), 'string');
+});
+
 test('runMessageStoreUnlock shows the holder, breaks it only on a yes, and refuses where it cannot ask', async () => {
     const holder = { v: 2, pid: 4242, host: 'box', at: at(2026, 11, 2, 15, 0), legacy: false };
     const run = async ({ held = holder, answer, breaks = held } = {}) => {

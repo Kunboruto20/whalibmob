@@ -387,6 +387,33 @@ test('a QR link, a link refused before approval, a failure after it, and the eve
   await wa.quit();
 });
 
+// A large history goes up as a blob, which can take minutes: a line says so
+// before it starts, so the shell does not look stuck.
+test('a history that goes up as a blob is announced, with its size, before the upload', async (t) => {
+  const dir = home(t);
+  sessions(dir, ['mobile']);
+  const wa = shell(t, dir, ['connect', PHONE, '--session', './sessions'], {
+    answers: {
+      getPrimaryLinkReadiness: [{ result: COMPLETE }],
+      approveCompanionQr: [{ result: { status: 'awaiting_confirmation', operationId: OP } }],
+      bootstrapPrimaryCompanion: [{
+        emit: [['primary_link_progress', { phase: 'history_uploading', operationId: OP, bytes: 2 * 1048576 }]],
+        result: { ...SENT, history: { ...SENT.history, bytes: 2 * 1048576, inline: false } }
+      }]
+    }
+  });
+  await wa.until(AT_PROMPT);
+  const seen = await wa.type('/link-qr 2@ref,noise,identity,adv');
+  const order = [
+    'sending the stored history to the companion...',
+    '  uploading history (2.0 MB)... this can take a few minutes',
+    'history handed to the companion: 3 chats, 42 messages, 2.0 MB (uploaded as a blob), first link'
+  ];
+  const printed = seen.split('\n');
+  assert.deepEqual(order.map(l => printed.indexOf(l)).map((at, n, all) => at >= 0 && (n === 0 || at > all[n - 1])), order.map(() => true), seen);
+  await wa.quit();
+});
+
 test('without a connection, and on a companion session, the link commands say what to do', async (t) => {
   const dir = home(t);
   sessions(dir, ['web']);

@@ -1085,7 +1085,7 @@ function attachEvents(client) {
     _rl && (_rl.resume(), _rl.prompt(true));
   };
   client.on('primary_link_invitation', linkEvent(inv => out(LinkCli.formatInvitationNotice(inv))));
-  client.on('primary_link_progress', linkEvent(e => out('  ' + LinkCli.formatLinkStatus({ phase: e.phase })[0])));
+  client.on('primary_link_progress', linkEvent(e => out('  ' + LinkCli.formatLinkProgress(e))));
   client.on('primary_linked', linkEvent(e => out('  ' + LinkCli.formatLinkStatus({ phase: 'committed', confirmed: true })[0] +
     '   companion #' + e.deviceId + ', key index ' + e.keyIndex)));
   client.on('primary_link_error', linkEvent(e => failEvent('link request', e.code)));

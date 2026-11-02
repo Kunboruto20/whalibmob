@@ -882,7 +882,14 @@ export interface MediaRetryResult {
 
 export interface WhalibmobEvents {
   primary_link_invitation: (event: PrimaryLinkInvitation) => void;
-  primary_link_progress: (event: { phase: 'awaiting_confirmation'; operationId: string }) => void;
+  /**
+   * `awaiting_confirmation`: the approval went out. `history_uploading`: a
+   * history too large to send inline starts going up as a blob of `bytes`,
+   * which can take minutes; the bootstrap says nothing else until it is done.
+   */
+  primary_link_progress: (event:
+    | { phase: 'awaiting_confirmation'; operationId: string }
+    | { phase: 'history_uploading'; operationId: string; bytes: number }) => void;
   primary_linked: (event: { operationId: string; deviceId: number; keyIndex: number }) => void;
   primary_link_error: (event: { code: string }) => void;
   connected: () => void;

@@ -408,6 +408,28 @@ test('deflated size 65537 selects the blob path', async t => {
     assert.deepEqual(notificationOf(messages(g)[1]).initialHistBootstrapInlinePayload, buildHistorySync(small));
 });
 
+// An upload can take minutes, and nothing else is said meanwhile: the start of
+// one is announced, with its size, before it begins. An inline history is not.
+test('a blob upload is announced before it starts, with its size', async t => {
+    const f = await bootstrapFixture(t), snap = sized(INLINE_MAX + 1), seen = [];
+    f.client.on('primary_link_progress', e => seen.push({ ...e, uploadsSoFar: uploads }));
+    let uploads = 0;
+    const result = await f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload: async buf => { uploads++; return fakeUpload(buf); } });
+    const announced = seen.filter(e => e.phase === 'history_uploading');
+    assert.deepEqual(announced, [{ phase: 'history_uploading', operationId: result.operationId, bytes: 65537, uploadsSoFar: 0 }]);
+
+    // A listener that throws costs the upload nothing.
+    const g = await bootstrapFixture(t);
+    g.client.on('primary_link_progress', () => { throw new Error('listener'); });
+    const sent = await g.client.bootstrapPrimaryCompanion({ history: async () => snap, upload: async buf => fakeUpload(buf) });
+    assert.equal(sent.history.inline, false);
+
+    const h = await bootstrapFixture(t), inline = [];
+    h.client.on('primary_link_progress', e => inline.push(e.phase));
+    await h.client.bootstrapPrimaryCompanion({ history: async () => sized(INLINE_MAX), upload: async buf => fakeUpload(buf) });
+    assert.ok(!inline.includes('history_uploading'), inline.join(', '));
+});
+
 // A large history used to have to go up inside the bootstrap's 90 seconds,
 // with everything else, so past a size it could never finish at all.
 test('the history upload runs on a clock of its own, outside the bootstrap\'s time limit', async t => {
