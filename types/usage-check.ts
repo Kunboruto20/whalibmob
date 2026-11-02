@@ -169,9 +169,12 @@ async function checkPrimaryReadinessApi(client: wa.WhalibmobClient, signal: Abor
   }
   if (verdict.ready && verdict.needsConfirmation && verdict.history) {
     const coverage: wa.PrimaryHistoryCoverage = verdict.history;
-    const origin: string | null = coverage.origin;
-    const lost: number | undefined = coverage.losses[0]?.count;
-    void origin; void lost;
+    const origin: string | null = coverage.capture.origin;
+    const since: number | null = coverage.capture.since;
+    const records: number | null = coverage.records;
+    const range: { evicted: number | null; from: number | null; to: number | null } = coverage.retained;
+    const lostIds: string[] | undefined = coverage.losses[0]?.ids;
+    void origin; void since; void records; void range; void lostIds;
   }
   const evaluated: wa.PrimaryLinkReadiness = wa.Primary.Readiness.evaluateReadiness({});
   void evaluated;

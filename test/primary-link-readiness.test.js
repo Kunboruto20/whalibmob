@@ -38,10 +38,13 @@ const MIN = 60000;
 const ALONE = [{ id: 0, hasKeyIndex: false, keyIndex: 0 }];
 const snap = over => ({ seq: 4, capture: { since: NOW - 86400000, origin: 'registration', lc: 1 }, chats: [], records: {}, losses: [],
     retained: { evicted: 0 }, pushNames: [], counts: { chats: 3, records: 42 }, ...over });
+const T = 1790000000;   // message timestamps are seconds
+const rec = (id, ts, extra) => ({ id, seq: 1, fromMe: false, ts, status: 3, raw: Buffer.from('the text of ' + id), ...extra });
 // A primary that can link: alone on the account, nothing foreign on the server
 // or on disk, a name, and a store that has kept everything since registration.
 const good = over => ({ registered: true, phoneOk: true, transaction: null, devices: ALONE,
-    localKeys: { count: 0, foreign: false }, server: { version: 0, verified: true, foreign: false },
+    localKeys: { count: 0, foreign: false }, local: { appStateConflict: false, historyFiles: false },
+    server: { version: 0, verified: true, foreign: false },
     pushNameValid: true, storeEnabled: true, snapshot: snap(), now: NOW, ...over });
 const codes = verdict => verdict.blockers.map(b => b.code);
 const only = (verdict, code) => { assert.deepEqual(codes(verdict), [code]); return verdict.blockers[0]; };
@@ -149,10 +152,24 @@ test('PRIMARY_BOOTSTRAP_FOREIGN_STATE: app-state keys on disk that this primary 
 });
 
 test('PRIMARY_BOOTSTRAP_FOREIGN_STATE: local app state or history the bootstrap refuses to write over', () => {
-    assert.deepEqual(only(R.evaluateReadiness(good({ local: { appStateConflict: true } })), 'PRIMARY_BOOTSTRAP_FOREIGN_STATE').detail.reasons, ['local_state']);
-    assert.deepEqual(only(R.evaluateReadiness(good({ local: { historyFiles: true } })), 'PRIMARY_BOOTSTRAP_FOREIGN_STATE').detail.reasons, ['local_history']);
+    assert.deepEqual(only(R.evaluateReadiness(good({ local: { appStateConflict: true, historyFiles: false } })), 'PRIMARY_BOOTSTRAP_FOREIGN_STATE').detail.reasons, ['local_state']);
+    assert.deepEqual(only(R.evaluateReadiness(good({ local: { appStateConflict: false, historyFiles: true } })), 'PRIMARY_BOOTSTRAP_FOREIGN_STATE').detail.reasons, ['local_history']);
     const both = R.evaluateReadiness(good({ local: { appStateConflict: true, historyFiles: true }, localKeys: { count: 1, foreign: true } }));
     assert.deepEqual(only(both, 'PRIMARY_BOOTSTRAP_FOREIGN_STATE').detail.reasons, ['local_keys', 'local_state', 'local_history']);
+});
+
+test('PRIMARY_BOOTSTRAP_FOREIGN_STATE: local state that was not checked is not local state that is fine', () => {
+    // The bootstrap would refuse a first link over existing app state or history
+    // (EXISTING_STATE, EXISTING_HISTORY); with no fact either way, neither is ruled out.
+    for (const local of [undefined, null, {}, { appStateConflict: false }, { historyFiles: false }, { appStateConflict: 'no', historyFiles: false }, { appStateConflict: 0, historyFiles: 0 }, 'clean']) {
+        const verdict = R.evaluateReadiness(good({ local }));
+        assert.deepEqual(only(verdict, 'PRIMARY_BOOTSTRAP_FOREIGN_STATE').detail.reasons, ['local_unknown'], JSON.stringify(local));
+        assert.equal(verdict.ready, false);
+        assert.equal(verdict.mode, null);
+    }
+    // A fact that says a conflict is exact about which one, even beside one that is missing.
+    assert.deepEqual(only(R.evaluateReadiness(good({ local: { appStateConflict: true } })), 'PRIMARY_BOOTSTRAP_FOREIGN_STATE').detail.reasons, ['local_state', 'local_unknown']);
+    assert.equal(R.evaluateReadiness(good({ local: { appStateConflict: false, historyFiles: false } })).ready, true);
 });
 
 test('PRIMARY_BOOTSTRAP_FOREIGN_STATE: a server that was not checked is not a server that is fine', () => {
@@ -217,6 +234,19 @@ test('enabled-origin store asks', () => {
     assert.equal(verdict.ready, true, 'asking is not refusing');
 });
 
+test('only a store that has kept everything since registration is taken as complete', () => {
+    // Anything but 'registration' (an origin this code has never heard of, an
+    // origin that is not a string, no capture at all) is a store whose start is
+    // not known, and a store whose start is not known may be missing its past.
+    for (const capture of [{ since: NOW, origin: 'enabled', lc: 1 }, { since: NOW, origin: 'imported', lc: 1 }, { since: NOW, origin: 'Registration', lc: 1 },
+        { since: NOW, origin: '', lc: 1 }, { since: NOW, origin: null, lc: 1 }, { since: NOW, lc: 1 }, {}, null, undefined, 'registration']) {
+        const verdict = R.evaluateReadiness(good({ snapshot: snap({ capture }) }));
+        assert.equal(verdict.needsConfirmation, true, JSON.stringify(capture));
+        assert.equal(verdict.ready, true, 'asking is not refusing: ' + JSON.stringify(capture));
+    }
+    assert.equal(R.evaluateReadiness(good({ snapshot: snap({ capture: { since: NOW, origin: 'registration', lc: 1 } }) })).needsConfirmation, false);
+});
+
 test('a precise loss asks', () => {
     const byIds = R.evaluateReadiness(good({ snapshot: snap({ losses: [{ reason: 'undecryptable', ids: ['A1', 'A2', 'A3'] }] }) }));
     assert.equal(byIds.needsConfirmation, true);
@@ -230,19 +260,65 @@ test('messages the store let go of ask', () => {
     assert.equal(R.evaluateReadiness(good({ snapshot: snap({ retained: { evicted: 0 } }) })).needsConfirmation, false);
 });
 
-test('the history it reports is what would be sent and how it falls short', () => {
+test('a snapshot that does not say what it lost or let go of is not taken as complete', () => {
+    for (const over of [{ losses: undefined }, { losses: null }, { losses: {} }, { retained: undefined }, { retained: null }, { retained: {} }, { retained: { evicted: 'none' } }, { retained: { evicted: NaN } }]) {
+        assert.equal(R.evaluateReadiness(good({ snapshot: snap(over) })).needsConfirmation, true, JSON.stringify(over));
+    }
+});
+
+test('the history it reports is what would be sent, and the range and losses that qualify it', () => {
     const since = NOW - 3600000;
+    const losses = [{ reason: 'undecryptable', ids: ['L1', 'L2'] }, { reason: 'store-disabled', from: NOW - 9000, to: NOW - 4000 }];
     const verdict = R.evaluateReadiness(good({ snapshot: snap({
-        capture: { since, origin: 'enabled', lc: 2 }, counts: { chats: 3, records: 42 }, retained: { evicted: 5 },
-        losses: [{ reason: 'undecryptable', ids: ['A1', 'A2'] }, { reason: 'store-disabled', from: NOW - 9000, to: NOW - 4000 }]
+        capture: { since, origin: 'enabled', lc: 2 }, counts: { chats: 2, records: 4 }, retained: { evicted: 5 }, losses,
+        // Tombstones are stored records and count towards the range, whatever order the chats come in.
+        records: { 'a@s.whatsapp.net': [rec('A1', T + 500), rec('A2', T + 900, { raw: undefined, tombstone: 'revoked' })], 'b@g.us': [rec('G1', T + 100), rec('G2', T + 700)] }
     }) }));
     assert.deepEqual(verdict.history, {
-        chats: 3, messages: 42, since, origin: 'enabled', evicted: 5,
-        losses: [{ reason: 'undecryptable', count: 2 }, { reason: 'store-disabled', from: NOW - 9000, to: NOW - 4000 }]
+        enabled: true,
+        capture: { since, origin: 'enabled', lc: 2 },
+        chats: 2, records: 4,
+        retained: { evicted: 5, from: T + 100, to: T + 900 },
+        losses: [{ reason: 'undecryptable', ids: ['L1', 'L2'] }, { reason: 'store-disabled', from: NOW - 9000, to: NOW - 4000 }]
     });
-    assert.equal(R.evaluateReadiness(good()).history.losses.length, 0);
-    // Message ids are not part of a verdict: how many were lost is.
-    assert.ok(!JSON.stringify(verdict).includes('A1'));
+    assert.deepEqual(R.evaluateReadiness(good()).history.losses, []);
+});
+
+test('the retained range is null when nothing is stored, and ignores what is not a timestamp', () => {
+    const none = (snapshot) => R.evaluateReadiness(good({ snapshot })).history.retained;
+    assert.deepEqual(none(snap({ records: {} })), { evicted: 0, from: null, to: null });
+    assert.deepEqual(none(snap({ records: { 'a@s.whatsapp.net': [] } })), { evicted: 0, from: null, to: null });
+    assert.deepEqual(none(snap({ records: { 'a@s.whatsapp.net': [rec('A1', undefined), rec('A2', 'soon'), rec('A3', NaN), rec('A4', null)] } })), { evicted: 0, from: null, to: null });
+    assert.deepEqual(none(snap({ records: { 'a@s.whatsapp.net': [rec('A1', T), rec('A2', 'soon')] } })), { evicted: 0, from: T, to: T });
+    // A snapshot without its records (the gatherer sends one) carries the range it worked out.
+    assert.deepEqual(none({ ...snap({ retained: { evicted: 2, from: T + 5, to: T + 9 } }), records: undefined }), { evicted: 2, from: T + 5, to: T + 9 });
+    assert.deepEqual(none({ ...snap({ retained: { evicted: 2, from: 'x', to: null } }), records: undefined }), { evicted: 2, from: null, to: null });
+});
+
+test('the range is found without a stack limit on how many records there are', () => {
+    const many = Array.from({ length: 200000 }, (_, i) => rec('M' + i, T + (i % 1000), { raw: undefined }));
+    assert.deepEqual(R.evaluateReadiness(good({ snapshot: snap({ records: { 'a@s.whatsapp.net': many } }) })).history.retained, { evicted: 0, from: T, to: T + 999 });
+});
+
+test('a verdict holds no message content, id or name: only counts, a range, and the losses as the store reports them', () => {
+    const snapshot = snap({
+        chats: [{ id: 'a@s.whatsapp.net', name: 'Ana Secret' }], pushNames: [{ id: 'a@s.whatsapp.net', pushname: 'Ana Secret' }],
+        records: { 'a@s.whatsapp.net': [rec('RECORD-ID-1', T + 1, { participant: 'p@s.whatsapp.net', pushName: 'Ana Secret' })] },
+        // A loss entry with something it should not have: it is not copied.
+        losses: [{ reason: 'undecryptable', ids: ['LOSS-ID-1'], text: 'leaked text' }]
+    });
+    const text = JSON.stringify(R.evaluateReadiness(good({ snapshot })));
+    for (const forbidden of ['the text of RECORD-ID-1', 'RECORD-ID-1', 'Ana Secret', 'p@s.whatsapp.net', 'leaked text', 'a@s.whatsapp.net', Buffer.from('the text of RECORD-ID-1').toString('base64')])
+        assert.ok(!text.includes(forbidden), forbidden);
+    assert.ok(text.includes('LOSS-ID-1'), 'the loss list is the store\'s own');
+});
+
+test('the losses in a verdict are copies, not the store\'s own arrays', () => {
+    const snapshot = snap({ losses: [{ reason: 'undecryptable', ids: ['L1'] }] });
+    const verdict = R.evaluateReadiness(good({ snapshot }));
+    verdict.history.losses[0].ids.push('L2');
+    verdict.history.losses.push({ reason: 'x' });
+    assert.deepEqual(snapshot.losses, [{ reason: 'undecryptable', ids: ['L1'] }]);
 });
 
 test('evaluating is repeatable and leaves the facts alone', () => {
@@ -255,10 +331,15 @@ test('evaluating is repeatable and leaves the facts alone', () => {
     assert.deepEqual(codes(first), ['PRIMARY_LINK_RECONCILIATION_REQUIRED', 'PRIMARY_BOOTSTRAP_EXISTING_COMPANIONS_UNSUPPORTED']);
 });
 
-test('a snapshot without the fields a real one has does not throw', () => {
-    assert.doesNotThrow(() => R.evaluateReadiness(good({ snapshot: {} })));
-    assert.doesNotThrow(() => R.evaluateReadiness(good({ snapshot: { capture: null, losses: null, retained: null, counts: null } })));
-    assert.equal(R.evaluateReadiness(good({ snapshot: {} })).history.messages, null);
+test('a snapshot without the fields a real one has does not throw, and is not complete', () => {
+    for (const snapshot of [{}, { capture: null, losses: null, retained: null, counts: null, records: null }, { records: 5, counts: 'many', losses: [null, 3, 'x'] }]) {
+        const verdict = R.evaluateReadiness(good({ snapshot }));
+        assert.equal(verdict.needsConfirmation, true);
+        assert.deepEqual(verdict.history.capture, { since: null, origin: null, lc: null });
+        assert.equal(verdict.history.records, null);
+        assert.equal(verdict.history.chats, null);
+        assert.deepEqual(verdict.history.retained, { evicted: null, from: null, to: null });
+    }
 });
 
 // ─── the push name rule ─────────────────────────────────────────────────────
@@ -417,7 +498,7 @@ test('getPrimaryLinkReadiness reads a first-link verdict and sends no approval a
     assert.equal(verdict.mode, 'first');
     assert.deepEqual(verdict.blockers, []);
     assert.equal(verdict.needsConfirmation, false);
-    assert.deepEqual(verdict.history, { chats: 3, messages: 42, since: store.capture.since, origin: 'registration', evicted: 0, losses: [] });
+    assert.deepEqual(verdict.history, { enabled: true, capture: store.capture, chats: 3, records: 42, retained: { evicted: 0, from: null, to: null }, losses: [] });
 
     // It looked: the device list and critical_block. It touched nothing else.
     assert.equal(writes.length, 0, 'the link journal is never written');
@@ -586,24 +667,52 @@ test('getPrimaryLinkReadiness asks about a store that only began capturing when 
     const verdict = await f.client.getPrimaryLinkReadiness();
     assert.equal(verdict.ready, true);
     assert.equal(verdict.needsConfirmation, true);
-    assert.equal(verdict.history.origin, 'enabled');
-    assert.equal(verdict.history.messages, 0);
+    assert.equal(verdict.history.capture.origin, 'enabled');
+    assert.equal(verdict.history.records, 0);
+    assert.deepEqual(verdict.history.retained, { evicted: 0, from: null, to: null });
 
     const g = await fixture(t);
     g.client._messageStore = PrimaryMessageStore.open({ dir: g.dir, phone: PHONE, origin: 'registration', lc: 1 });
     const clean = await g.client.getPrimaryLinkReadiness();
     assert.equal(clean.ready, true);
     assert.equal(clean.needsConfirmation, false);
-    assert.equal(clean.history.origin, 'registration');
+    assert.equal(clean.history.capture.origin, 'registration');
 });
 
-test('getPrimaryLinkReadiness never hands out message content', async t => {
+test('getPrimaryLinkReadiness reports the range of messages the store holds, and what it let go of', async t => {
+    const f = await fixture(t);
+    const store = f.client._messageStore = PrimaryMessageStore.open({ dir: f.dir, phone: PHONE, origin: 'registration', lc: 1, perChat: 2 });
+    const incoming = (id, chat, ts) => store.recordIncoming({ id, chat, fromMe: false, ts, raw: Buffer.from('the text of ' + id), info: { kind: 'content' } });
+    // A third message in a chat that keeps two lets the oldest go.
+    incoming('A1', 'ana@s.whatsapp.net', T + 100);
+    incoming('A2', 'ana@s.whatsapp.net', T + 200);
+    incoming('A3', 'ana@s.whatsapp.net', T + 300);
+    incoming('G1', '120363000000000000@g.us', T + 50);
+    incoming('G2', '120363000000000000@g.us', T + 900);
+    const verdict = await f.client.getPrimaryLinkReadiness();
+    assert.equal(verdict.history.chats, 2);
+    assert.equal(verdict.history.records, 4);
+    assert.deepEqual(verdict.history.retained, { evicted: 1, from: T + 50, to: T + 900 });
+    assert.equal(verdict.needsConfirmation, true, 'it let one go');
+    assert.deepEqual(verdict.history.losses, []);
+    // None of it is content.
+    const text = JSON.stringify(verdict);
+    for (const forbidden of ['the text of', 'A1', 'A3', 'G2', 'ana@s.whatsapp.net', '120363000000000000@g.us']) assert.ok(!text.includes(forbidden), forbidden);
+});
+
+test('getPrimaryLinkReadiness hands out the range and the losses of a store, never its content', async t => {
     const f = await fixture(t);
     const secret = 'the-text-of-a-message-nobody-asked-for';
-    f.client._messageStore = { snapshot: () => ({ ...kept(), records: { 'x@s.whatsapp.net': [{ id: 'M1', raw: Buffer.from(secret) }] }, chats: [{ id: 'x@s.whatsapp.net', name: secret }], pushNames: [{ id: 'x', pushname: secret }] }) };
+    f.client._messageStore = { snapshot: () => ({ ...kept(), counts: { chats: 1, records: 2 },
+        losses: [{ reason: 'received-not-stored', ids: ['LOST-1'] }],
+        records: { 'x@s.whatsapp.net': [rec('M1', T + 30, { raw: Buffer.from(secret), pushName: secret }), rec('M2', T + 10)] },
+        chats: [{ id: 'x@s.whatsapp.net', name: secret }], pushNames: [{ id: 'x', pushname: secret }] }) };
     const verdict = await f.client.getPrimaryLinkReadiness();
+    assert.deepEqual(verdict.history.retained, { evicted: 0, from: T + 10, to: T + 30 });
+    assert.deepEqual(verdict.history.losses, [{ reason: 'received-not-stored', ids: ['LOST-1'] }]);
     assert.ok(!JSON.stringify(verdict).includes(secret));
     assert.ok(!JSON.stringify(verdict).includes(Buffer.from(secret).toString('base64')));
+    assert.ok(!JSON.stringify(verdict).includes('M1') && !JSON.stringify(verdict).includes('x@s.whatsapp.net'));
 });
 
 test('getPrimaryLinkReadiness without a usable account asks nothing and creates nothing', async t => {

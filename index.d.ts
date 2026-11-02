@@ -1053,20 +1053,34 @@ export interface PrimaryBootstrapResult {
   delta: null | { records: number };
 }
 
-/** How much of the primary's history would be sent, and where it falls short. Never holds message content or ids. */
+/**
+ * What would be sent from the primary store, and how it falls short. Counts, a range of timestamps and the store's
+ * own loss list: never message content, chat ids or names.
+ */
 export interface PrimaryHistoryCoverage {
-  /** Chats the store holds; null if it did not say. */
+  /** The store is on. Always true here: with no store there is no history, and `history` is null. */
+  enabled: boolean;
+  capture: {
+    /** Milliseconds since the epoch the store began capturing. */
+    since: number | null;
+    /** `'registration'` for a store that has kept everything since the account was registered; `'enabled'` for one switched on later. */
+    origin: string | null;
+    /** The login count the store last saw. */
+    lc: number | null;
+  };
+  /** Chats the store holds. */
   chats: number | null;
-  /** Messages the store holds, tombstones included; null if it did not say. */
-  messages: number | null;
-  /** Milliseconds since the epoch the store began capturing; null if it did not say. */
-  since: number | null;
-  /** `'registration'` for a store that has kept everything since the account was registered, `'enabled'` for one switched on later. */
-  origin: string | null;
-  /** Messages the store let go of to stay within its limits. */
-  evicted: number;
-  /** Messages seen and not kept (`count`), or a time window nothing was kept for (`from`/`to`, milliseconds). */
-  losses: Array<{ reason: string; count?: number; from?: number; to?: number }>;
+  /** Records the store holds, tombstones included. */
+  records: number | null;
+  retained: {
+    /** Messages the store let go of to stay within its limits; null if it did not say. */
+    evicted: number | null;
+    /** The oldest and newest timestamp, in seconds, among the stored records; null when it holds none. */
+    from: number | null;
+    to: number | null;
+  };
+  /** As the store reports them: message ids seen and not kept (`ids`), or a window, in milliseconds, nothing was kept for (`from`/`to`). */
+  losses: Array<{ reason: string | null; ids?: string[]; from?: number; to?: number }>;
 }
 /** One reason a link would not complete, found before it is approved. The codes are stable. */
 export type PrimaryLinkBlocker =
@@ -1077,7 +1091,7 @@ export type PrimaryLinkBlocker =
       retirable: boolean } }
   | { code: 'PRIMARY_BOOTSTRAP_EXISTING_COMPANIONS_UNSUPPORTED'; detail: { companions: number | null } }
   | { code: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE'; detail: {
-      reasons: Array<'local_keys' | 'server_unknown' | 'server_foreign' | 'server_unverified' | 'local_state' | 'local_history'>;
+      reasons: Array<'local_keys' | 'server_unknown' | 'server_foreign' | 'server_unverified' | 'local_state' | 'local_history' | 'local_unknown'>;
       serverVersion: number | null } }
   | { code: 'PRIMARY_BOOTSTRAP_NAME_REQUIRED'; detail: { maxLength: number } }
   | { code: 'PRIMARY_MESSAGE_STORE_DISABLED'; detail: { reason: 'disabled' | 'unreadable'; code?: string } };
@@ -1088,9 +1102,16 @@ export interface PrimaryLinkReadiness {
   /** What the bootstrap would run as: `first`, or `relink` over our own earlier state. Null when it cannot be told. */
   mode: 'first' | 'relink' | null;
   blockers: PrimaryLinkBlocker[];
-  /** The history that would be sent; null when there is no store to send it from. */
+  /**
+   * The history that would be sent. Null when there is no store to send it from, and also null when an account
+   * blocker (`PRIMARY_LINK_ACCOUNT_REQUIRED`) stops evaluation before anything else is read.
+   */
   history: PrimaryHistoryCoverage | null;
-  /** The history is known to be partial (the store began when it was enabled, lost messages, or let some go): ask before sending it. */
+  /**
+   * Ask before sending: true unless the store has captured since registration (`capture.origin === 'registration'`)
+   * with nothing it saw and could not keep and nothing it let go of. A store switched on later, an unknown origin or a
+   * snapshot that does not say all ask. False when there is no history to confirm (see `history`).
+   */
   needsConfirmation: boolean;
 }
 
@@ -1137,9 +1158,13 @@ export declare class WhalibmobClient extends EventEmitter {
   /** Retire a >=5 minute pending transaction only after two exact baseline server lists. Never removes a device or reuses its reserved index. */
   retireAbsentPrimaryLink(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<{ status: 'abandoned'; operationId: string }>;
   /**
-   * Whether this primary can finish a link, found out before one is approved: reads the device list, critical_block
-   * and the local state the bootstrap reads. Never approves, sends, or writes the link journal. Throws when it cannot
-   * look (not a primary, not connected, another link operation running); a link it would refuse comes back as `blockers`.
+   * Whether this primary can finish a link, found out before one is approved. It sends two read-only IQs, the account's
+   * device list and a critical_block read with no patch, and reads the local key, app-state and history files and the
+   * message store's snapshot (which sweeps expired disappearing messages out of the store, as taking one always does).
+   * On first use it may create the link journal and its lock file, as any primary-link call does. It never approves,
+   * never sends a message or a patch, never makes a key and never updates link state. Throws when it cannot look (not a
+   * primary, not connected, another link operation running, the server not answering); a link it would refuse comes
+   * back as `blockers`.
    */
   getPrimaryLinkReadiness(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PrimaryLinkReadiness>;
   /** Explicit first bootstrap only: requires a real empty application store and no existing sync keys/collections. Does not report Web ready. */
