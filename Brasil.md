@@ -1826,6 +1826,16 @@ Tudo o que a CLI faz está disponível como biblioteca Node.js. As seções abai
 cobrem a conexão de uma conta, o envio e o recebimento de todos os tipos de mensagem, grupos,
 comunidades, canais, presença, privacidade, sincronização de histórico e emulação de dispositivo.
 
+> [!NOTE]
+> A maioria dos trechos deste guia são fragmentos que usam `await` no nível
+> superior. Coloque-os dentro de uma `async function`, ou rode-os a partir de um
+> módulo ES (um arquivo `.mjs` usando `import`), onde o `await` no nível superior
+> é permitido. Um arquivo CommonJS que mistura `require()` com `await` no nível
+> superior é rejeitado pelo Node antes de rodar. Os programas completos — o
+> [Quick Start](https://github.com/Kunboruto20/whalibmob/blob/main/README.md#quick-start),
+> os dois passos de registro abaixo e o [exemplo de eventos](#exemplo-para-começar) —
+> rodam como estão.
+
 ### O que o pacote exporta
 
 Duas camadas. A primeira é a camada plana que o resto deste documento usa — os
@@ -1912,24 +1922,27 @@ O registro é um processo feito uma única vez. Você precisa de um número de t
 
 ```js
 const {
-  createNewStore, saveStore, requestSmsCode
+  createNewStore, saveStore, requestSmsCode, storeFileFor
 } = require('whalibmob')
+const os   = require('os')
 const path = require('path')
-const fs   = require('fs')
 
 const phone    = '919634847671'           // country code + number, no '+'
-const sessDir  = path.join(process.env.HOME, '.waSession')
-const sessFile = path.join(sessDir, phone + '.json')
+const sessDir  = path.join(os.homedir(), '.waSession')
+const sessFile = storeFileFor(sessDir, phone)   // ~/.waSession/<phone>/<phone>.json
 
-fs.mkdirSync(sessDir, { recursive: true })
+async function main() {
+  // `name` is the display name the account registers with — what people who have
+  // not saved the number see. Omit it and the account has no name until one is
+  // set later with client.changeName().
+  const store = createNewStore(phone, { name: 'Ricardo Trade' })
+  saveStore(store, sessFile)
 
-// `name` is the display name the account registers with — what people who have
-// not saved the number see. Omit it and the account has no name until one is
-// set later with client.changeName().
-const store = createNewStore(phone, { name: 'Ricardo Trade' })
-saveStore(store, sessFile)
+  await requestSmsCode(store, 'sms')   // 'sms' | 'voice' | 'wa_old'
+  saveStore(store, sessFile)
+}
 
-await requestSmsCode(store, 'sms')   // 'sms' | 'voice' | 'wa_old'
+main().catch(err => { console.error(err.message || err); process.exit(1) })
 ```
 
 O nome é gravado na sessão, e não enviado ao endpoint de registro — o
@@ -1947,16 +1960,35 @@ Os nomes têm espaços aparados, espaços múltiplos reduzidos a um só e são l
 **Passo 2 — verifique o código**
 
 ```js
-const { loadStore, saveStore, verifyCode } = require('whalibmob')
+const { loadStore, saveStore, verifyCode, storeFileFor } = require('whalibmob')
+const os   = require('os')
+const path = require('path')
 
-const store  = loadStore(sessFile)
-const result = await verifyCode(store, '123456')
+const phone   = '919634847671'
+const sessDir = path.join(os.homedir(), '.waSession')
 
-if (result.status === 'ok') {
-  saveStore(result.store, sessFile)
-  console.log('registered')
+async function main() {
+  const store  = loadStore(storeFileFor(sessDir, phone))
+  if (!store) throw new Error('no session for +' + phone + ' — run step 1 first')
+  const result = await verifyCode(store, '123456')   // updates `store` in place
+
+  if (['ok', 'sent', 'verified'].includes(result.status)) {
+    store.registered  = true
+    store.codePending = false
+    // Save under the number WhatsApp filed the account as — it can differ from
+    // the one typed (result.canonicalPhoneNumber says so when it does).
+    saveStore(store, storeFileFor(sessDir, store.phoneNumber))
+    console.log('registered as +' + store.phoneNumber)
+  } else {
+    console.error('not registered:', result)
+  }
 }
+
+main().catch(err => { console.error(err.message || err); process.exit(1) })
 ```
+
+`verifyCode` devolve a resposta do servidor, não um novo store: a sessão que
+você passou é a que agora está registrada, e é ela que deve ser salva.
 
 **Opcional — deixe o código chegar sozinho.** Os dois passos acima são o fluxo inteiro, e nada neles muda se você não fizer mais nada. Mas como um registro envia um push token (veja [O Push Token](#o-push-token)), o WhatsApp *pode* também entregar o código de seis dígitos como um push silencioso. Abra um listener para ele antes de solicitar o código, e o código pode voltar sem que nada seja digitado — em um perfil Android pelo Firebase, em um iOS pelo APNs:
 
@@ -1971,7 +2003,7 @@ const code = await codePromise            // the six digits, or null if no push 
 
 if (code) {
   const result = await verifyCode(store, code)
-  if (result.status === 'ok') saveStore(result.store, sessFile)
+  if (result.status === 'ok') saveStore(store, storeFileFor(sessDir, store.phoneNumber))
 } else {
   // no push this time — read the code the ordinary way and call verifyCode(store, code)
 }
@@ -3654,37 +3686,40 @@ O whalibmob usa a sintaxe do EventEmitter para eventos.
 
 ```js
 const { WhalibmobClient } = require('whalibmob')
+const os   = require('os')
 const path = require('path')
 
-async function connect() {
+async function main() {
   const client = new WhalibmobClient({
-    sessionDir: path.join(process.env.HOME, '.waSession')
+    sessionDir: path.join(os.homedir(), '.waSession')
   })
 
-  client.on('connected', async () => {
-    console.log('connected')
-    await client.sendText('919634847671', 'Hello!')
-  })
+  client.on('connected', () => console.log('connected'))
 
-  client.on('disconnected', () => {
-    console.log('disconnected — reconnecting...')
-    setTimeout(() => connect(), 3000)
-  })
+  // The client reconnects on its own after a dropped connection. Only log here:
+  // building a second client in this handler would put two connections on the
+  // same account, and one more after every drop.
+  client.on('disconnected', () => console.log('disconnected'))
+  client.on('reconnecting', ({ attempt, delay }) =>
+    console.log('reconnecting in', delay, 'ms, attempt', attempt))
+  client.on('reconnected', () => console.log('reconnected'))
 
   client.on('message', msg => {
     const d = msg.decoded
     if (d && d.type === 'text') console.log('message from', msg.from, d.text)
   })
 
+  // The one case the client will not retry: the session itself is gone.
   client.on('auth_failure', ({ reason }) => {
     console.error('session revoked:', reason)
-    // re-register the number
+    process.exit(1)   // re-register the number, or link it again
   })
 
-  await client.init('919634847671')
+  await client.init('919634847671')            // resolves once logged in
+  await client.sendText('919876543210', 'Hello!')
 }
 
-connect()
+main().catch(err => { console.error(err.message || err); process.exit(1) })
 ```
 
 ### Todos os Eventos

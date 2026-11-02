@@ -96,6 +96,68 @@ npm install -g whalibmob
 ```
 
 
+## Quick Start
+
+One script that registers a number on its first run, then connects and sends a message. Save it as `quick-start.js`, set `PHONE` and `TO`, and run `node quick-start.js`.
+
+```js
+const {
+  WhalibmobClient, createNewStore, loadStore, saveStore,
+  requestSmsCode, verifyCode, storeFileFor
+} = require('whalibmob')
+const os = require('os')
+const path = require('path')
+const readline = require('readline/promises')
+
+const PHONE    = '40712345678'                 // your number: country code + number, no '+'
+const TO       = '40798765432'                 // who to message
+const BASE_DIR = path.join(os.homedir(), '.waSession')
+
+async function register(phone) {
+  const store = createNewStore(phone, { name: 'My Bot' })
+  saveStore(store, storeFileFor(BASE_DIR, phone))
+  await requestSmsCode(store, 'sms')           // or 'voice'
+  saveStore(store, storeFileFor(BASE_DIR, phone))
+
+  const rl   = readline.createInterface({ input: process.stdin, output: process.stdout })
+  const code = (await rl.question('6-digit code: ')).replace(/\D/g, '')
+  rl.close()
+
+  const result = await verifyCode(store, code) // updates `store` in place
+  if (!['ok', 'sent', 'verified'].includes(result.status)) {
+    throw new Error('registration failed: ' + JSON.stringify(result))
+  }
+  store.registered  = true
+  store.codePending = false
+  // WhatsApp can file the account under a slightly different number.
+  saveStore(store, storeFileFor(BASE_DIR, store.phoneNumber))
+  return store.phoneNumber
+}
+
+async function main() {
+  let phone = PHONE
+  const saved = loadStore(storeFileFor(BASE_DIR, phone))
+  if (!saved || !saved.registered) phone = await register(phone)
+
+  const client = new WhalibmobClient({ sessionDir: BASE_DIR })
+  client.on('connected',    () => console.log('connected as +' + phone))
+  client.on('reconnecting', ({ attempt }) => console.log('reconnecting, attempt', attempt))
+  client.on('auth_failure', ({ reason }) => { console.error('session ended:', reason); process.exit(1) })
+  client.on('message', msg => {
+    const d = msg.decoded
+    if (d && d.type === 'text') console.log('message from', msg.from + ':', d.text)
+  })
+
+  await client.init(phone)                     // resolves once logged in
+  await client.sendText(TO, 'Hello from whalibmob!')
+}
+
+main().catch(err => { console.error(err.message || err); process.exit(1) })
+```
+
+The client reconnects by itself after a dropped connection — do not create a new one on `disconnected`. Prefer no code at all? The [CLI](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli-getting-started.md#cli--getting-started) does the same in two commands. A brand-new account is watched closely by WhatsApp's anti-abuse checks, so send the first messages to people who have your number saved — see [Accounts](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts.md#why-registration-can-be-blocked--the-anti-abuse-landscape).
+
+
 ## Approving a Companion Device
 
 A number registered with whalibmob is the account's **primary device**, and from the CLI it can approve **WhatsApp Web** in the phone's place: Web is linked as a companion and is handed the chat history this program has kept for the number. That is not the whole history the account has ever had; what it covers is spelled out below. Keep the shell open until the chats have loaded.
@@ -146,7 +208,7 @@ linked devices  +447949738354
 
 **When it stops part-way.** `/link-bootstrap --resume` continues a handover after its last accepted step, and never sends blindly: a step whose reply never came is sent once more only with `--resend-uncertain`. `/link-unlock` shows who holds the lock on the link journal and breaks it only when you answer `y`: a lock left by a dead process on the same machine is recovered without it, and any other holder is reported as busy, with who holds it, until you have checked it is gone and unlocked.
 
-The whole walk-through, every command and the library API (`messageStore`, `getPrimaryMessageStore()`, `getPrimaryLinkReadiness()`, `bootstrapPrimaryCompanion()`, `unlockPrimaryLink()`) are in [Approving a Companion Device](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#approving-a-companion-device-primary-role); the commands alone are in [the CLI reference](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli.md#companion-commands-approving-whatsapp-web).
+The whole walk-through, every command and the library API (`messageStore`, `getPrimaryMessageStore()`, `getPrimaryLinkReadiness()`, `bootstrapPrimaryCompanion()`, `unlockPrimaryLink()`) are in [Approving a Companion Device](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#approving-a-companion-device-primary-role); the commands alone are in [the CLI reference](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli-commands.md#companion-commands-approving-whatsapp-web).
 
 
 ## Documentation

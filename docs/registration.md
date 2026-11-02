@@ -10,6 +10,15 @@ Everything the CLI does is available as a Node.js library. The sections below
 cover connecting an account, sending and receiving every message type, groups,
 communities, channels, presence, privacy, history sync, and device emulation.
 
+> [!NOTE]
+> Most snippets in these pages are fragments that use `await` at the top level.
+> Put them inside an `async function`, or run them from an ES module (an `.mjs`
+> file using `import`), where top-level `await` is allowed. A CommonJS file that
+> mixes `require()` with top-level `await` is rejected by Node before it runs.
+> The complete programs — the [Quick Start](https://github.com/Kunboruto20/whalibmob/blob/main/README.md#quick-start),
+> the two registration steps below and the
+> [events example](events-history.md#example-to-start) — run as they are.
+
 ### What the package exports
 
 Two layers. The first is the flat one the rest of this document uses — the
@@ -96,24 +105,27 @@ Registration is a one-time process. You need a phone number that can receive an 
 
 ```js
 const {
-  createNewStore, saveStore, requestSmsCode
+  createNewStore, saveStore, requestSmsCode, storeFileFor
 } = require('whalibmob')
+const os   = require('os')
 const path = require('path')
-const fs   = require('fs')
 
 const phone    = '919634847671'           // country code + number, no '+'
-const sessDir  = path.join(process.env.HOME, '.waSession')
-const sessFile = path.join(sessDir, phone + '.json')
+const sessDir  = path.join(os.homedir(), '.waSession')
+const sessFile = storeFileFor(sessDir, phone)   // ~/.waSession/<phone>/<phone>.json
 
-fs.mkdirSync(sessDir, { recursive: true })
+async function main() {
+  // `name` is the display name the account registers with — what people who have
+  // not saved the number see. Omit it and the account has no name until one is
+  // set later with client.changeName().
+  const store = createNewStore(phone, { name: 'Ricardo Trade' })
+  saveStore(store, sessFile)
 
-// `name` is the display name the account registers with — what people who have
-// not saved the number see. Omit it and the account has no name until one is
-// set later with client.changeName().
-const store = createNewStore(phone, { name: 'Ricardo Trade' })
-saveStore(store, sessFile)
+  await requestSmsCode(store, 'sms')   // 'sms' | 'voice' | 'wa_old'
+  saveStore(store, sessFile)
+}
 
-await requestSmsCode(store, 'sms')   // 'sms' | 'voice' | 'wa_old'
+main().catch(err => { console.error(err.message || err); process.exit(1) })
 ```
 
 The name is written to the session, not sent to the registration endpoint — the
@@ -131,16 +143,35 @@ Names are trimmed, collapsed to single spaces and capped at 25 characters.
 **Step 2 — verify the code**
 
 ```js
-const { loadStore, saveStore, verifyCode } = require('whalibmob')
+const { loadStore, saveStore, verifyCode, storeFileFor } = require('whalibmob')
+const os   = require('os')
+const path = require('path')
 
-const store  = loadStore(sessFile)
-const result = await verifyCode(store, '123456')
+const phone   = '919634847671'
+const sessDir = path.join(os.homedir(), '.waSession')
 
-if (result.status === 'ok') {
-  saveStore(result.store, sessFile)
-  console.log('registered')
+async function main() {
+  const store  = loadStore(storeFileFor(sessDir, phone))
+  if (!store) throw new Error('no session for +' + phone + ' — run step 1 first')
+  const result = await verifyCode(store, '123456')   // updates `store` in place
+
+  if (['ok', 'sent', 'verified'].includes(result.status)) {
+    store.registered  = true
+    store.codePending = false
+    // Save under the number WhatsApp filed the account as — it can differ from
+    // the one typed (result.canonicalPhoneNumber says so when it does).
+    saveStore(store, storeFileFor(sessDir, store.phoneNumber))
+    console.log('registered as +' + store.phoneNumber)
+  } else {
+    console.error('not registered:', result)
+  }
 }
+
+main().catch(err => { console.error(err.message || err); process.exit(1) })
 ```
+
+`verifyCode` returns the server's answer, not a new store: the session you
+passed in is the one that is now registered, so that is the one to save.
 
 **Optional — let the code arrive by itself.** The two steps above are the whole flow, and nothing about them changes if you do nothing else. But because a registration sends a push token (see [The Push Token](push-token.md#the-push-token)), WhatsApp *may* also deliver the six-digit code as a silent push. Open a listener for it before requesting the code, and the code can come back with nothing typed — on an Android profile over Firebase, on an iOS one over APNs:
 
@@ -155,7 +186,7 @@ const code = await codePromise            // the six digits, or null if no push 
 
 if (code) {
   const result = await verifyCode(store, code)
-  if (result.status === 'ok') saveStore(result.store, sessFile)
+  if (result.status === 'ok') saveStore(store, storeFileFor(sessDir, store.phoneNumber))
 } else {
   // no push this time — read the code the ordinary way and call verifyCode(store, code)
 }
