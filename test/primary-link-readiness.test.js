@@ -450,6 +450,11 @@ async function offerCompanion(f) {
     ]));
     f.client._devMgr = { async fetchBundles(jids) { return new Map([[jids[0], { identityKey: f.identity.public }]]); } };
     f.client._signal = { async hasSession() { return false; }, async buildSessionFromBundle() { }, async encrypt(jid, plaintext) { return { type: 'pkmsg', ciphertext: Buffer.from(plaintext) }; } };
+    // Every bootstrap uploads at least its RECENT chunk, as an md-msg-hist blob.
+    f.client._sender = { async _uploadMedia(kind, buf) {
+        return { directPath: '/v/t62.synthetic/history', mediaKey: crypto.randomBytes(32), fileSha256: crypto.createHash('sha256').update(buf).digest(),
+            fileEncSha256: crypto.randomBytes(32), fileLength: buf.length };
+    } };
     return f.client.getPrimaryLinkInvitations()[0];
 }
 

@@ -1065,15 +1065,16 @@ export interface PrimaryHistoryUpload {
 export interface PrimaryBootstrapOptions {
   /** 'store' reads this client's primary message store (PRIMARY_MESSAGE_STORE_DISABLED without one). */
   history: 'store' | (() => PrimaryHistorySnapshot | Promise<PrimaryHistorySnapshot>);
-  /** Used only above 64 KiB deflated. Defaults to the md-msg-hist media upload. */
+  /** Used for a history above 64 KiB deflated and for the RECENT chunk that follows every history. Defaults to the md-msg-hist media upload. */
   upload?: (bytes: Buffer) => Promise<PrimaryHistoryUpload>;
   /** Continue a recorded attempt after its last accepted step, with the bytes it pinned. */
   resume?: boolean;
   /** With resume: send again, under the recorded message id, a step whose ACK never came. A refused step is never sent again. */
   resendUncertain?: boolean;
   /**
-   * After the history, send what reached the store since it was pinned, as a RECENT chunk: only the chats with
-   * something new and the push names of those chats and senders. Experimental: not verified on real WhatsApp Web, so leave it off unless you are testing it.
+   * Put what reached the store since the history was pinned into the RECENT chunk that follows it: only the chats with
+   * something new and the push names of those chats and senders. Experimental: Web reads a RECENT chunk as older
+   * messages, so it does not show newer ones from it; leave it off unless you are testing it.
    */
   delta?: boolean;
   /** Retry a key share the server refused with 479, once, with the same key. */
@@ -1241,7 +1242,8 @@ export declare class WhalibmobClient extends EventEmitter {
   bootstrapEmptyPrimaryCompanion(options: { getInitialHistory: () => Promise<{ source: 'owned_primary_store'; messageCount: 0; conversationCount: 0 }>; recoverRejected?: boolean; signal?: AbortSignal }): Promise<{ status: 'sent'; browserReady: false; operationId: string }>;
   /**
    * Key share, critical_block patch and INITIAL_BOOTSTRAP history for the companion just linked: inline up to
-   * 64 KiB deflated, an md-msg-hist blob above. The history is pinned on disk before it is sent. Without resume an
+   * 64 KiB deflated, an md-msg-hist blob above; then a RECENT chunk at 100% (chunk 1, always a blob), without which
+   * Web never counts the sync as complete. The history is pinned on disk before it is sent. Without resume an
    * attempt is single (PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED); a step with no ACK stops with
    * PRIMARY_BOOTSTRAP_KEY_SHARE_UNCERTAIN or PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN until resendUncertain. A resume also
    * continues after a dropped connection left the link uncertain. Server state neither empty nor written by our own

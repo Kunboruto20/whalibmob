@@ -53,9 +53,17 @@ function textMessage(text) {
 // The independent read: inflate, decode with the fixture, numbers as numbers.
 // Without `defaults`, a field the encoder did not write is absent from the
 // object, so `'name' in conv` means the field was on the wire.
-function decodeSync(deflated) {
+// The HistorySync as it goes over the wire.
+function decodeSyncWire(deflated) {
   const H = type('HistorySync');
   return H.toObject(H.decode(zlib.inflateSync(deflated)), { longs: Number });
+}
+// The same with each chat's messages in the order they happened, by msgOrderID
+// (the wire carries them newest first, pinned by its own test below).
+function decodeSync(deflated) {
+  const sync = decodeSyncWire(deflated);
+  for (const conv of sync.conversations || []) if (conv.messages) conv.messages.sort((a, b) => a.msgOrderID - b.msgOrderID);
+  return sync;
 }
 function decodeNotification(bytes) {
   const M = type('Message');
@@ -72,9 +80,12 @@ test('empty snapshot is byte-identical to the live-validated bootstrap', () => {
 });
 
 // The encoder does not sort. The store hands chats out by conversationTimestamp
-// desc and records by ts asc; what is checked is that this order goes over
-// unchanged and is numbered 1..n.
-test('conversations and messages keep the snapshot order, with msgOrderID 1..n', () => {
+// desc and records by ts asc. Chats go over in that order; a chat's messages go
+// newest first, as the phone sends them: Web reverses the list it is given
+// (handleInitialSyncMsgs) and takes the last one's msgOrderID as the oldest it
+// holds. msgOrderID counts up from the oldest, 1..n. Found live: sent oldest
+// first, Web showed the chat upside down with the oldest message as its last.
+test('a chat\'s messages go newest first, with msgOrderID counting up from the oldest', () => {
   const snap = snapshot({
     chats: [
       { id: ANA, name: 'Ana', conversationTimestamp: T + 300, unreadCount: 2 },
@@ -87,17 +98,17 @@ test('conversations and messages keep the snapshot order, with msgOrderID 1..n',
       [GROUP]: [rec('G1', 3, T + 100, { participant: BOB })]
     }
   });
-  const sync = decodeSync(buildHistorySync(snap));
+  const sync = decodeSyncWire(buildHistorySync(snap));
 
   assert.equal(sync.syncType, 0);
   assert.equal(sync.chunkOrder, 0);
   assert.equal(sync.progress, 100);
   assert.deepEqual(sync.conversations.map(c => c.ID), [ANA, BOB, GROUP]);
-  assert.deepEqual(sync.conversations.map(ids), [['A1', 'A2', 'A3'], ['B1', 'B2'], ['G1']]);
-  for (const conv of sync.conversations) {
-    assert.deepEqual(conv.messages.map(m => m.msgOrderID), conv.messages.map((_, i) => i + 1), conv.ID);
-  }
+  assert.deepEqual(sync.conversations.map(ids), [['A3', 'A2', 'A1'], ['B2', 'B1'], ['G1']]);
+  assert.deepEqual(sync.conversations.map(c => c.messages.map(m => m.msgOrderID)), [[3, 2, 1], [2, 1], [1]]);
 
+  // From here on, in the order they happened.
+  for (const conv of sync.conversations) conv.messages.reverse();
   const [ana, bob, group] = sync.conversations;
   assert.equal(ana.conversationTimestamp, T + 300);
   assert.equal(ana.unreadCount, 2);
@@ -230,6 +241,37 @@ test('pushnames and pn-lid mappings are exported', () => {
   assert.equal(other.lidJID, '88888@lid');
   assert.ok(!('pnJID' in other));
   assert.ok(!('pnJID' in group) && !('lidJID' in group));
+});
+
+// Web on an account moved to LIDs skips a 1:1 chat that comes under a number
+// without accountLid ("Migrated account not sending accountLid for a PN chat
+// in history sync" in its handleInitialSyncMsgs): the chat and every message
+// in it are dropped. Found live: the history arrived, Web acked it, no chats.
+test('a 1:1 chat under a number carries its lid as accountLid, which Web needs to keep it', () => {
+  const sync = decodeSync(buildHistorySync(snapshot({
+    chats: [
+      { id: ANA, pnJid: ANA, lidJid: '99999@lid', conversationTimestamp: T + 3, unreadCount: 0 },
+      { id: BOB, pnJid: BOB, conversationTimestamp: T + 2, unreadCount: 0 },
+      { id: '88888@lid', pnJid: '40777777777@s.whatsapp.net', lidJid: '88888@lid', conversationTimestamp: T + 1, unreadCount: 0 },
+      { id: GROUP, lidJid: '77777@lid', conversationTimestamp: T, unreadCount: 0 }
+    ]
+  })));
+  const [ana, bob, lidChat, group] = sync.conversations;
+  assert.equal(ana.accountLid, '99999@lid');
+  // No lid known: nothing to send (Web will not keep it, but a guess is worse).
+  assert.ok(!('accountLid' in bob));
+  // Under its lid already: Web takes the id itself.
+  assert.ok(!('accountLid' in lidChat));
+  assert.ok(!('accountLid' in group));
+});
+
+// The inline payload is the initial bootstrap's alone (its name says so). Found
+// live: a RECENT chunk sent inline left Web's chunk status at "downloading"
+// for good, and Web never counted the sync as complete.
+test('only the initial bootstrap may go inline; any other chunk is a blob', () => {
+  const inline = buildHistorySync(snapshot(), { syncType: 3 });
+  assert.throws(() => buildNotification({ inline }, { syncType: 3 }), { code: 'PRIMARY_HISTORY_EXPORT_INLINE_NOT_INITIAL' });
+  assert.ok(Buffer.isBuffer(buildNotification({ inline: buildHistorySync(snapshot()) }, { syncType: 0 })));
 });
 
 test('blob notification carries all five media fields and no inline payload', () => {

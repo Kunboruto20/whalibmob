@@ -61,12 +61,15 @@ async function fixture(t) {
     const code = 'K7M2QX4B', ref = Buffer.from('synthetic-independent-companion-ref');
     const wrapped = await P.buildWrappedEphemeralPub(code, ephemeral.public);
     const control = { hangAck: null, ackError: null };
-    const server = { version: 0, patches: [], snapshot: null, hangPatch: false, refusePatch: null };
+    const server = { version: 0, patches: [], snapshot: null, hangPatch: false, refusePatch: null, unversioned: false };
     const requests = [];
     let linked = false, messageCount = 0, companionSecret = null;
     const reply = (query, content = []) => client._handleIq(new BinaryNode('iq', { id: query.attrs.id, type: 'result', from: 's.whatsapp.net' }, content));
     const devices = () => [new BinaryNode('device', { id: '0' }, null), ...(linked ? [new BinaryNode('device', { id: '7', 'key-index': '1' }, null)] : [])];
-    const collection = content => new BinaryNode('sync', {}, [new BinaryNode('collection', { name: 'critical_block', version: String(server.version) }, content)]);
+    // unversioned: answer a read the way the live server does, with no version
+    // on the collection (the version is carried by the patches and snapshot).
+    const collection = content => new BinaryNode('sync', {}, [new BinaryNode('collection',
+        server.unversioned ? { name: 'critical_block' } : { name: 'critical_block', version: String(server.version) }, content)]);
     client._socket = { close: () => client._onClose(), sendNode(node) {
             requests.push(node);
             if (node.description === 'message') {
@@ -149,6 +152,10 @@ async function bootstrapFixture(t) {
     f.client._appState = new AppStateStore(path.join(f.dir, PHONE + '.appState.json'));
     f.client._devMgr = { async fetchBundles(jids) { return new Map([[jids[0], { identityKey: f.identity.public }]]); } };
     f.client._signal = { async hasSession() { return false; }, async buildSessionFromBundle() {}, async encrypt(jid, plaintext) { return { type: 'pkmsg', ciphertext: Buffer.from(plaintext) }; } };
+    // The default md-msg-hist upload: every RECENT chunk goes up by it, and a
+    // large history when the test gives no upload of its own.
+    f.uploads = [];
+    f.client._sender = { async _uploadMedia(kind, buf) { const done = fakeUpload(buf); f.uploads.push({ kind, buf, done }); return done; } };
     await f.client.approveCompanionCode(f.code, { invitationId: f.invitation.id });
     return f;
 }
@@ -173,11 +180,49 @@ function notificationOf(m) {
     assert.equal(message.protocolMessage.type, 5);
     return message.protocolMessage.historySyncNotification;
 }
+// The bytes a notification carries: inline, or the blob it points at, as the
+// synthetic upload was given them.
+function payloadOf(hsn) {
+    if (hsn.initialHistBootstrapInlinePayload) return hsn.initialHistBootstrapInlinePayload;
+    const stored = blobs.get(Buffer.from(hsn.mediaKey).toString('hex'));
+    assert.ok(stored, 'the notification points at no blob that was uploaded');
+    return stored.buf;
+}
+// The HistorySync, with each chat's messages in the order they happened, by
+// msgOrderID (the wire carries them newest first, pinned in
+// primary-history-export.test.js).
 function historyOf(hsn) {
     const H = type('HistorySync');
-    return H.toObject(H.decode(zlib.inflateSync(hsn.initialHistBootstrapInlinePayload)), { longs: Number });
+    const history = H.toObject(H.decode(zlib.inflateSync(payloadOf(hsn))), { longs: Number });
+    for (const conv of history.conversations || []) if (conv.messages) conv.messages.sort((a, b) => a.msgOrderID - b.msgOrderID);
+    return history;
 }
 const messageIds = history => history.conversations.flatMap(c => (c.messages || []).map(m => m.message.key.ID));
+// The RECENT chunk at 100% that follows every history: Web counts the history
+// as synced only once one has come. Always a blob, never inline: Web left one
+// sent inline at "downloading" for good. The notification points at exactly
+// what was uploaded, and it and the chunk both say RECENT at 100%; what the
+// chunk carries is returned.
+function recentOf(m) {
+    const hsn = notificationOf(m);
+    assert.equal(hsn.syncType, 3);
+    assert.equal(hsn.progress, 100);
+    assert.equal(hsn.initialHistBootstrapInlinePayload, undefined);
+    const buf = payloadOf(hsn), { done } = blobs.get(Buffer.from(hsn.mediaKey).toString('hex'));
+    assert.equal(hsn.directPath, done.directPath);
+    assert.deepEqual(hsn.fileSHA256, crypto.createHash('sha256').update(buf).digest());
+    assert.deepEqual(hsn.fileEncSHA256, done.fileEncSha256);
+    assert.equal(hsn.fileLength, buf.length);
+    const chunk = historyOf(hsn);
+    assert.equal(chunk.syncType, 3);
+    assert.equal(chunk.progress, 100);
+    return chunk;
+}
+// One that carries nothing at all: what follows a history no delta was asked for.
+// Its chunkOrder is 1: Web processes a RECENT chunk only as 1 once the initial
+// bootstrap is in, or as the one after the last it processed, so a chunk 0 sat
+// in its queue unprocessed for good (found live).
+const EMPTY_RECENT = { syncType: 3, chunkOrder: 1, progress: 100 };
 function keyShareOf(m) {
     const key = decodeMessageContainer(plain(m)).appStateSyncKeyShare.keys[0];
     const pm = decodeFields(decodeFields(plain(m))[12]);
@@ -223,10 +268,16 @@ function sized(target) {
     }
     assert.fail('no snapshot deflates to ' + target + ' bytes');
 }
+// What each synthetic upload was given and answered, by its media key (one of
+// its own, unlike the bytes): a notification that points at a blob is read
+// back from here.
+const blobs = new Map();
 function fakeUpload(buf) {
     const digest = crypto.createHash('sha256').update(buf).digest();
-    return { url: 'https://mmg.whatsapp.net/synthetic', directPath: '/v/t62.synthetic/' + digest.toString('hex').slice(0, 16), mediaKey: crypto.randomBytes(32),
+    const done = { url: 'https://mmg.whatsapp.net/synthetic', directPath: '/v/t62.synthetic/' + digest.toString('hex').slice(0, 16), mediaKey: crypto.randomBytes(32),
         fileSha256: digest, fileEncSha256: crypto.randomBytes(32), fileLength: buf.length, mediaKeyTimestamp: T };
+    blobs.set(done.mediaKey.toString('hex'), { buf: Buffer.from(buf), done });
+    return done;
 }
 
 // ─── stopping a bootstrap part-way ──────────────────────────────────────────
@@ -298,12 +349,14 @@ test('empty history in first mode sends the live-validated bytes', async t => {
     assert.deepEqual(result, { status: 'sent', mode: 'first', operationId: journal(f).transaction.id,
         history: { chats: 0, records: 0, bytes: buildHistorySync(snapshot()).length, inline: true, losses: 0, evicted: 0, captureOrigin: 'enabled' }, delta: null });
     const sent = messages(f);
-    assert.equal(sent.length, 2);
+    assert.equal(sent.length, 3);
     assert.equal(keyShareOf(sent[0]).keyData.length, 32);
     assert.equal(patchWrites(f).length, 1);
     // Key share, critical_block patch, then the history: its bytes are the
-    // ones WhatsApp Web accepted live.
+    // ones WhatsApp Web accepted live. Then the RECENT chunk that completes
+    // it, empty: no delta was asked for.
     assert.deepEqual(plain(sent[1]), Bootstrap.initialHistory(EMPTY));
+    assert.deepEqual(recentOf(sent[2]), EMPTY_RECENT);
     assert.equal(journal(f).transaction.bootstrap.phase, 'sent');
     assert.equal(fs.existsSync(outboxFile(f)), false, 'nothing is left pinned once it is sent');
 });
@@ -377,18 +430,22 @@ test('a message stored after the bootstrap started and before the history was pi
     assert.equal(messages(h).length, 1);
     const resumed = await g.client.bootstrapPrimaryCompanion({ history: async () => good, resume: true });
     assert.equal(resumed.history.records, 2);
-    assert.equal(messages(g).length, 2);
+    assert.equal(messages(g).length, 3);
+    assert.deepEqual(recentOf(messages(g)[2]), EMPTY_RECENT);
     assert.equal(patchWrites(g).length, 1);
 });
 
 test('deflated size 65537 selects the blob path', async t => {
     const f = await bootstrapFixture(t), snap = sized(INLINE_MAX + 1), bytes = buildHistorySync(snap), uploads = [];
-    // The default upload is the md-msg-hist media upload.
+    // The default upload is the md-msg-hist media upload: the history's, then
+    // the RECENT chunk's.
     f.client._sender = { async _uploadMedia(kind, buf) { const done = fakeUpload(buf); uploads.push({ kind, buf, done }); return done; } };
     const result = await f.client.bootstrapPrimaryCompanion({ history: async () => snap });
-    assert.equal(uploads.length, 1);
-    assert.equal(uploads[0].kind, 'md-msg-hist');
+    assert.equal(uploads.length, 2);
+    assert.deepEqual(uploads.map(u => u.kind), ['md-msg-hist', 'md-msg-hist']);
     assert.deepEqual(uploads[0].buf, bytes);
+    assert.deepEqual(recentOf(messages(f)[2]), EMPTY_RECENT);
+    assert.deepEqual(notificationOf(messages(f)[2]).mediaKey, uploads[1].done.mediaKey);
     assert.deepEqual(result.history, { chats: 1, records: 1, bytes: 65537, inline: false, losses: 0, evicted: 0, captureOrigin: 'enabled' });
     const hsn = notificationOf(messages(f)[1]);
     assert.equal(hsn.directPath, uploads[0].done.directPath);
@@ -399,13 +456,13 @@ test('deflated size 65537 selects the blob path', async t => {
     assert.equal(hsn.initialHistBootstrapInlinePayload, undefined);
     assert.equal(hsn.syncType, 0);
 
-    // One byte less still rides inline.
-    const g = await bootstrapFixture(t), small = sized(INLINE_MAX);
-    let uploaded = 0;
-    const inline = await g.client.bootstrapPrimaryCompanion({ history: async () => small, upload: async buf => { uploaded++; return fakeUpload(buf); } });
-    assert.equal(uploaded, 0);
+    // One byte less still rides inline: the only upload is the RECENT chunk's.
+    const g = await bootstrapFixture(t), small = sized(INLINE_MAX), uploaded = [];
+    const inline = await g.client.bootstrapPrimaryCompanion({ history: async () => small, upload: async buf => { uploaded.push(buf); return fakeUpload(buf); } });
     assert.equal(inline.history.inline, true);
     assert.deepEqual(notificationOf(messages(g)[1]).initialHistBootstrapInlinePayload, buildHistorySync(small));
+    assert.deepEqual(recentOf(messages(g)[2]), EMPTY_RECENT);
+    assert.deepEqual(uploaded, [payloadOf(notificationOf(messages(g)[2]))]);
 });
 
 // An upload can take minutes, and nothing else is said meanwhile: the start of
@@ -441,12 +498,14 @@ test('the history upload runs on a clock of its own, outside the bootstrap\'s ti
     assert.ok(Date.now() - started < 10000, 'stopped at the limit, not at the ACK wait');
     assert.equal(journal(f).transaction.bootstrap.errorCode, 'PRIMARY_LINK_TIMEOUT');
 
-    // An upload slower than the whole limit still finishes, and the history goes.
+    // An upload slower than the whole limit still finishes, and the history
+    // goes, then the RECENT chunk, its upload as slow.
     const snap = sized(INLINE_MAX + 1), g = await bootstrapFixture(t);
     const slow = buf => new Promise(resolve => setTimeout(() => resolve(fakeUpload(buf)), 1500));
     const result = await g.client.bootstrapPrimaryCompanion({ history: async () => snap, upload: slow, timeoutMs: 1000 });
     assert.equal(result.history.inline, false);
-    assert.equal(messages(g).length, 2);
+    assert.equal(messages(g).length, 3);
+    assert.deepEqual(recentOf(messages(g)[2]), EMPTY_RECENT);
     assert.equal(journal(g).transaction.bootstrap.phase, 'sent');
 
     // Its own limit: an upload that never finishes ends there, with the
@@ -460,8 +519,11 @@ test('the history upload runs on a clock of its own, outside the bootstrap\'s ti
     assert.equal(messages(h).length, 1);
     const resumed = await h.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(1), resume: true, upload: async buf => { uploads.push(buf); return fakeUpload(buf); } });
     assert.equal(resumed.status, 'sent');
-    assert.equal(uploads.length, 2);
+    // The history once more, then the RECENT chunk.
+    assert.equal(uploads.length, 3);
     assert.deepEqual(uploads[1], uploads[0]);
+    assert.deepEqual(recentOf(messages(h)[2]), EMPTY_RECENT);
+    assert.deepEqual(uploads[2], payloadOf(notificationOf(messages(h)[2])));
 
     // A cancel still stops it at once.
     const k = await bootstrapFixture(t), abort = new AbortController();
@@ -497,11 +559,13 @@ test('a blob upload that does not match the pinned bytes is not sent', async t =
     await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload: async buf => ({ ...fakeUpload(buf), fileSha256: crypto.randomBytes(32) }) }), { code: 'PRIMARY_BOOTSTRAP_UPLOAD_INVALID' });
     assert.equal(messages(f).length, 1);
     assert.equal(journal(f).transaction.bootstrap.phase, 'history_prepared');
-    // Nothing reached the companion, so a resume may upload again.
-    let uploads = 0;
-    await f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload: async buf => { uploads++; return fakeUpload(buf); }, resume: true });
-    assert.equal(uploads, 1);
-    assert.equal(messages(f).length, 2);
+    // Nothing reached the companion, so a resume may upload again: the
+    // history, then the RECENT chunk.
+    const uploads = [];
+    await f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload: async buf => { uploads.push(buf); return fakeUpload(buf); }, resume: true });
+    assert.equal(messages(f).length, 3);
+    assert.deepEqual(recentOf(messages(f)[2]), EMPTY_RECENT);
+    assert.deepEqual(uploads, [buildHistorySync(snap), payloadOf(notificationOf(messages(f)[2]))]);
 });
 
 test('resume from history_uploaded uploads the pinned bytes again', async t => {
@@ -524,16 +588,19 @@ test('resume from history_uploaded uploads the pinned bytes again', async t => {
     await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload }), { code: 'PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED' });
     snap = chatSnapshot(3);
     const result = await f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload, resume: true });
-    assert.equal(uploads.length, 2, 'exactly one more upload');
+    assert.equal(uploads.length, 3, 'exactly one more upload of the history, then the RECENT chunk');
     assert.deepEqual(uploads[1].buf, bytes, 'of the pinned bytes, not the changed store');
     assert.equal(result.history.inline, false);
     const sent = messages(f);
-    assert.equal(sent.length, 2);
+    assert.equal(sent.length, 3);
     assert.equal(patchWrites(f).length, 1);
     const hsn = notificationOf(sent[1]);
     assert.equal(hsn.directPath, uploads[1].done.directPath);
     assert.deepEqual(hsn.mediaKey, uploads[1].done.mediaKey);
     assert.equal(hsn.fileLength, 65537);
+    // Nor does the changed store reach the companion by the RECENT chunk.
+    assert.deepEqual(recentOf(sent[2]), EMPTY_RECENT);
+    assert.deepEqual(notificationOf(sent[2]).mediaKey, uploads[2].done.mediaKey);
 });
 
 test('the blob media key stays out of the link journal, and a resume from history_sending reuses that blob', async t => {
@@ -551,13 +618,19 @@ test('the blob media key stays out of the link journal, and a resume from histor
     assert.equal(outbox.blob.directPath, uploads[0].directPath);
     const first = messages(f)[1];
     await f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload, resume: true, resendUncertain: true });
-    assert.equal(uploads.length, 1, 'the message already sent points at this blob: it is resent as it was');
+    // The message already sent points at this blob: it is resent as it was,
+    // and the one upload since is the RECENT chunk's.
+    assert.equal(uploads.length, 2);
     const sent = messages(f);
-    assert.equal(sent.length, 3);
+    assert.equal(sent.length, 4);
     assert.equal(sent[2].attrs.id, first.attrs.id);
     assert.deepEqual(plain(sent[2]), plain(first));
-    // Once sent, no session file holds it at all.
-    for (const text of [key.toString('base64'), key.toString('hex')]) assert.ok(!sessionText(f).includes(text));
+    assert.deepEqual(recentOf(sent[3]), EMPTY_RECENT);
+    assert.deepEqual(notificationOf(sent[3]).mediaKey, uploads[1].mediaKey);
+    // Once sent, no session file holds either media key at all.
+    for (const k of [key, uploads[1].mediaKey]) {
+        for (const text of [k.toString('base64'), k.toString('hex')]) assert.ok(!sessionText(f).includes(text));
+    }
     assert.equal(fs.existsSync(outboxFile(f)), false);
 });
 
@@ -584,6 +657,8 @@ test('resume uses the pinned outbox even after the store changed', async t => {
     assert.notEqual(sha(buildHistorySync(snap)), outbox.sha256);
     assert.deepEqual(messageIds(historyOf(hsn)), ['M1', 'M2']);
     assert.equal(result.history.records, 2);
+    // Nor does the changed store reach the companion by the RECENT chunk.
+    assert.deepEqual(recentOf(messages(f)[2]), EMPTY_RECENT);
     assert.equal(fs.existsSync(file), false);
 });
 
@@ -618,9 +693,10 @@ test('resendUncertain resends the same message id', async t => {
     const result = await f.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true });
     assert.equal(result.status, 'sent');
     const sent = messages(f);
-    assert.equal(sent.length, 3);
+    assert.equal(sent.length, 4);
     assert.equal(sent[2].attrs.id, first.attrs.id);
     assert.deepEqual(plain(sent[2]), plain(first));
+    assert.deepEqual(recentOf(sent[3]), EMPTY_RECENT);
     assert.equal(patchWrites(f).length, 1);
     assert.equal(journal(f).transaction.bootstrap.phase, 'sent');
 });
@@ -634,10 +710,11 @@ test('resume from critical_patch_accepted sends history without repeating key sh
     const result = await f.client.bootstrapPrimaryCompanion({ history, resume: true });
     assert.equal(result.status, 'sent');
     const sent = messages(f);
-    assert.equal(sent.length, 2);
+    assert.equal(sent.length, 3);
     assert.equal(patchWrites(f).length, 1);
     assert.ok(decodeMessageContainer(plain(sent[0])).appStateSyncKeyShare);
     assert.deepEqual(messageIds(historyOf(notificationOf(sent[1]))), ['M1']);
+    assert.deepEqual(recentOf(sent[2]), EMPTY_RECENT);
 });
 
 test('resume from critical_patch_sending treats our verified patch as accepted and resends on an empty collection', async t => {
@@ -650,7 +727,8 @@ test('resume from critical_patch_sending treats our verified patch as accepted a
     assert.equal(fs.existsSync(path.join(f.dir, PHONE + '.appState.json')), false);
     assert.equal((await f.client.bootstrapPrimaryCompanion({ history, resume: true })).status, 'sent');
     assert.equal(patchWrites(f).length, 1, 'our verified patch is not written again');
-    assert.equal(messages(f).length, 2);
+    assert.equal(messages(f).length, 3);
+    assert.deepEqual(recentOf(messages(f)[2]), EMPTY_RECENT);
     const persisted = JSON.parse(fs.readFileSync(path.join(f.dir, PHONE + '.appState.json'), 'utf8'));
     assert.equal(persisted.critical_block.version, 1);
     assert.equal(f.client._appState.get('critical_block').version, 1);
@@ -662,7 +740,8 @@ test('resume from critical_patch_sending treats our verified patch as accepted a
     assert.equal((await g.client.bootstrapPrimaryCompanion({ history, resume: true })).status, 'sent');
     assert.equal(patchWrites(g).length, 2);
     assert.equal(g.server.version, 1);
-    assert.equal(messages(g).length, 2, 'the key share is not repeated');
+    assert.equal(messages(g).length, 3, 'the key share is not repeated');
+    assert.deepEqual(recentOf(messages(g)[2]), EMPTY_RECENT);
 
     // Anything else on the server is not ours to guess about.
     const h = await bootstrapFixture(t);
@@ -683,9 +762,11 @@ test('key_share_sending without ack stops with KEY_SHARE_UNCERTAIN unless resend
     const result = await f.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true });
     assert.equal(result.status, 'sent');
     const sent = messages(f);
-    assert.equal(sent.length, 3);
+    assert.equal(sent.length, 4);
     assert.equal(sent[1].attrs.id, sent[0].attrs.id);
     assert.deepEqual(plain(sent[1]), plain(sent[0]), 'the same key, under the same id');
+    assert.deepEqual(messageIds(historyOf(notificationOf(sent[2]))), ['M1']);
+    assert.deepEqual(recentOf(sent[3]), EMPTY_RECENT);
     assert.deepEqual(fs.readFileSync(keyFile(f)), keys);
     assert.equal(patchWrites(f).length, 1);
 });
@@ -702,7 +783,8 @@ test('relink shares the existing key, skips the patch, and sends history', async
     assert.equal(result.status, 'sent');
     assert.equal(patchWrites(f).length, 0);
     const sent = messages(f);
-    assert.equal(sent.length, 2);
+    assert.equal(sent.length, 3);
+    assert.deepEqual(recentOf(sent[2]), EMPTY_RECENT);
     const share = keyShareOf(sent[0]);
     assert.equal(share.keyId, keyId.toString('hex'));
     assert.deepEqual(share.keyData, keyData);
@@ -712,6 +794,31 @@ test('relink shares the existing key, skips the patch, and sends history', async
     assert.deepEqual(fs.readFileSync(keyFile(f)), keys);
     assert.equal(f.client._appState.get('critical_block').version, 1);
     assert.equal(journal(f).transaction.bootstrap.mode, 'relink');
+});
+
+test('relink reads the version off the patches when the server leaves the collection unversioned', async t => {
+    // Captured live: after the companion logged out, a read of critical_block
+    // came back as <collection name="critical_block"><patches><patch/></patches>
+    // with no version attribute, the one patch being ours at version 1.
+    const f = await bootstrapFixture(t), { keyId, built } = previousLink(f);
+    f.server.version = 1;
+    f.server.patches = [built.patch];
+    f.server.unversioned = true;
+    assert.deepEqual(await Bootstrap.verifyServerCriticalBlock(f.client._primaryLinking, null), { version: 1, verified: true, foreign: false });
+    const result = await f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(1) });
+    assert.equal(result.mode, 'relink');
+    assert.equal(patchWrites(f).length, 0);
+    assert.equal(keyShareOf(messages(f)[0]).keyId, keyId.toString('hex'));
+});
+
+test('an unversioned critical_block that is not ours at our version is still refused', async t => {
+    const f = await bootstrapFixture(t), ours = previousLink(f);
+    f.server.patches = [ours.built.patch, Sync.buildPatch(pushNamePatch('Later'), ours.keyId, ours.keyData, ours.built.state).patch];
+    f.server.version = 2;
+    f.server.unversioned = true;
+    assert.equal((await Bootstrap.verifyServerCriticalBlock(f.client._primaryLinking, null)).verified, false);
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(1) }), { code: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE' });
+    assert.equal(messages(f).length, 0);
 });
 
 test('relink refuses a server state we cannot verify', async t => {
@@ -743,7 +850,8 @@ test('relink verifies a critical_block snapshot blob with our key as well', asyn
         f.server.snapshot = Buffer.concat([len(1, crypto.randomBytes(32)), len(2, Buffer.from('/v/t62.synthetic/critical-block'))]);
         if (ourMac) {
             assert.equal((await f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(1) })).mode, 'relink');
-            assert.equal(messages(f).length, 2);
+            assert.equal(messages(f).length, 3);
+            assert.deepEqual(recentOf(messages(f)[2]), EMPTY_RECENT);
         } else {
             await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(1) }), { code: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE' });
             assert.equal(messages(f).length, 0);
@@ -762,6 +870,50 @@ test('a step its ACK refused is not sent again, even with resendUncertain', asyn
     const count = f.requests.length;
     await assert.rejects(f.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true }), { code: 'PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED' });
     assert.equal(f.requests.length, count);
+});
+
+// Web counts the history as synced only once a RECENT chunk at progress 100
+// has come (recentCompleted, in handleHistorySyncChunk). Without one it showed
+// "Syncing older messages" in the chat, and after two minutes "Syncing paused".
+// It goes as a blob even when the history rode inline: Web left a RECENT
+// chunk sent inline at "downloading" for good.
+test('a RECENT chunk at 100% always follows the history, empty when no delta was asked for', async t => {
+    const f = await bootstrapFixture(t);
+    const result = await f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(2) });
+    assert.equal(result.status, 'sent');
+    assert.equal(result.delta, null);
+    const sent = messages(f);
+    assert.equal(sent.length, 3);
+    const initial = notificationOf(sent[1]), recent = notificationOf(sent[2]);
+    assert.equal(initial.syncType, 0);
+    assert.ok(initial.initialHistBootstrapInlinePayload);
+    assert.equal(recent.syncType, 3);
+    assert.equal(recent.chunkOrder, 1);
+    assert.equal(recent.progress, 100);
+    assert.equal(recent.initialHistBootstrapInlinePayload, undefined);
+    // Up by the default md-msg-hist upload, the one upload of the bootstrap,
+    // and the notification points at exactly that blob.
+    assert.equal(f.uploads.length, 1);
+    const [{ kind, buf, done }] = f.uploads;
+    assert.equal(kind, 'md-msg-hist');
+    assert.equal(recent.directPath, done.directPath);
+    assert.deepEqual(recent.mediaKey, done.mediaKey);
+    assert.deepEqual(recent.fileSHA256, crypto.createHash('sha256').update(buf).digest());
+    assert.deepEqual(recent.fileEncSHA256, done.fileEncSha256);
+    assert.equal(recent.fileLength, buf.length);
+    // The bytes uploaded: RECENT at 100%, with no conversations, nothing at all.
+    const H = type('HistorySync'), chunk = H.toObject(H.decode(zlib.inflateSync(buf)), { longs: Number });
+    assert.equal(chunk.syncType, 3);
+    assert.equal(chunk.progress, 100);
+    assert.deepEqual(chunk.conversations || [], []);
+    assert.deepEqual(chunk, EMPTY_RECENT);
+    // Journaled as the delta, a blob: uploaded, then accepted.
+    const recorded = journal(f).transaction.bootstrap;
+    assert.equal(recorded.phase, 'sent');
+    assert.equal(recorded.delta.inline, false);
+    assert.equal(recorded.delta.uploaded, true);
+    assert.equal(recorded.delta.records, 0);
+    assert.equal(recorded.delta.sha256, sha(buf));
 });
 
 test('delta carries only records after the cutoff', async t => {
@@ -789,10 +941,7 @@ test('delta carries only records after the cutoff', async t => {
     const sent = messages(f);
     assert.equal(sent.length, 3);
     assert.deepEqual(messageIds(historyOf(notificationOf(sent[1]))), ['M1', 'M2', 'B1', 'G1']);
-    const hsn = notificationOf(sent[2]);
-    assert.equal(hsn.syncType, 3);
-    const delta = historyOf(hsn);
-    assert.equal(delta.syncType, 3);
+    const delta = recentOf(sent[2]);
     // Only the chats with something new that goes over: Bob's expired B2 does
     // not bring his chat back with its unread count.
     assert.deepEqual(delta.conversations.map(c => c.ID), [ANA, GROUP]);
@@ -803,13 +952,15 @@ test('delta carries only records after the cutoff', async t => {
     assert.deepEqual(journal(f).transaction.bootstrap.delta.cutoff, { seq: 7 });
     assert.equal(journal(f).transaction.bootstrap.phase, 'sent');
 
-    // Nothing that goes over arrived after the cutoff: nothing more is sent.
+    // Nothing that goes over arrived after the cutoff: the RECENT chunk still
+    // goes, with nothing in it.
     const quiet = snapshot({ seq: 6, chats, pushNames, records: { ...pinned.records, [BOB]: [rec('B1', 3, T + 3), gone('B2', 6, T + 4, 'expired')] } });
     const g = await bootstrapFixture(t);
     let again = 0;
     const none = await g.client.bootstrapPrimaryCompanion({ history: async () => (again++ < 2 ? pinned : quiet), delta: true });
     assert.deepEqual(none.delta, { records: 0 });
-    assert.equal(messages(g).length, 2);
+    assert.equal(messages(g).length, 3);
+    assert.deepEqual(recentOf(messages(g)[2]), EMPTY_RECENT);
 });
 
 test('a dropped connection leaves the bootstrap resumable', async t => {
@@ -830,8 +981,9 @@ test('a dropped connection leaves the bootstrap resumable', async t => {
     await assert.rejects(f.client.bootstrapPrimaryCompanion({ history, resume: true }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN' });
     const first = messages(f)[1];
     assert.equal((await f.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true })).status, 'sent');
-    assert.equal(messages(f).length, 3);
+    assert.equal(messages(f).length, 4);
     assert.equal(messages(f)[2].attrs.id, first.attrs.id);
+    assert.deepEqual(recentOf(messages(f)[3]), EMPTY_RECENT);
 
     // While the patch write is unanswered: settled by reading it back.
     const g = await bootstrapFixture(t);
@@ -844,7 +996,8 @@ test('a dropped connection leaves the bootstrap resumable', async t => {
     assert.equal(g.client._primaryLinkingForSession().journal.snapshot().transaction.phase, 'uncertain');
     assert.equal((await g.client.bootstrapPrimaryCompanion({ history, resume: true })).status, 'sent');
     assert.equal(patchWrites(g).length, 1);
-    assert.equal(messages(g).length, 2);
+    assert.equal(messages(g).length, 3);
+    assert.deepEqual(recentOf(messages(g)[2]), EMPTY_RECENT);
 
     // The resumed attempt stays bound to its device.
     const h = await bootstrapFixture(t);
@@ -1061,7 +1214,8 @@ test('resume from prepared shares the recorded key, or makes it if the key file 
             assert.equal(keyId, recorded.keyId);
             assert.deepEqual(fs.readFileSync(keyFile(f)), before);
         }
-        assert.equal(messages(f).length, 2);
+        assert.equal(messages(f).length, 3);
+        assert.deepEqual(recentOf(messages(f)[2]), EMPTY_RECENT);
         assert.equal(patchWrites(f).length, 1);
     }
 });
@@ -1073,37 +1227,56 @@ test('resume from key_share_accepted writes the patch once and does not share th
     assert.equal(journal(f).transaction.bootstrap.phase, 'key_share_accepted');
     assert.equal(patchWrites(f).length, 0);
     assert.equal((await f.client.bootstrapPrimaryCompanion({ history, resume: true })).status, 'sent');
-    assert.equal(messages(f).length, 2);
+    assert.equal(messages(f).length, 3);
+    assert.deepEqual(recentOf(messages(f)[2]), EMPTY_RECENT);
     assert.equal(patchWrites(f).length, 1);
 });
 
 test('a delta resumes from delta_prepared, delta_sending and delta_accepted', async t => {
     // The start and the pin read 2 records; the delta, 4.
     const twoStep = () => { let calls = 0; return async () => (calls++ < 2 ? chatSnapshot(2) : chatSnapshot(4)); };
-    // delta_prepared: the pinned delta goes out even though this call asks for none.
+    // delta_prepared: the pinned delta goes out even though this call asks for
+    // none. It is a blob nothing points at yet, so it is uploaded afresh.
     const f = await bootstrapFixture(t);
-    failPhaseOnce(f, 'delta_sending');
+    failPhaseOnce(f, 'delta_uploaded');
     await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: twoStep(), delta: true }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
     assert.equal(journal(f).transaction.bootstrap.phase, 'delta_prepared');
-    assert.deepEqual((await f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(9), resume: true })).delta, { records: 2 });
-    assert.deepEqual(messageIds(historyOf(notificationOf(messages(f)[2]))), ['M3', 'M4']);
-    // delta_sending: uncertain until resendUncertain, then the same message again.
+    const fromPrepared = await f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(9), resume: true });
+    assert.deepEqual(messageIds(recentOf(messages(f)[2])), ['M3', 'M4']);
+    assert.equal(f.uploads.length, 2);
+    assert.deepEqual(f.uploads[1].buf, f.uploads[0].buf);
+    // delta_sending: uncertain until resendUncertain, then the same message
+    // again, pointing at the blob it was first sent with.
     const g = await bootstrapFixture(t), history = twoStep();
     await stopUnacked(g, 3, { history, delta: true });
     assert.equal(journal(g).transaction.bootstrap.phase, 'delta_sending');
     await assert.rejects(g.client.bootstrapPrimaryCompanion({ history, resume: true }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN' });
-    assert.deepEqual((await g.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true })).delta, { records: 2 });
+    const fromSending = await g.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true });
     const sent = messages(g);
     assert.equal(sent.length, 4);
     assert.equal(sent[3].attrs.id, sent[2].attrs.id);
     assert.deepEqual(plain(sent[3]), plain(sent[2]));
+    assert.equal(g.uploads.length, 1);
     // delta_accepted: only `sent` was left to record.
     const h = await bootstrapFixture(t);
     failPhaseOnce(h, 'sent');
     await assert.rejects(h.client.bootstrapPrimaryCompanion({ history: twoStep(), delta: true }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
     assert.equal(journal(h).transaction.bootstrap.phase, 'delta_accepted');
-    assert.deepEqual((await h.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(9), resume: true })).delta, { records: 2 });
+    const fromAccepted = await h.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(9), resume: true });
     assert.equal(messages(h).length, 3);
+    // The empty RECENT chunk of a bootstrap that asked for no delta resumes the
+    // same way: uncertain, then the same message again, and still no delta.
+    const k = await bootstrapFixture(t);
+    await stopUnacked(k, 3, { history: async () => chatSnapshot(2) });
+    assert.equal(journal(k).transaction.bootstrap.phase, 'delta_sending');
+    await assert.rejects(k.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(4), resume: true }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN' });
+    assert.equal((await k.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(4), resume: true, resendUncertain: true })).delta, null);
+    assert.equal(messages(k).length, 4);
+    assert.equal(messages(k)[3].attrs.id, messages(k)[2].attrs.id);
+    assert.deepEqual(recentOf(messages(k)[3]), EMPTY_RECENT);
+    // Each reports the delta it finished, though none of these calls asked
+    // for one: it went over all the same.
+    assert.deepEqual([fromPrepared.delta, fromSending.delta, fromAccepted.delta], [{ records: 2 }, { records: 2 }, { records: 2 }]);
 });
 
 test('a re-link resumes as a re-link, never with a patch', async t => {
@@ -1120,7 +1293,8 @@ test('a re-link resumes as a re-link, never with a patch', async t => {
     await assert.rejects(f.client.bootstrapPrimaryCompanion({ history }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
     assert.equal(journal(f).transaction.bootstrap.phase, 'key_share_accepted');
     assert.equal((await f.client.bootstrapPrimaryCompanion({ history, resume: true })).mode, 'relink');
-    assert.equal(messages(f).length, 2);
+    assert.equal(messages(f).length, 3);
+    assert.deepEqual(recentOf(messages(f)[2]), EMPTY_RECENT);
     assert.equal(patchWrites(f).length, 0);
     // ...and a critical_block that changed under it in the meantime stops it.
     const g = await relinking();
@@ -1135,8 +1309,9 @@ test('a re-link resumes as a re-link, never with a patch', async t => {
     await assert.rejects(h.client.bootstrapPrimaryCompanion({ history, resume: true }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN' });
     assert.equal((await h.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true })).mode, 'relink');
     const sent = messages(h);
-    assert.equal(sent.length, 3);
+    assert.equal(sent.length, 4);
     assert.equal(sent[2].attrs.id, sent[1].attrs.id);
+    assert.deepEqual(recentOf(sent[3]), EMPTY_RECENT);
     assert.equal(patchWrites(h).length, 0);
 });
 
@@ -1145,6 +1320,9 @@ test('bootstrapEmptyPrimary keeps its contract', async t => {
     const result = await f.client.bootstrapEmptyPrimaryCompanion({ getInitialHistory: async () => EMPTY });
     assert.deepEqual(result, { status: 'sent', browserReady: false, operationId: journal(f).transaction.id });
     assert.deepEqual(plain(messages(f)[1]), Bootstrap.initialHistory(EMPTY));
+    // Its wire contract has no RECENT chunk: nothing follows, nothing goes up.
+    assert.equal(messages(f).length, 2);
+    assert.equal(f.uploads.length, 0);
     await assert.rejects(f.client.bootstrapEmptyPrimaryCompanion({ getInitialHistory: async () => EMPTY }), { code: 'PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED' });
     // Its own codes stay its own: an unknown server state is SERVER_STATE_REQUIRED
     // there, FOREIGN_STATE through the general entry point.

@@ -54,6 +54,7 @@ message Conversation {
   optional string name = 13;
   optional string pnJID = 39;
   optional string lidJID = 42;
+  optional string accountLid = 49;
 }
 
 message Pushname {
