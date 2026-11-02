@@ -2903,6 +2903,17 @@ function askDonation(cmd) {
 async function main() {
   const { cmd, sub, flags, pos } = parseArgs(process.argv);
 
+  // `--session` with nothing after it parses as `true`, and so does an empty
+  // value, which is what `--session "$DIR"` turns into when $DIR is unset.
+  // Neither names a folder. Carried on as one, it either ends up as a directory
+  // called "true" or surfaces as a TypeError from path handling that never
+  // mentions the flag, so refuse it here, before a prompt, a file or a
+  // connection depends on the answer.
+  if (flags.session !== undefined && !(typeof flags.session === 'string' && flags.session.trim())) {
+    fail('--session needs a directory, e.g. --session ./sessions');
+    process.exit(1);
+  }
+
   // The authentication folder first: it decides where everything this run
   // touches lives, and asking it after the other two made the answer to the
   // first question land in the wrong prompt.
