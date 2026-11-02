@@ -797,6 +797,10 @@ export interface MediaRetryResult {
 // ────────────────────────────────────────────────────────────────────────────
 
 export interface WhalibmobEvents {
+  primary_link_invitation: (event: PrimaryLinkInvitation) => void;
+  primary_link_progress: (event: { phase: 'awaiting_confirmation'; operationId: string }) => void;
+  primary_linked: (event: { operationId: string; deviceId: number; keyIndex: number }) => void;
+  primary_link_error: (event: { code: string }) => void;
   connected: () => void;
   disconnected: () => void;
   reconnecting: (info: { attempt: number; delay: number }) => void;
@@ -887,6 +891,34 @@ export interface WhalibmobEvents {
 // Client
 // ────────────────────────────────────────────────────────────────────────────
 
+/** Public SDK binding only; never pass a companion private key. */
+export interface PrimaryCompanionProof {
+  jid: string; lid: string; details: Buffer;
+  accountSignatureKey: Buffer; accountSignature: Buffer; deviceSignature: Buffer;
+}
+export interface PrimaryADVState {
+  rawId: number; currentIndex: number; timestamp: number; validIndexes: number[];
+}
+/** Decode only public browser binding fields; reconcilePrimaryLink still verifies them. */
+export declare function parseWhatsAppWebPublicProof(input: string | unknown): PrimaryCompanionProof;
+export interface PrimaryLinkInvitation { id: string; expiresAt: number; }
+export interface PrimaryLinkResult {
+  status: 'linked' | 'awaiting_confirmation'; operationId: string;
+  deviceId?: number; keyIndex?: number;
+}
+export interface PrimaryLinkCommonOptions {
+  expectedNoiseKey?: Buffer; expectedIdentityKey?: Buffer;
+  timeoutMs?: number; signal?: AbortSignal;
+  getCompanionProof?: (context: { operationId: string }) => Promise<PrimaryCompanionProof>;
+}
+export interface PrimaryLinkOptions extends PrimaryLinkCommonOptions { invitationId: string; }
+export interface PrimaryCodeLinkOptions extends PrimaryLinkCommonOptions {
+  /** Optional only when exactly one unexpired invitation is available. */
+  invitationId?: string;
+  /** 0 disables waiting; default 45000 ms, within the overall timeoutMs. */
+  waitMs?: number;
+}
+
 export declare class WhalibmobClient extends EventEmitter {
   constructor(opts?: WhalibmobClientOptions);
 
@@ -912,6 +944,27 @@ export declare class WhalibmobClient extends EventEmitter {
   initWeb(phoneNumber: string, opts?: ConnectWebOptions): Promise<this>;
   /** Ask for an 8-character pairing code. Throws if the session is already linked. */
   requestPairingCode(phoneNumber?: string, customCode?: string): Promise<string>;
+  /** Mobile primary only: cached, bounded pending alerts, no authorization. */
+  getPrimaryLinkInvitations(): PrimaryLinkInvitation[];
+  /** Approve a separate companion on the current primary socket; never requests SMS. */
+  approveCompanionCode(code: string, options: PrimaryLinkOptions): Promise<PrimaryLinkResult>;
+  /** Approve the fresh QR payload of a separate companion; same proof/commit checks as phone codes. */
+  approveCompanionQr(qrOrUrl: string, options?: PrimaryLinkCommonOptions): Promise<PrimaryLinkResult>;
+  /** Wait for one unambiguous invitation on this socket, then use the existing strict code approval. */
+  linkCompanionWithCode(code: string, options?: PrimaryCodeLinkOptions): Promise<PrimaryLinkResult>;
+  /** Convenience alias of approveCompanionQr. Returns our verified PrimaryLinkResult contract. */
+  linkCompanionWithQr(qrOrUrl: string, options?: PrimaryLinkCommonOptions): Promise<PrimaryLinkResult>;
+  /** Verify an already-sent reservation, two SDK signatures and a fresh server list; no replay. */
+  reconcilePrimaryLink(proof: PrimaryCompanionProof, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PrimaryLinkResult>;
+  listLinkedDevices(): Promise<Array<{ deviceId: number; keyIndex: number }>>;
+  /** Read-only: fresh own-device list and non-secret durable linking progress. */
+  getPrimaryLinkStatus(): Promise<{ hasADV: boolean; confirmed: boolean; phase: string; startedAt: number | null; expectedDeviceId: number | null; bootstrapPhase: string | null; bootstrap?: { phase: string; errorCode: string | null; iq: object | null; remote?: object }; devices: Array<{ deviceId: number; keyIndex: number }> }>;
+  /** Retire a >=5 minute pending transaction only after two exact baseline server lists. Never removes a device or reuses its reserved index. */
+  retireAbsentPrimaryLink(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<{ status: 'abandoned'; operationId: string }>;
+  /** Explicit first bootstrap only: requires a real empty application store and no existing sync keys/collections. Does not report Web ready. */
+  bootstrapEmptyPrimaryCompanion(options: { getInitialHistory: () => Promise<{ source: 'owned_primary_store'; messageCount: 0; conversationCount: 0 }>; recoverRejected?: boolean; signal?: AbortSignal }): Promise<{ status: 'sent'; browserReady: false; operationId: string }>;
+  /** Initial import only; must match a fresh server list, cannot overwrite existing ADV. */
+  seedPrimaryLinkState(state: PrimaryADVState): Promise<void>;
   disconnect(opts?: DisconnectOptions): void;
   /**
    * Unlink this device from the account, the way the Linked Devices screen on
@@ -1887,3 +1940,10 @@ export declare const HistorySyncHandler: LibModule;
 export declare const AuthUtils: LibModule;
 export declare const Argo: LibModule;
 export declare const WAUSync: LibModule;
+
+/** Primary-role linking implementation and pure protocol helpers. */
+export declare const PrimaryLinking: LibModule;
+export declare const PrimaryLinkCrypto: LibModule;
+export declare const PrimaryLinkQr: LibModule;
+export declare const PrimaryLinkStore: LibModule;
+export declare const PrimaryBootstrap: LibModule;

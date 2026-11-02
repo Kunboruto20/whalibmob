@@ -264,6 +264,7 @@ npm install -g whalibmob
   - [Companion Mode — Node.js API](#companion-mode--nodejs-api)
     - [Complete Working Example](#complete-working-example)
     - [Methods](#methods)
+  - [Approving a Companion Device (Primary Role)](#approving-a-companion-device-primary-role)
     - [Events](#events)
     - [Reading What the Phone Sent](#reading-what-the-phone-sent)
     - [Sending](#sending)
@@ -2788,6 +2789,54 @@ await client.connectWeb(PHONE)  // web / companion, over WebSocket
 ```
 
 Use two `WhalibmobClient` instances if you want both at once.
+
+## Approving a Companion Device (Primary Role)
+
+*Primary-role companion linking contributed by BayLinux.*
+
+The sections above cover this client acting as the **companion** — the device that joins an existing account. This section is the other role: an account you already hold as a **primary** (a mobile session opened with `init`) approving a *separate* companion that presents an 8-digit pairing code or a linked-devices QR. It is the programmatic equivalent of opening **Linked Devices** on the phone and authorising a new device. It runs entirely on the current primary socket and never requests SMS or calls `connectWeb` on this client.
+
+The defining property is restraint: **the client never reports a device as `linked` on the pairing IQ response alone.** A server acknowledgement — including a `retry-ts` nudge or a response that arrives after a timeout — is not treated as success. Approval first reaches `awaiting_confirmation`, and the device only becomes `linked` once an independent companion proof is supplied *and* a freshly fetched server device list confirms the new device and key index. Along the way the approval validates the key binding (optionally against an `expectedNoiseKey` / `expectedIdentityKey` you pass), refuses a replayed code or QR (each is remembered as a salted hash), parses a QR only when it is a well-formed `wa.me/settings/linked_devices` payload, and zeroes the one-time secret as soon as it is used.
+
+### Approve by pairing code
+
+```js
+const invitations = client.getPrimaryLinkInvitations(); // bounded, cached pending alerts
+const result = await client.approveCompanionCode(code, {
+  invitationId: invitations[0].id,          // explicit when more than one is pending
+  getCompanionProof: async () => proof       // independent SDK proof; see below
+});
+// result.status === 'linked'  → result.deviceId / result.keyIndex are set
+```
+
+When exactly one unexpired invitation is on the socket you can skip the lookup and let the client wait for it:
+
+```js
+const result = await client.linkCompanionWithCode(code, { waitMs: 45000, timeoutMs: 90000 });
+```
+
+### Approve by QR
+
+```js
+const result = await client.linkCompanionWithQr(qrPayloadOrWaMeUrl, {
+  getCompanionProof: async () => proof
+});
+```
+
+Both QR calls (`linkCompanionWithQr` and its explicit sibling `approveCompanionQr`) run the same proof-and-commit checks as the pairing-code path.
+
+### The `awaiting_confirmation` → reconcile flow
+
+If you do not pass `getCompanionProof`, the call returns as soon as the approval is durably sent:
+
+```js
+const result = await client.linkCompanionWithCode(code); // { status: 'awaiting_confirmation', operationId }
+// ...obtain the companion's public binding proof out of band...
+const confirmed = await client.reconcilePrimaryLink(proof); // verifies signatures + a fresh server list
+// confirmed.status === 'linked'
+```
+
+`reconcilePrimaryLink` re-verifies the already-sent reservation, both SDK signatures and a fresh server list before confirming — it never replays the pairing request. Progress is observable through the `primary_link_invitation`, `primary_link_progress`, `primary_linked` and `primary_link_error` events, and `getPrimaryLinkStatus()` returns the non-secret durable state at any time.
 
 ## The Number WhatsApp Files Your Account Under
 
