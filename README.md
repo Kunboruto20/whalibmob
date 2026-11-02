@@ -21,7 +21,7 @@ code, and bring the account into being. Both transports, one API.
 
 [![Register a number](https://img.shields.io/badge/Register_a_number-SMS,_voice_or_email-25D366?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/registration.md#register-a-new-number)
 [![Link an account](https://img.shields.io/badge/Link_an_account-QR_or_pairing_code-128C7E?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#linking-to-an-existing-account-pairing-code-or-qr)
-[![Use the CLI](https://img.shields.io/badge/Use_the_CLI-no_code_needed-075E54?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli.md#cli--getting-started)
+[![Use the CLI](https://img.shields.io/badge/Use_the_CLI-no_code_needed-075E54?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli-getting-started.md#cli--getting-started)
 
 [![Library API](https://img.shields.io/badge/Library_API-Node.js-34B7F1?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/registration.md#library-api)
 [![Send messages](https://img.shields.io/badge/Send_messages-text_media_polls-34B7F1?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#sending-messages)
@@ -29,7 +29,7 @@ code, and bring the account into being. Both transports, one API.
 
 [![Device attestation](https://img.shields.io/badge/Device_attestation-Play_Integrity_%2B_App_Attest-8E44AD?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/attestation.md#device-attestation--play-integrity-and-app-attest)
 
-[![Why registration can be blocked](https://img.shields.io/badge/Why_registration_can_be_blocked-anti--abuse_%26_unofficial--client_checks-C0392B?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts-sessions.md#why-registration-can-be-blocked--the-anti-abuse-landscape)
+[![Why registration can be blocked](https://img.shields.io/badge/Why_registration_can_be_blocked-anti--abuse_%26_unofficial--client_checks-C0392B?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts.md#why-registration-can-be-blocked--the-anti-abuse-landscape)
 
 </div>
 
@@ -104,10 +104,17 @@ The full guide is split by topic so every page loads fast and reads cleanly. Pic
 
 - [Device Attestation — Play Integrity and App Attest](https://github.com/Kunboruto20/whalibmob/blob/main/docs/attestation.md#device-attestation--play-integrity-and-app-attest)
 
-### [Command-Line Interface (CLI)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli.md)
+### [CLI — Getting Started](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli-getting-started.md)
 
-- [CLI — Getting Started](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli.md#cli--getting-started)
-- [CLI — Interactive Shell Commands](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli.md#cli--interactive-shell-commands)
+Install the CLI, register a number and connect, all from the terminal.
+
+- [CLI — Getting Started](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli-getting-started.md#cli--getting-started)
+
+### [CLI — Interactive Shell Commands](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli-commands.md)
+
+Every command of the interactive shell: messages, presence, profile, chats, groups, channels.
+
+- [CLI — Interactive Shell Commands](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli-commands.md#cli--interactive-shell-commands)
 
 ### [Registering & Connecting an Account](https://github.com/Kunboruto20/whalibmob/blob/main/docs/registration.md)
 
@@ -120,15 +127,32 @@ The full guide is split by topic so every page loads fast and reads cleanly. Pic
 - [Companion Mode — Node.js API](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#companion-mode--nodejs-api)
 - [Approving a Companion Device (Primary Role)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#approving-a-companion-device-primary-role)
 
-### [Accounts, Push, Proxy & Sessions](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts-sessions.md)
+### [Accounts — Number, Consent & Registration Blocks](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts.md)
 
-- [The Number WhatsApp Files Your Account Under](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts-sessions.md#the-number-whatsapp-files-your-account-under)
-- [When Registration Is Refused for Consent](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts-sessions.md#when-registration-is-refused-for-consent)
-- [Why Registration Can Be Blocked — The Anti-Abuse Landscape](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts-sessions.md#why-registration-can-be-blocked--the-anti-abuse-landscape)
-- [The Push Token](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts-sessions.md#the-push-token)
-- [Routing Traffic Through a Proxy](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts-sessions.md#routing-traffic-through-a-proxy)
-- [Saving & Restoring Sessions](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts-sessions.md#saving--restoring-sessions)
-- [Signal Store Utilities](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts-sessions.md#signal-store-utilities)
+Which number WhatsApp files the account under, consent refusals, and why a registration can be blocked.
+
+- [The Number WhatsApp Files Your Account Under](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts.md#the-number-whatsapp-files-your-account-under)
+- [When Registration Is Refused for Consent](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts.md#when-registration-is-refused-for-consent)
+- [Why Registration Can Be Blocked — The Anti-Abuse Landscape](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts.md#why-registration-can-be-blocked--the-anti-abuse-landscape)
+
+### [The Push Token](https://github.com/Kunboruto20/whalibmob/blob/main/docs/push-token.md)
+
+The Firebase (Android) and APNs (iOS) token a registration sends, and receiving the code over push.
+
+- [The Push Token](https://github.com/Kunboruto20/whalibmob/blob/main/docs/push-token.md#the-push-token)
+
+### [Routing Traffic Through a Proxy](https://github.com/Kunboruto20/whalibmob/blob/main/docs/proxy.md)
+
+Sending everything the library sends out — registration, the message socket, media — through a SOCKS proxy or Tor.
+
+- [Routing Traffic Through a Proxy](https://github.com/Kunboruto20/whalibmob/blob/main/docs/proxy.md#routing-traffic-through-a-proxy)
+
+### [Sessions & Signal Store](https://github.com/Kunboruto20/whalibmob/blob/main/docs/sessions.md)
+
+Where a session is kept, saving and restoring it, database backends, and the Signal store utilities.
+
+- [Saving & Restoring Sessions](https://github.com/Kunboruto20/whalibmob/blob/main/docs/sessions.md#saving--restoring-sessions)
+- [Signal Store Utilities](https://github.com/Kunboruto20/whalibmob/blob/main/docs/sessions.md#signal-store-utilities)
 
 ### [Handling Events & History Sync](https://github.com/Kunboruto20/whalibmob/blob/main/docs/events-history.md)
 

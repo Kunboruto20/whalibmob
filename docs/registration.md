@@ -142,7 +142,7 @@ if (result.status === 'ok') {
 }
 ```
 
-**Optional — let the code arrive by itself.** The two steps above are the whole flow, and nothing about them changes if you do nothing else. But because a registration sends a push token (see [The Push Token](accounts-sessions.md#the-push-token)), WhatsApp *may* also deliver the six-digit code as a silent push. Open a listener for it before requesting the code, and the code can come back with nothing typed — on an Android profile over Firebase, on an iOS one over APNs:
+**Optional — let the code arrive by itself.** The two steps above are the whole flow, and nothing about them changes if you do nothing else. But because a registration sends a push token (see [The Push Token](push-token.md#the-push-token)), WhatsApp *may* also deliver the six-digit code as a silent push. Open a listener for it before requesting the code, and the code can come back with nothing typed — on an Android profile over Firebase, on an iOS one over APNs:
 
 ```js
 const { receivePushCode } = require('whalibmob')
@@ -161,7 +161,7 @@ if (code) {
 }
 ```
 
-This is purely additive: `receivePushCode` resolves `null` on a timeout or any failure, so the plain `requestSmsCode` / `verifyCode` path always stands behind it. Whether WhatsApp sends the silent push is the server's decision — see [Receiving the code over push](accounts-sessions.md#receiving-the-code-over-push-without-typing-it) for what governs it. From the CLI the same thing is one command, `/reg push <phone>`.
+This is purely additive: `receivePushCode` resolves `null` on a timeout or any failure, so the plain `requestSmsCode` / `verifyCode` path always stands behind it. Whether WhatsApp sends the silent push is the server's decision — see [Receiving the code over push](push-token.md#receiving-the-code-over-push-without-typing-it) for what governs it. From the CLI the same thing is one command, `/reg push <phone>`.
 
 **When the code is not the end of it.** The server can answer a submitted code with a CAPTCHA, or with a demand for the account's two-step verification PIN. Neither is something the library can work out on its own, so both come back to you through optional handlers:
 
@@ -513,10 +513,10 @@ Every option is optional; `sessionDir` is the only one most senders ever set.
 
 | Option | Default | What it does |
 |---|---|---|
-| `sessionDir` | `~/.waSession` | The authentication folder. Each number gets its own subfolder inside it — see [Saving & Restoring Sessions](accounts-sessions.md#saving--restoring-sessions). |
-| `autoFixNumber` | `true` | Re-file the session automatically when the server reports the account under a different number. Set `false` to be told instead of fixed — see [The Number WhatsApp Files Your Account Under](accounts-sessions.md#the-number-whatsapp-files-your-account-under). |
+| `sessionDir` | `~/.waSession` | The authentication folder. Each number gets its own subfolder inside it — see [Saving & Restoring Sessions](sessions.md#saving--restoring-sessions). |
+| `autoFixNumber` | `true` | Re-file the session automatically when the server reports the account under a different number. Set `false` to be told instead of fixed — see [The Number WhatsApp Files Your Account Under](accounts.md#the-number-whatsapp-files-your-account-under). |
 | `autoRead` | `true` | Send read receipts for incoming messages. `false` leaves them unread. |
-| `refreshVersion` | `true` | Check the platform's store for the current build on every connect and reconnect, and write it into the session file. Both iOS and Android. Set `false` to keep announcing whatever the session registered with — see [Keeping the Announced Version Current](accounts-sessions.md#keeping-the-announced-version-current). |
+| `refreshVersion` | `true` | Check the platform's store for the current build on every connect and reconnect, and write it into the session file. Both iOS and Android. Set `false` to keep announcing whatever the session registered with — see [Keeping the Announced Version Current](sessions.md#keeping-the-announced-version-current). |
 | `pino` | off | Debug logging. `true` turns it on at `debug` level; an object is passed to `pino` as-is. |
 | `sentCacheSize` | `2000` | How many sent messages keep their plaintext so a retry receipt naming them can be answered. |
 | `maxRetryResends` | `5` | How many times one message may be re-sent in answer to retry receipts before the client gives up. |
