@@ -115,9 +115,7 @@ const BASE_DIR = path.join(os.homedir(), '.waSession')
 
 async function register(phone) {
   const store = createNewStore(phone, { name: 'My Bot' })
-  saveStore(store, storeFileFor(BASE_DIR, phone))
-  await requestSmsCode(store, 'sms')           // or 'voice'
-  saveStore(store, storeFileFor(BASE_DIR, phone))
+  await requestSmsCode(store, 'sms')           // or 'voice'; throws when refused
 
   const rl   = readline.createInterface({ input: process.stdin, output: process.stdout })
   const code = (await rl.question('6-digit code: ')).replace(/\D/g, '')
@@ -129,15 +127,19 @@ async function register(phone) {
   }
   store.registered  = true
   store.codePending = false
-  // WhatsApp can file the account under a slightly different number.
+  // Saved only once registered, so a session file always means a live account.
   saveStore(store, storeFileFor(BASE_DIR, store.phoneNumber))
+  if (store.phoneNumber !== phone) {
+    // WhatsApp can file the account under a slightly different number.
+    console.log(`WhatsApp knows this account as +${store.phoneNumber}: set PHONE to '${store.phoneNumber}'`)
+  }
   return store.phoneNumber
 }
 
 async function main() {
   let phone = PHONE
-  const saved = loadStore(storeFileFor(BASE_DIR, phone))
-  if (!saved || !saved.registered) phone = await register(phone)
+  // Registering again would replace the account, so any saved session is used as is.
+  if (!loadStore(storeFileFor(BASE_DIR, phone))) phone = await register(phone)
 
   const client = new WhalibmobClient({ sessionDir: BASE_DIR })
   client.on('connected',    () => console.log('connected as +' + phone))
