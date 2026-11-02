@@ -1,0 +1,635 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+// The primary bootstraps a newly linked companion with the history it holds:
+// inline up to 64 KiB deflated, an md-msg-hist blob above that. What goes out
+// is pinned on disk first, so a resume sends those bytes and no others, and a
+// step whose outcome is unknown is never sent again without being asked to.
+//
+// The companion side is the same synthetic protocol peer as in
+// primary-linking.test.js, copied here, with a critical_block that keeps the
+// patches written to it. The notifications are read back with the fixture
+// schema, not with the library.
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const zlib = require('node:zlib');
+const { WhalibmobClient } = require('../lib/Client');
+const { createNewStore } = require('../lib/Store');
+const { BinaryNode } = require('../lib/BinaryNode');
+const P = require('../lib/PairingCode');
+const C = require('../lib/PrimaryLinkCrypto');
+const { configureSuccessfulPairing } = require('../lib/CompanionPairing');
+const { AppStateStore } = require('../lib/appstate/AppStateStore');
+const Sync = require('../lib/appstate/AppStateSync');
+const { pushNamePatch } = require('../lib/appstate/Mutations');
+const { newState } = require('../lib/appstate/LTHash');
+const { decodeFields, decodeMessageContainer, field, varint, WIRE_LEN, WIRE_VARINT } = require('../lib/proto/MessageProto');
+const SyncdProto = require('../lib/appstate/SyncdProto');
+const Bootstrap = require('../lib/PrimaryBootstrap');
+const { INLINE_MAX, buildHistorySync } = require('../lib/primary/HistoryExport');
+const { type } = require('./helpers/history-proto');
+
+const PHONE = '15550000123';
+const ANA = '40799999999@s.whatsapp.net';
+const GROUP = '120363000000000000@g.us';
+const T = 1790000000;
+const EMPTY = { source: 'owned_primary_store', messageCount: 0, conversationCount: 0 };
+
+// ─── the synthetic peer (after primary-linking.test.js) ─────────────────────
+
+// server holds critical_block as patches written to it, at the version the
+// server gave them, or as a snapshot blob reference. hangPatch: 'applied'
+// keeps the write and never answers it, 'lost' drops it and never answers it.
+// control.hangAck / control.ackError pick the peer messages whose ACK never
+// comes or refuses.
+async function fixture(t) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'primary-history-test-'));
+    fs.chmodSync(dir, 0o700);
+    const client = new WhalibmobClient({ sessionDir: dir, refreshVersion: false });
+    client._store = createNewStore(PHONE);
+    client._store.registered = true;
+    client._myLid = '1234567890@lid';
+    client._connected = true;
+    client._scheduleReconnect = () => { };
+    const identity = P.generateEphemeralKeyPair(), noise = P.generateEphemeralKeyPair(), ephemeral = P.generateEphemeralKeyPair();
+    const code = 'K7M2QX4B', ref = Buffer.from('synthetic-independent-companion-ref');
+    const wrapped = await P.buildWrappedEphemeralPub(code, ephemeral.public);
+    const control = { hangAck: null, ackError: null };
+    const server = { version: 0, patches: [], snapshot: null, hangPatch: false };
+    const requests = [];
+    let linked = false, messageCount = 0, companionSecret = null;
+    const reply = (query, content = []) => client._handleIq(new BinaryNode('iq', { id: query.attrs.id, type: 'result', from: 's.whatsapp.net' }, content));
+    const devices = () => [new BinaryNode('device', { id: '0' }, null), ...(linked ? [new BinaryNode('device', { id: '7', 'key-index': '1' }, null)] : [])];
+    const collection = content => new BinaryNode('sync', {}, [new BinaryNode('collection', { name: 'critical_block', version: String(server.version) }, content)]);
+    client._socket = { close: () => client._onClose(), sendNode(node) {
+            requests.push(node);
+            if (node.description === 'message') {
+                const n = ++messageCount;
+                const error = control.ackError && control.ackError(node, n);
+                if (!(control.hangAck && control.hangAck(node, n)))
+                    queueMicrotask(() => client._handleAck(new BinaryNode('ack', { id: node.attrs.id, class: 'message', from: PHONE + '@s.whatsapp.net', ...(error ? { error } : {}) }, null)));
+                return;
+            }
+            if (node.description !== 'iq') return;
+            queueMicrotask(async () => {
+                try {
+                    if (node.attrs.xmlns === 'passive') { reply(node); return; }
+                    if (node.attrs.xmlns === 'usync') {
+                        const sync = C.child(node, 'usync');
+                        reply(node, [new BinaryNode('usync', { sid: sync.attrs.sid }, [new BinaryNode('list', {}, [
+                            new BinaryNode('user', { jid: PHONE + '@s.whatsapp.net' }, [new BinaryNode('devices', {}, [new BinaryNode('device-list', {}, devices())])])
+                        ])])]);
+                        return;
+                    }
+                    if (node.attrs.xmlns === 'w:sync:app:state') {
+                        const patch = C.optionalChild(C.child(C.child(node, 'sync'), 'collection'), 'patch');
+                        if (patch) {
+                            // The server assigns the version a patch is kept at.
+                            const keep = () => { server.version += 1; server.patches.push(withVersion(patch.content, server.version)); };
+                            if (server.hangPatch) { if (server.hangPatch === 'applied') keep(); return; }
+                            keep();
+                            reply(node, [collection(null)]);
+                            return;
+                        }
+                        const held = [...(server.snapshot ? [new BinaryNode('snapshot', {}, server.snapshot)] : []),
+                            ...(server.patches.length ? [new BinaryNode('patches', {}, server.patches.map(p => new BinaryNode('patch', {}, p)))] : [])];
+                        reply(node, [collection(held.length ? held : null)]);
+                        return;
+                    }
+                    const hello = C.optionalChild(node, 'link_code_companion_reg');
+                    if (hello) {
+                        const finish = await P.buildCompanionFinishBundle({ pairingCode: code, pairingEphemeralPrivate: ephemeral.private, primaryEphemeralPubWrapped: C.payload(hello, 'link_code_pairing_wrapped_primary_ephemeral_pub', 80), primaryIdentityPub: C.payload(hello, 'primary_identity_pub', 32), identityKeyPair: identity });
+                        companionSecret = finish.advSecretKey;
+                        reply(node);
+                        queueMicrotask(() => client._handleNotification(new BinaryNode('notification', { id: 'finish-notification', from: 's.whatsapp.net', type: 'link_code_companion_reg' }, [
+                            new BinaryNode('link_code_companion_reg', { stage: 'companion_finish' }, [
+                                new BinaryNode('link_code_pairing_ref', {}, ref), new BinaryNode('companion_identity_public', {}, identity.public), new BinaryNode('link_code_pairing_wrapped_key_bundle', {}, finish.wrappedKeyBundle)
+                            ])
+                        ])));
+                        return;
+                    }
+                    // Run the unmodified companion's pair-success implementation.
+                    const pair = C.child(node, 'pair-device');
+                    configureSuccessfulPairing(new BinaryNode('iq', { id: 'independent-companion-pair-success' }, [
+                        new BinaryNode('pair-success', {}, [
+                            new BinaryNode('device-identity', {}, C.child(pair, 'device-identity').content),
+                            new BinaryNode('device', { jid: PHONE + ':7@s.whatsapp.net', lid: '1234567890:7@lid' }, null)
+                        ])
+                    ]), { advSecretKey: companionSecret, identityKeyPair: identity }, BinaryNode);
+                    linked = true;
+                    reply(node, [new BinaryNode('device', { jid: '1234567890:7@lid' }, null)]);
+                } catch (error) {
+                    client._pendingIqs.get(node.attrs.id)?.(null);
+                    t.diagnostic('synthetic peer failure: ' + (error.code || error.name));
+                }
+            });
+        } };
+    client._handleNotification(new BinaryNode('notification', { id: 'hello-notification', from: 's.whatsapp.net', type: 'link_code_companion_reg' }, [
+        new BinaryNode('link_code_companion_reg', { stage: 'companion_hello' }, [
+            new BinaryNode('link_code_pairing_ref', {}, ref), new BinaryNode('companion_server_auth_key_pub', {}, noise.public), new BinaryNode('link_code_pairing_wrapped_companion_ephemeral_pub', {}, wrapped)
+        ])
+    ]));
+    t.after(() => { client.disconnect(); fs.rmSync(dir, { recursive: true, force: true }); });
+    return { client, dir, code, identity, requests, control, server, invitation: client.getPrimaryLinkInvitations()[0] };
+}
+async function bootstrapFixture(t) {
+    const f = await fixture(t);
+    f.client._store.name = 'Local Primary';
+    f.client._appState = new AppStateStore(path.join(f.dir, PHONE + '.appState.json'));
+    f.client._devMgr = { async fetchBundles(jids) { return new Map([[jids[0], { identityKey: f.identity.public }]]); } };
+    f.client._signal = { async hasSession() { return false; }, async buildSessionFromBundle() {}, async encrypt(jid, plaintext) { return { type: 'pkmsg', ciphertext: Buffer.from(plaintext) }; } };
+    await f.client.approveCompanionCode(f.code, { invitationId: f.invitation.id });
+    return f;
+}
+function withVersion(patch, version) {
+    return Buffer.concat([field(1, WIRE_LEN, field(1, WIRE_VARINT, varint(version))), patch]);
+}
+
+// ─── reading what went out ──────────────────────────────────────────────────
+
+const messages = f => f.requests.filter(n => n.description === 'message');
+const patchWrites = f => f.requests.filter(n => n.description === 'iq' && n.attrs.xmlns === 'w:sync:app:state' && C.optionalChild(C.child(C.child(n, 'sync'), 'collection'), 'patch'));
+const plain = m => C.child(m, 'enc').content;   // the fixture's Signal is the identity
+const journal = f => f.client._primaryLinking.journal.snapshot();
+const outboxFile = f => path.join(f.dir, PHONE + '.primary-history-outbox.json');
+const keyFile = f => path.join(f.dir, PHONE + '.appStateKeys.json');
+const sha = buf => crypto.createHash('sha256').update(buf).digest('hex');
+function notificationOf(m) {
+    const M = type('Message');
+    const message = M.toObject(M.decode(plain(m)), { longs: Number });
+    assert.equal(message.protocolMessage.type, 5);
+    return message.protocolMessage.historySyncNotification;
+}
+function historyOf(hsn) {
+    const H = type('HistorySync');
+    return H.toObject(H.decode(zlib.inflateSync(hsn.initialHistBootstrapInlinePayload)), { longs: Number });
+}
+const messageIds = history => history.conversations.flatMap(c => (c.messages || []).map(m => m.message.key.ID));
+function keyShareOf(m) {
+    const key = decodeMessageContainer(plain(m)).appStateSyncKeyShare.keys[0];
+    const pm = decodeFields(decodeFields(plain(m))[12]);
+    const fingerprint = decodeFields(decodeFields(decodeFields(decodeFields(pm[7])[1])[2])[2]);
+    return { ...key, fingerprint: { rawId: fingerprint[1], currentIndex: fingerprint[2], validIndexes: [...fingerprint[3]] } };
+}
+
+// ─── snapshots ──────────────────────────────────────────────────────────────
+
+// A Snapshot in the shape PrimaryMessageStore.snapshot() returns it.
+function snapshot({ seq = 0, chats = [], records = {}, pushNames = [] } = {}) {
+    let count = 0;
+    for (const list of Object.values(records)) count += list.length;
+    return { seq, capture: { since: T * 1000, origin: 'enabled', lc: 0 }, chats, records, losses: [], retained: { evicted: 0 }, pushNames, counts: { chats: chats.length, records: count } };
+}
+function textMessage(text) {
+    const M = type('Message');
+    return Buffer.from(M.encode(M.create({ conversation: text })).finish());
+}
+function rec(id, seq, ts, extra = {}) {
+    return { id, seq, fromMe: false, ts, status: 3, raw: textMessage('text of ' + id), ...extra };
+}
+function chatSnapshot(count) {
+    const records = [];
+    for (let i = 1; i <= count; i++) records.push(rec('M' + i, i, T + i));
+    return snapshot({ seq: count, chats: [{ id: ANA, name: 'Ana', conversationTimestamp: T + count, unreadCount: 0 }], records: { [ANA]: records } });
+}
+// Bytes deflate cannot shrink, from a fixed seed.
+function incompressible(n) {
+    const out = [];
+    let h = Buffer.from('history-blob-seed');
+    for (let len = 0; len < n; len += 32) { h = crypto.createHash('sha256').update(h).digest(); out.push(h); }
+    return Buffer.concat(out).subarray(0, n);
+}
+// A snapshot whose deflated HistorySync is exactly `target` bytes.
+function sized(target) {
+    let n = target - 100;
+    for (let i = 0; i < 40; i++) {
+        const snap = snapshot({ seq: 1, chats: [{ id: ANA, conversationTimestamp: T, unreadCount: 0 }], records: { [ANA]: [rec('BIG', 1, T, { raw: incompressible(n) })] } });
+        const size = buildHistorySync(snap).length;
+        if (size === target) return snap;
+        n += target - size;
+    }
+    assert.fail('no snapshot deflates to ' + target + ' bytes');
+}
+function fakeUpload(buf) {
+    const digest = crypto.createHash('sha256').update(buf).digest();
+    return { url: 'https://mmg.whatsapp.net/synthetic', directPath: '/v/t62.synthetic/' + digest.toString('hex').slice(0, 16), mediaKey: crypto.randomBytes(32),
+        fileSha256: digest, fileEncSha256: crypto.randomBytes(32), fileLength: buf.length, mediaKeyTimestamp: T };
+}
+
+// ─── stopping a bootstrap part-way ──────────────────────────────────────────
+
+async function until(check) {
+    for (let i = 0; i < 5000 && !check(); i++) await new Promise(resolve => setImmediate(resolve));
+    assert.ok(check(), 'condition never became true');
+}
+// The journal write that would enter `phase` fails once, as a full disk would.
+function failPhaseOnce(f, phase) {
+    const store = f.client._primaryLinking.journal, update = store.update.bind(store);
+    let armed = true;
+    store.update = change => {
+        if (armed) {
+            const next = store.snapshot();
+            change(next);
+            if (next.transaction?.bootstrap?.phase === phase) { armed = false; throw C.failure('PRIMARY_LINK_STORE_WRITE_FAILED'); }
+        }
+        return update(change);
+    };
+}
+// The n-th peer message goes out and its ACK never comes; the caller aborts.
+async function stopUnacked(f, n, options) {
+    f.control.hangAck = (node, i) => i === n;
+    const abort = new AbortController();
+    const run = f.client.bootstrapPrimaryCompanion({ ...options, signal: abort.signal });
+    await until(() => messages(f).length >= n);
+    abort.abort();
+    await assert.rejects(run, { code: 'PRIMARY_LINK_ABORTED' });
+    f.control.hangAck = null;
+}
+// The patch write goes out and is never answered; the caller aborts.
+async function stopPatch(f, hang, options) {
+    f.server.hangPatch = hang;
+    const abort = new AbortController();
+    const run = f.client.bootstrapPrimaryCompanion({ ...options, signal: abort.signal });
+    await until(() => patchWrites(f).length === 1);
+    abort.abort();
+    await assert.rejects(run, { code: 'PRIMARY_LINK_ABORTED' });
+    f.server.hangPatch = false;
+}
+
+// ─── re-link ────────────────────────────────────────────────────────────────
+
+// What an account that linked Web before holds: our own key, shared under an
+// older ADV index, and critical_block at version 1 written with it.
+function previousLink(f) {
+    const tx = journal(f).transaction, keyId = Buffer.from('a1b2c3d4e5f6', 'hex'), keyData = crypto.randomBytes(32);
+    fs.writeFileSync(keyFile(f), JSON.stringify({ a1b2c3d4e5f6: { keyData: keyData.toString('base64'), timestamp: T * 1000,
+        fingerprint: { rawId: tx.state.rawId, currentIndex: 5, deviceIndexes: [0, 5] }, source: 'primary_bootstrap' } }), { mode: 0o600 });
+    const built = Sync.buildPatch(pushNamePatch('Local Primary'), keyId, keyData, f.client._appState.get('critical_block'));
+    f.client._appState.set('critical_block', built.state);
+    return { tx, keyId, keyData, built };
+}
+
+// The same state as a SyncdSnapshot blob, its MAC made with macKeyData.
+const len = (n, data) => field(n, WIRE_LEN, data);
+function snapshotBlob(ours, macKeyData) {
+    const m = SyncdProto.decodePatch(ours.built.patch).mutations[0], keyId = len(1, ours.keyId);
+    const mac = Sync.snapshotMac(ours.built.state.hash, 1, 'critical_block', Sync.mutationKeys(macKeyData).snapshotMacKey);
+    return Buffer.concat([len(1, field(1, WIRE_VARINT, varint(1))), len(2, Buffer.concat([len(1, len(1, m.indexBlob)), len(2, len(1, m.valueBlob)), len(3, keyId)])), len(3, mac), len(4, keyId)]);
+}
+
+// ─── tests ──────────────────────────────────────────────────────────────────
+
+test('empty history in first mode sends the live-validated bytes', async t => {
+    const f = await bootstrapFixture(t);
+    const result = await f.client.bootstrapPrimaryCompanion({ history: async () => snapshot() });
+    assert.deepEqual(result, { status: 'sent', mode: 'first', operationId: journal(f).transaction.id,
+        history: { chats: 0, records: 0, bytes: buildHistorySync(snapshot()).length, inline: true }, delta: null });
+    const sent = messages(f);
+    assert.equal(sent.length, 2);
+    assert.equal(keyShareOf(sent[0]).keyData.length, 32);
+    assert.equal(patchWrites(f).length, 1);
+    // Key share, critical_block patch, then the history: its bytes are the
+    // ones WhatsApp Web accepted live.
+    assert.deepEqual(plain(sent[1]), Bootstrap.initialHistory(EMPTY));
+    assert.equal(journal(f).transaction.bootstrap.phase, 'sent');
+    assert.equal(fs.existsSync(outboxFile(f)), false, 'nothing is left pinned once it is sent');
+});
+
+test('store history is delivered inline with the recorded chats', async t => {
+    const f = await bootstrapFixture(t);
+    const snap = snapshot({ seq: 7,
+        chats: [{ id: ANA, name: 'Ana', conversationTimestamp: T + 30, unreadCount: 1, pnJid: ANA, lidJid: '111@lid' }, { id: GROUP, name: 'Group', conversationTimestamp: T + 20, unreadCount: 0 }],
+        records: { [ANA]: [rec('A1', 1, T + 10), rec('A2', 5, T + 30, { fromMe: true, status: 4 })], [GROUP]: [rec('G1', 3, T + 20, { participant: ANA, pushName: 'Ana' })] },
+        pushNames: [{ id: ANA, pushname: 'Ana' }] });
+    f.client._messageStore = { snapshot: () => snap };
+    const result = await f.client.bootstrapPrimaryCompanion({ history: 'store' });
+    assert.deepEqual(result.history, { chats: 2, records: 3, bytes: buildHistorySync(snap).length, inline: true });
+    const hsn = notificationOf(messages(f)[1]);
+    assert.equal(hsn.syncType, 0);
+    assert.equal(hsn.progress, 100);
+    assert.equal(hsn.directPath, undefined);
+    const history = historyOf(hsn);
+    assert.deepEqual(history.conversations.map(c => c.ID), [ANA, GROUP]);
+    assert.deepEqual(messageIds(history), ['A1', 'A2', 'G1']);
+    assert.deepEqual(history.conversations[0].messages[0].message.message, textMessage('text of A1'));
+    assert.deepEqual(history.pushnames, [{ ID: ANA, pushname: 'Ana' }]);
+    assert.deepEqual(history.phoneNumberToLidMappings, [{ pnJID: ANA, lidJID: '111@lid' }]);
+
+    // No store, no bootstrap: nothing is sent and nothing is recorded.
+    const g = await bootstrapFixture(t), before = g.requests.length;
+    g.client._messageStore = null;
+    await assert.rejects(g.client.bootstrapPrimaryCompanion({ history: 'store' }), { code: 'PRIMARY_MESSAGE_STORE_DISABLED' });
+    assert.equal(g.requests.length, before);
+    assert.equal(journal(g).transaction.bootstrap, undefined);
+});
+
+test('deflated size 65537 selects the blob path', async t => {
+    const f = await bootstrapFixture(t), snap = sized(INLINE_MAX + 1), bytes = buildHistorySync(snap), uploads = [];
+    // The default upload is the md-msg-hist media upload.
+    f.client._sender = { async _uploadMedia(kind, buf) { const done = fakeUpload(buf); uploads.push({ kind, buf, done }); return done; } };
+    const result = await f.client.bootstrapPrimaryCompanion({ history: async () => snap });
+    assert.equal(uploads.length, 1);
+    assert.equal(uploads[0].kind, 'md-msg-hist');
+    assert.deepEqual(uploads[0].buf, bytes);
+    assert.deepEqual(result.history, { chats: 1, records: 1, bytes: 65537, inline: false });
+    const hsn = notificationOf(messages(f)[1]);
+    assert.equal(hsn.directPath, uploads[0].done.directPath);
+    assert.deepEqual(hsn.mediaKey, uploads[0].done.mediaKey);
+    assert.deepEqual(hsn.fileSHA256, crypto.createHash('sha256').update(bytes).digest());
+    assert.deepEqual(hsn.fileEncSHA256, uploads[0].done.fileEncSha256);
+    assert.equal(hsn.fileLength, 65537);
+    assert.equal(hsn.initialHistBootstrapInlinePayload, undefined);
+    assert.equal(hsn.syncType, 0);
+
+    // One byte less still rides inline.
+    const g = await bootstrapFixture(t), small = sized(INLINE_MAX);
+    let uploaded = 0;
+    const inline = await g.client.bootstrapPrimaryCompanion({ history: async () => small, upload: async buf => { uploaded++; return fakeUpload(buf); } });
+    assert.equal(uploaded, 0);
+    assert.equal(inline.history.inline, true);
+    assert.deepEqual(notificationOf(messages(g)[1]).initialHistBootstrapInlinePayload, buildHistorySync(small));
+});
+
+test('a blob upload that does not match the pinned bytes is not sent', async t => {
+    const f = await bootstrapFixture(t), snap = sized(INLINE_MAX + 1);
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload: async buf => ({ ...fakeUpload(buf), fileSha256: crypto.randomBytes(32) }) }), { code: 'PRIMARY_BOOTSTRAP_UPLOAD_INVALID' });
+    assert.equal(messages(f).length, 1);
+    assert.equal(journal(f).transaction.bootstrap.phase, 'history_prepared');
+    // Nothing reached the companion, so a resume may upload again.
+    let uploads = 0;
+    await f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload: async buf => { uploads++; return fakeUpload(buf); }, resume: true });
+    assert.equal(uploads, 1);
+    assert.equal(messages(f).length, 2);
+});
+
+test('resume after history_uploaded reuses the blob without uploading', async t => {
+    const f = await bootstrapFixture(t), snap = sized(INLINE_MAX + 1);
+    let uploads = 0;
+    const upload = async buf => { uploads++; return fakeUpload(buf); };
+    failPhaseOnce(f, 'history_sending');
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+    const recorded = journal(f).transaction.bootstrap;
+    assert.equal(recorded.phase, 'history_uploaded');
+    assert.equal(recorded.errorCode, 'PRIMARY_LINK_STORE_WRITE_FAILED');
+    assert.equal(uploads, 1);
+    assert.equal(messages(f).length, 1);
+    // Without resume, an attempt stays one attempt.
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload }), { code: 'PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED' });
+    uploads = 0;
+    const result = await f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload, resume: true });
+    assert.equal(uploads, 0);
+    assert.equal(result.history.inline, false);
+    const sent = messages(f);
+    assert.equal(sent.length, 2);
+    assert.equal(patchWrites(f).length, 1);
+    const hsn = notificationOf(sent[1]);
+    assert.equal(hsn.directPath, recorded.history.blob.directPath);
+    assert.deepEqual(hsn.mediaKey, Buffer.from(recorded.history.blob.mediaKey, 'base64'));
+    assert.equal(hsn.fileLength, 65537);
+});
+
+test('resume uses the pinned outbox even after the store changed', async t => {
+    const f = await bootstrapFixture(t);
+    let snap = chatSnapshot(2);
+    f.client._messageStore = { snapshot: () => snap };
+    failPhaseOnce(f, 'history_sending');
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: 'store' }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+    assert.equal(journal(f).transaction.bootstrap.phase, 'history_prepared');
+    const file = outboxFile(f), outbox = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.deepEqual(Object.keys(outbox).sort(), ['bytes', 'cutoff', 'inline', 'sha256']);
+    assert.deepEqual(outbox.cutoff, { seq: 2 });
+    assert.equal(outbox.inline, true);
+    assert.equal(sha(Buffer.from(outbox.bytes, 'base64')), outbox.sha256);
+    assert.equal(journal(f).transaction.bootstrap.history.sha256, outbox.sha256);
+
+    snap = chatSnapshot(4);
+    const result = await f.client.bootstrapPrimaryCompanion({ history: 'store', resume: true });
+    const hsn = notificationOf(messages(f)[1]);
+    assert.equal(sha(hsn.initialHistBootstrapInlinePayload), outbox.sha256);
+    assert.notEqual(sha(buildHistorySync(snap)), outbox.sha256);
+    assert.deepEqual(messageIds(historyOf(hsn)), ['M1', 'M2']);
+    assert.equal(result.history.records, 2);
+    assert.equal(fs.existsSync(file), false);
+});
+
+test('a pinned outbox that no longer matches its journal is never sent', async t => {
+    const f = await bootstrapFixture(t), snap = chatSnapshot(2);
+    failPhaseOnce(f, 'history_sending');
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+    const file = outboxFile(f), outbox = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const other = buildHistorySync(chatSnapshot(3));
+    fs.writeFileSync(file, JSON.stringify({ ...outbox, bytes: other.toString('base64'), sha256: sha(other) }), { mode: 0o600 });
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap, resume: true }), { code: 'PRIMARY_BOOTSTRAP_OUTBOX_INVALID' });
+    assert.equal(messages(f).length, 1);
+});
+
+test('history_sending without ack stops with HISTORY_UNCERTAIN', async t => {
+    const f = await bootstrapFixture(t), history = async () => chatSnapshot(2);
+    await stopUnacked(f, 2, { history });
+    const before = journal(f);
+    assert.equal(before.transaction.bootstrap.phase, 'history_sending');
+    assert.equal(before.transaction.bootstrap.errorCode, 'PRIMARY_LINK_ABORTED');
+    const count = f.requests.length;
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history, resume: true }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN' });
+    // Refused before anything at all went out, and the journal is untouched.
+    assert.equal(f.requests.length, count);
+    assert.deepEqual(journal(f), before);
+});
+
+test('resendUncertain resends the same message id', async t => {
+    const f = await bootstrapFixture(t), history = async () => chatSnapshot(2);
+    await stopUnacked(f, 2, { history });
+    const first = messages(f)[1];
+    const result = await f.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true });
+    assert.equal(result.status, 'sent');
+    const sent = messages(f);
+    assert.equal(sent.length, 3);
+    assert.equal(sent[2].attrs.id, first.attrs.id);
+    assert.deepEqual(plain(sent[2]), plain(first));
+    assert.equal(patchWrites(f).length, 1);
+    assert.equal(journal(f).transaction.bootstrap.phase, 'sent');
+});
+
+test('resume from critical_patch_accepted sends history without repeating key share or patch', async t => {
+    const f = await bootstrapFixture(t), history = async () => chatSnapshot(1);
+    failPhaseOnce(f, 'history_prepared');
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+    assert.equal(journal(f).transaction.bootstrap.phase, 'critical_patch_accepted');
+    assert.equal(messages(f).length, 1);
+    const result = await f.client.bootstrapPrimaryCompanion({ history, resume: true });
+    assert.equal(result.status, 'sent');
+    const sent = messages(f);
+    assert.equal(sent.length, 2);
+    assert.equal(patchWrites(f).length, 1);
+    assert.ok(decodeMessageContainer(plain(sent[0])).appStateSyncKeyShare);
+    assert.deepEqual(messageIds(historyOf(notificationOf(sent[1]))), ['M1']);
+});
+
+test('resume from critical_patch_sending treats our verified patch as accepted and resends on an empty collection', async t => {
+    const history = async () => chatSnapshot(1);
+    // The server kept the patch; only its answer was lost.
+    const f = await bootstrapFixture(t);
+    await stopPatch(f, 'applied', { history });
+    assert.equal(journal(f).transaction.bootstrap.phase, 'critical_patch_sending');
+    assert.equal(f.server.version, 1);
+    assert.equal(fs.existsSync(path.join(f.dir, PHONE + '.appState.json')), false);
+    assert.equal((await f.client.bootstrapPrimaryCompanion({ history, resume: true })).status, 'sent');
+    assert.equal(patchWrites(f).length, 1, 'our verified patch is not written again');
+    assert.equal(messages(f).length, 2);
+    const persisted = JSON.parse(fs.readFileSync(path.join(f.dir, PHONE + '.appState.json'), 'utf8'));
+    assert.equal(persisted.critical_block.version, 1);
+    assert.equal(f.client._appState.get('critical_block').version, 1);
+
+    // The server never got it: critical_block is still empty, so write it.
+    const g = await bootstrapFixture(t);
+    await stopPatch(g, 'lost', { history });
+    assert.equal(g.server.version, 0);
+    assert.equal((await g.client.bootstrapPrimaryCompanion({ history, resume: true })).status, 'sent');
+    assert.equal(patchWrites(g).length, 2);
+    assert.equal(g.server.version, 1);
+    assert.equal(messages(g).length, 2, 'the key share is not repeated');
+
+    // Anything else on the server is not ours to guess about.
+    const h = await bootstrapFixture(t);
+    await stopPatch(h, 'lost', { history });
+    h.server.version = 3;
+    await assert.rejects(h.client.bootstrapPrimaryCompanion({ history, resume: true }), { code: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE' });
+    assert.equal(patchWrites(h).length, 1);
+    assert.equal(messages(h).length, 1);
+});
+
+test('key_share_sending without ack stops with KEY_SHARE_UNCERTAIN unless resendUncertain', async t => {
+    const f = await bootstrapFixture(t), history = async () => chatSnapshot(1);
+    await stopUnacked(f, 1, { history });
+    assert.equal(journal(f).transaction.bootstrap.phase, 'key_share_sending');
+    const keys = fs.readFileSync(keyFile(f)), count = f.requests.length;
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history, resume: true }), { code: 'PRIMARY_BOOTSTRAP_KEY_SHARE_UNCERTAIN' });
+    assert.equal(f.requests.length, count);
+    const result = await f.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true });
+    assert.equal(result.status, 'sent');
+    const sent = messages(f);
+    assert.equal(sent.length, 3);
+    assert.equal(sent[1].attrs.id, sent[0].attrs.id);
+    assert.deepEqual(plain(sent[1]), plain(sent[0]), 'the same key, under the same id');
+    assert.deepEqual(fs.readFileSync(keyFile(f)), keys);
+    assert.equal(patchWrites(f).length, 1);
+});
+
+test('relink shares the existing key, skips the patch, and sends history', async t => {
+    const f = await bootstrapFixture(t), { tx, keyId, keyData, built } = previousLink(f);
+    // The server holds what our key wrote, at our version.
+    f.server.version = 1;
+    f.server.patches = [built.patch];
+    const keys = fs.readFileSync(keyFile(f));
+    assert.deepEqual(await Bootstrap.verifyServerCriticalBlock(f.client._primaryLinking, null), { version: 1, verified: true, foreign: false });
+    const result = await f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(2) });
+    assert.equal(result.mode, 'relink');
+    assert.equal(result.status, 'sent');
+    assert.equal(patchWrites(f).length, 0);
+    const sent = messages(f);
+    assert.equal(sent.length, 2);
+    const share = keyShareOf(sent[0]);
+    assert.equal(share.keyId, keyId.toString('hex'));
+    assert.deepEqual(share.keyData, keyData);
+    // Under the ADV state of this link, not the one the key was made under.
+    assert.deepEqual(share.fingerprint, { rawId: tx.state.rawId, currentIndex: tx.state.currentIndex, validIndexes: tx.state.validIndexes });
+    assert.deepEqual(messageIds(historyOf(notificationOf(sent[1]))), ['M1', 'M2']);
+    assert.deepEqual(fs.readFileSync(keyFile(f)), keys);
+    assert.equal(f.client._appState.get('critical_block').version, 1);
+    assert.equal(journal(f).transaction.bootstrap.mode, 'relink');
+});
+
+test('relink refuses a server state we cannot verify', async t => {
+    const cases = {
+        'written with a key we do not hold': ours => [Sync.buildPatch(pushNamePatch('Local Primary'), Buffer.from('0f0e0d0c0b0a', 'hex'), crypto.randomBytes(32), newState()).patch],
+        'a MAC that does not verify': ours => { const p = Buffer.from(ours.built.patch); p[p.length - 20] ^= 1; return [p]; },
+        'our key, but not our state': ours => [Sync.buildPatch(pushNamePatch('Someone Else'), ours.keyId, ours.keyData, newState()).patch],
+        'ahead of our version': ours => [ours.built.patch, Sync.buildPatch(pushNamePatch('Later'), ours.keyId, ours.keyData, ours.built.state).patch]
+    };
+    for (const [name, patches] of Object.entries(cases)) {
+        const f = await bootstrapFixture(t), ours = previousLink(f);
+        f.server.patches = patches(ours);
+        f.server.version = f.server.patches.length;
+        const seen = await Bootstrap.verifyServerCriticalBlock(f.client._primaryLinking, null);
+        assert.equal(seen.verified, false, name);
+        await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(1) }), { code: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE' }, name);
+        assert.equal(messages(f).length, 0, name);
+        assert.equal(patchWrites(f).length, 0, name);
+        assert.equal(journal(f).transaction.bootstrap, undefined, name);
+    }
+});
+
+test('relink verifies a critical_block snapshot blob with our key as well', async t => {
+    for (const ourMac of [true, false]) {
+        const f = await bootstrapFixture(t), ours = previousLink(f), fetched = [];
+        const blob = snapshotBlob(ours, ourMac ? ours.keyData : crypto.randomBytes(32));
+        f.client._fetchAppStateBlob = async ref => { fetched.push(ref.directPath); return blob; };
+        f.server.version = 1;
+        f.server.snapshot = Buffer.concat([len(1, crypto.randomBytes(32)), len(2, Buffer.from('/v/t62.synthetic/critical-block'))]);
+        if (ourMac) {
+            assert.equal((await f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(1) })).mode, 'relink');
+            assert.equal(messages(f).length, 2);
+        } else {
+            await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(1) }), { code: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE' });
+            assert.equal(messages(f).length, 0);
+        }
+        assert.deepEqual(fetched, ['/v/t62.synthetic/critical-block']);
+        assert.equal(patchWrites(f).length, 0);
+    }
+});
+
+test('a step its ACK refused is not sent again, even with resendUncertain', async t => {
+    const f = await bootstrapFixture(t), history = async () => chatSnapshot(1);
+    f.control.ackError = (node, n) => (n === 2 ? '403' : null);
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history }), { code: 'PRIMARY_BOOTSTRAP_ACK_403' });
+    assert.equal(journal(f).transaction.bootstrap.phase, 'history_sending');
+    const count = f.requests.length;
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true }), { code: 'PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED' });
+    assert.equal(f.requests.length, count);
+});
+
+test('delta carries only records after the cutoff', async t => {
+    const f = await bootstrapFixture(t), pinned = chatSnapshot(3), later = chatSnapshot(5);
+    let calls = 0;
+    const result = await f.client.bootstrapPrimaryCompanion({ history: async () => (calls++ === 0 ? pinned : later), delta: true });
+    assert.equal(result.history.records, 3);
+    assert.deepEqual(result.delta, { records: 2 });
+    const sent = messages(f);
+    assert.equal(sent.length, 3);
+    assert.deepEqual(messageIds(historyOf(notificationOf(sent[1]))), ['M1', 'M2', 'M3']);
+    const hsn = notificationOf(sent[2]);
+    assert.equal(hsn.syncType, 3);
+    const delta = historyOf(hsn);
+    assert.equal(delta.syncType, 3);
+    assert.deepEqual(messageIds(delta), ['M4', 'M5']);
+    assert.deepEqual(journal(f).transaction.bootstrap.delta.cutoff, { seq: 5 });
+    assert.equal(journal(f).transaction.bootstrap.phase, 'sent');
+
+    // Nothing arrived after the cutoff: nothing more is sent.
+    const g = await bootstrapFixture(t);
+    const quiet = await g.client.bootstrapPrimaryCompanion({ history: async () => pinned, delta: true });
+    assert.deepEqual(quiet.delta, { records: 0 });
+    assert.equal(messages(g).length, 2);
+});
+
+test('bootstrapEmptyPrimary keeps its contract', async t => {
+    const f = await bootstrapFixture(t);
+    const result = await f.client.bootstrapEmptyPrimaryCompanion({ getInitialHistory: async () => EMPTY });
+    assert.deepEqual(result, { status: 'sent', browserReady: false, operationId: journal(f).transaction.id });
+    assert.deepEqual(plain(messages(f)[1]), Bootstrap.initialHistory(EMPTY));
+    await assert.rejects(f.client.bootstrapEmptyPrimaryCompanion({ getInitialHistory: async () => EMPTY }), { code: 'PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED' });
+    // Its own codes stay its own: an unknown server state is SERVER_STATE_REQUIRED
+    // there, FOREIGN_STATE through the general entry point.
+    const g = await bootstrapFixture(t);
+    g.server.version = 12;
+    await assert.rejects(g.client.bootstrapEmptyPrimaryCompanion({ getInitialHistory: async () => EMPTY }), { code: 'PRIMARY_BOOTSTRAP_SERVER_STATE_REQUIRED' });
+    await assert.rejects(g.client.bootstrapPrimaryCompanion({ history: async () => snapshot() }), { code: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE' });
+    const h = await bootstrapFixture(t);
+    await assert.rejects(h.client.bootstrapEmptyPrimaryCompanion({ getInitialHistory: async () => ({ ...EMPTY, messageCount: 1, conversationCount: 1 }) }), { code: 'PRIMARY_BOOTSTRAP_HISTORY_REQUIRED' });
+    assert.equal(messages(h).length, 0);
+});

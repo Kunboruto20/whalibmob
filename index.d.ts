@@ -1006,6 +1006,40 @@ export interface PrimaryCodeLinkOptions extends PrimaryLinkCommonOptions {
   /** 0 disables waiting; default 45000 ms, within the overall timeoutMs. */
   waitMs?: number;
 }
+/** The history a primary hands a new companion, in the shape of the primary message store's snapshot(). */
+export interface PrimaryHistorySnapshot {
+  /** The store's event sequence number this snapshot is as of; a delta sends what came after it. */
+  seq: number;
+  chats: Array<{ id: string; name?: string; pnJid?: string; lidJid?: string; conversationTimestamp?: number; unreadCount?: number; ephemeral?: { seconds: number; setAt?: number } }>;
+  records: Record<string, Array<{ id: string; seq: number; fromMe: boolean; ts: number; status?: number; participant?: string; pushName?: string; raw?: Buffer; tombstone?: string; edited?: number; expiration?: number }>>;
+  pushNames: Array<{ id: string; pushname: string }>;
+  capture?: object; losses?: object[]; retained?: object; counts?: { chats: number; records: number };
+}
+/** What an md-msg-hist upload stored: the encrypted blob the notification points to. */
+export interface PrimaryHistoryUpload {
+  directPath: string; mediaKey: Buffer; fileSha256: Buffer; fileEncSha256: Buffer; fileLength: number;
+}
+export interface PrimaryBootstrapOptions {
+  /** 'store' reads this client's primary message store (PRIMARY_MESSAGE_STORE_DISABLED without one). */
+  history: 'store' | (() => PrimaryHistorySnapshot | Promise<PrimaryHistorySnapshot>);
+  /** Used only above 64 KiB deflated. Defaults to the md-msg-hist media upload. */
+  upload?: (bytes: Buffer) => Promise<PrimaryHistoryUpload>;
+  /** Continue a recorded attempt after its last accepted step, with the bytes it pinned. */
+  resume?: boolean;
+  /** With resume: send again, under the recorded message id, a step whose ACK never came. */
+  resendUncertain?: boolean;
+  /** After the history, send what reached the store since it was pinned, as a RECENT chunk. */
+  delta?: boolean;
+  signal?: AbortSignal;
+}
+export interface PrimaryBootstrapResult {
+  status: 'sent';
+  /** first: a new key and the push-name patch. relink: our existing key, its patch already on the server. */
+  mode: 'first' | 'relink';
+  operationId: string;
+  history: { chats: number; records: number; bytes: number; inline: boolean };
+  delta: null | { records: number };
+}
 
 export declare class WhalibmobClient extends EventEmitter {
   constructor(opts?: WhalibmobClientOptions);
@@ -1051,6 +1085,14 @@ export declare class WhalibmobClient extends EventEmitter {
   retireAbsentPrimaryLink(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<{ status: 'abandoned'; operationId: string }>;
   /** Explicit first bootstrap only: requires a real empty application store and no existing sync keys/collections. Does not report Web ready. */
   bootstrapEmptyPrimaryCompanion(options: { getInitialHistory: () => Promise<{ source: 'owned_primary_store'; messageCount: 0; conversationCount: 0 }>; recoverRejected?: boolean; signal?: AbortSignal }): Promise<{ status: 'sent'; browserReady: false; operationId: string }>;
+  /**
+   * Key share, critical_block patch and INITIAL_BOOTSTRAP history for the companion just linked: inline up to
+   * 64 KiB deflated, an md-msg-hist blob above. The history is pinned on disk before it is sent. Without resume an
+   * attempt is single (PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED); a step with no ACK stops with
+   * PRIMARY_BOOTSTRAP_KEY_SHARE_UNCERTAIN or PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN until resendUncertain. Server state
+   * neither empty nor written by our own key at our version is PRIMARY_BOOTSTRAP_FOREIGN_STATE. Does not report Web ready.
+   */
+  bootstrapPrimaryCompanion(options: PrimaryBootstrapOptions): Promise<PrimaryBootstrapResult>;
   /** Initial import only; must match a fresh server list, cannot overwrite existing ADV. */
   seedPrimaryLinkState(state: PrimaryADVState): Promise<void>;
   /**
