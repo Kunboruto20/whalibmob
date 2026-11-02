@@ -34,6 +34,8 @@ message WebMessageInfo {
   optional string pushName = 19;
   optional int32 messageStubType = 24;
   repeated string messageStubParameters = 26;
+  optional uint64 ephemeralStartTimestamp = 32;
+  optional uint32 ephemeralDuration = 33;
 }
 
 // waHistorySync
@@ -46,6 +48,8 @@ message Conversation {
   required string ID = 1;
   repeated HistorySyncMsg messages = 2;
   optional uint32 unreadCount = 6;
+  optional uint32 ephemeralExpiration = 9;
+  optional int64 ephemeralSettingTimestamp = 10;
   optional uint64 conversationTimestamp = 12;
   optional string name = 13;
   optional string pnJID = 39;

@@ -71,7 +71,10 @@ test('empty snapshot is byte-identical to the live-validated bootstrap', () => {
     .equals(Bootstrap.initialHistory({ source: 'owned_primary_store', messageCount: 0, conversationCount: 0 })));
 });
 
-test('conversations are ordered by conversationTimestamp desc and messages by ts asc with msgOrderID 1..n', () => {
+// The encoder does not sort. The store hands chats out by conversationTimestamp
+// desc and records by ts asc; what is checked is that this order goes over
+// unchanged and is numbered 1..n.
+test('conversations and messages keep the snapshot order, with msgOrderID 1..n', () => {
   const snap = snapshot({
     chats: [
       { id: ANA, name: 'Ana', conversationTimestamp: T + 300, unreadCount: 2 },
@@ -274,6 +277,130 @@ test('a notification takes exactly one payload, and inline only up to INLINE_MAX
   fails(() => buildNotification({ inline: Buffer.alloc(1), blob }));
   fails(() => buildNotification({ blob: { ...blob, mediaKey: undefined } }));
   fails(() => buildNotification({ blob: { ...blob, directPath: '' } }));
+
+  // An inline that is not a Buffer is not "no inline". protobufjs would take a
+  // string as base64 and write it, so each of these is refused outright.
+  const invalid = fn => assert.throws(fn, e => e.code === 'PRIMARY_HISTORY_EXPORT_PAYLOAD_INVALID');
+  invalid(() => buildNotification({ inline: 'QUJD', blob }));
+  invalid(() => buildNotification({ inline: new Uint8Array([1, 2, 3]), blob }));
+  invalid(() => buildNotification({ inline: 'x', blob: {} }));
+  invalid(() => buildNotification({ inline: 'QUJD' }));
+  invalid(() => buildNotification(null));
+});
+
+test('chunk options are non-negative integers and progress is at most 100', () => {
+  const empty = snapshot();
+  const blob = { directPath: '/v/x', mediaKey: Buffer.alloc(32), fileSha256: Buffer.alloc(32), fileEncSha256: Buffer.alloc(32), fileLength: 1 };
+  const invalid = fn => assert.throws(fn, e => e.code === 'PRIMARY_HISTORY_EXPORT_OPTIONS_INVALID');
+  for (const bad of [{ progress: 101 }, { progress: -1 }, { syncType: -1 }, { chunkOrder: 1.5 }, { syncType: '0' },
+    { progress: NaN }, { chunkOrder: null }, { chunkOrder: 2 ** 32 }]) {
+    invalid(() => buildHistorySync(empty, bad));
+    invalid(() => buildNotification({ blob }, bad));
+  }
+  assert.doesNotThrow(() => buildHistorySync(empty, { syncType: 6, chunkOrder: 0xffffffff, progress: 0 }));
+  assert.doesNotThrow(() => buildNotification({ blob }, { syncType: 3, chunkOrder: 7, progress: 100 }));
+});
+
+test('an ephemeral chat exports its timer and when it was set; a non-ephemeral chat has neither', () => {
+  const week = 7 * 24 * 3600;
+  const sync = decodeSync(buildHistorySync(snapshot({
+    chats: [
+      { id: ANA, conversationTimestamp: T + 4, unreadCount: 0, ephemeral: { seconds: week, setAt: T + 1 } },
+      { id: BOB, conversationTimestamp: T + 3, unreadCount: 0 },
+      // Turned off again: the store keeps { seconds: 0 }, Web gets nothing.
+      { id: GROUP, conversationTimestamp: T + 2, unreadCount: 0, ephemeral: { seconds: 0, setAt: T + 2 } },
+      // Set, but not known when.
+      { id: '99999@lid', conversationTimestamp: T + 1, unreadCount: 0, ephemeral: { seconds: 86400 } }
+    ]
+  })));
+  const [ana, bob, group, lid] = sync.conversations;
+  assert.equal(ana.ephemeralExpiration, week);
+  assert.equal(ana.ephemeralSettingTimestamp, T + 1);   // seconds, as the store keeps setAt
+  for (const conv of [bob, group]) {
+    assert.ok(!('ephemeralExpiration' in conv) && !('ephemeralSettingTimestamp' in conv), conv.ID);
+  }
+  assert.equal(lid.ephemeralExpiration, 86400);
+  assert.ok(!('ephemeralSettingTimestamp' in lid));
+});
+
+test('a record with an expiration exports ephemeralStartTimestamp and ephemeralDuration', () => {
+  const sync = decodeSync(buildHistorySync(snapshot({
+    chats: [{ id: ANA, conversationTimestamp: T + 3, unreadCount: 0 }],
+    records: { [ANA]: [
+      rec('M1', 1, T, { expiration: 86400 }),
+      rec('M2', 2, T + 1),
+      rec('M3', 3, T + 2, { expiration: 0 }),
+      rec('M4', 4, T + 3, { tombstone: 'revoked', expiration: 86400 })
+    ] }
+  })));
+  const [m1, m2, m3, m4] = sync.conversations[0].messages.map(m => m.message);
+  assert.equal(m1.ephemeralStartTimestamp, T);
+  assert.equal(m1.ephemeralDuration, 86400);
+  // Only content carries a timer; a stub has nothing left to expire.
+  for (const m of [m2, m3, m4]) {
+    assert.ok(!('ephemeralStartTimestamp' in m) && !('ephemeralDuration' in m), m.key.ID);
+  }
+});
+
+test('a content record without its bytes is refused, not dropped', () => {
+  // Leaving it out would hand Web a history with a hole in it and no word.
+  const chats = [{ id: ANA, conversationTimestamp: T + 1, unreadCount: 0 }];
+  for (const raw of [undefined, null, 'raw-M2', new Uint8Array([1, 2])]) {
+    const records = { [ANA]: [rec('M1', 1, T), rec('M2', 2, T + 1, { raw })] };
+    assert.throws(() => buildHistorySync(snapshot({ chats, records })),
+      e => e.code === 'PRIMARY_HISTORY_EXPORT_SNAPSHOT_INVALID' && /M2/.test(e.message));
+  }
+});
+
+test('a chat with nothing to show and no timestamp is not exported, and timestamp 0 is never written', () => {
+  const sync = decodeSync(buildHistorySync(snapshot({
+    chats: [
+      { id: ANA, conversationTimestamp: T + 2, unreadCount: 0 },
+      { id: GROUP, conversationTimestamp: 0, unreadCount: 0 },
+      { id: BOB, conversationTimestamp: 0, unreadCount: 0 },
+      // Only names known: no conversation, but the mapping is still true.
+      { id: '99999@lid', pnJid: '40777777777@s.whatsapp.net', lidJid: '99999@lid', conversationTimestamp: 0, unreadCount: 0 },
+      { id: '88888@lid', conversationTimestamp: 0, unreadCount: 0 }
+    ],
+    records: {
+      [ANA]: [],
+      // It has a message, so it goes over, just without a 1970 timestamp.
+      [GROUP]: [rec('G1', 1, T)],
+      // Everything in it expired: nothing to show.
+      [BOB]: [rec('B1', 2, T, { tombstone: 'expired' })]
+    }
+  })));
+  assert.deepEqual(sync.conversations.map(c => c.ID), [ANA, GROUP]);
+  assert.equal(sync.conversations[0].conversationTimestamp, T + 2);
+  assert.ok(!('conversationTimestamp' in sync.conversations[1]));
+  assert.deepEqual(ids(sync.conversations[1]), ['G1']);
+  assert.deepEqual(sync.phoneNumberToLidMappings, [{ pnJID: '40777777777@s.whatsapp.net', lidJID: '99999@lid' }]);
+});
+
+test('a pn-lid mapping goes over once', () => {
+  // The same contact can be two chats, one per jid, each knowing both.
+  const sync = decodeSync(buildHistorySync(snapshot({
+    chats: [
+      { id: '99999@lid', pnJid: ANA, lidJid: '99999@lid', conversationTimestamp: T + 3, unreadCount: 0 },
+      { id: ANA, pnJid: ANA, lidJid: '99999@lid', conversationTimestamp: T + 2, unreadCount: 0 },
+      { id: '66666@lid', pnJid: ANA, lidJid: '66666@lid', conversationTimestamp: T + 1, unreadCount: 0 }
+    ]
+  })));
+  assert.deepEqual(sync.phoneNumberToLidMappings, [
+    { pnJID: ANA, lidJID: '99999@lid' },
+    { pnJID: ANA, lidJID: '66666@lid' }
+  ]);
+});
+
+test('records for a chat that is not in the snapshot are refused', () => {
+  // Skipping them would lose them quietly; recordsAfter would count them.
+  const snap = snapshot({
+    chats: [{ id: ANA, conversationTimestamp: T, unreadCount: 0 }],
+    records: { [ANA]: [rec('A1', 1, T)], [BOB]: [rec('B1', 2, T)] }
+  });
+  const invalid = fn => assert.throws(fn, e => e.code === 'PRIMARY_HISTORY_EXPORT_SNAPSHOT_INVALID' && e.message.includes(BOB));
+  invalid(() => buildHistorySync(snap));
+  invalid(() => recordsAfter(snap, { seq: 0 }));
 });
 
 test('recordsAfter returns only post-cutoff records', () => {
