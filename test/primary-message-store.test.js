@@ -172,6 +172,45 @@ test('a revoke that arrives before its target still keeps the content out', (t) 
   }
 });
 
+// The tie between a conversation's two jids can be learned after the revoke
+// and the message have both arrived, in any order. It still reaches them.
+test('a pn/lid tie learned after a revoke still reaches every copy', (t) => {
+  const { open } = setup(t);
+  const s = open();
+  const secret = Buffer.from('revoked-secret');
+  // C: stored under the phone number, then revoked under the lid.
+  incoming(s, 'C1', 100, { raw: secret });
+  protocol(s, 'R1', 101, { type: 0, key: { id: 'C1' } }, { chat: LID });
+  // C2: revoked under the lid first, then stored under the phone number.
+  protocol(s, 'R2', 102, { type: 0, key: { id: 'C2' } }, { chat: LID });
+  incoming(s, 'C2', 103, { raw: secret });
+  // p5: kept under both, revoked under the phone number.
+  incoming(s, 'P5', 104, { raw: secret });
+  incoming(s, 'P5', 104, { chat: LID, raw: secret });
+  protocol(s, 'R3', 105, { type: 0, key: { id: 'P5' } });
+  // The tie is told from the lid's side for another pair.
+  incoming(s, 'X1', 106, { chat: OTHER, raw: secret });
+  protocol(s, 'R4', 107, { type: 0, key: { id: 'X1' } }, { chat: '88888@lid' });
+  // A peer's revoke waiting under the lid must still not reach our own message.
+  outgoing(s, 'O1', 108);
+  protocol(s, 'R5', 109, { type: 0, key: { id: 'O1' } }, { chat: LID });
+
+  s.setChatMeta(CHAT, { pnJid: CHAT, lidJid: LID });
+  s.setChatMeta('88888@lid', { pnJid: OTHER, lidJid: '88888@lid' });
+
+  const check = snap => {
+    for (const [id, chat] of [['C1', CHAT], ['C2', CHAT], ['P5', CHAT], ['P5', LID], ['X1', OTHER]]) {
+      const r = byId(snap, id, chat);
+      assert.equal(r.tombstone, 'revoked', id + ' in ' + chat);
+      assert.equal('raw' in r, false, id + ' in ' + chat);
+    }
+    assert.ok(byId(snap, 'O1').raw.equals(Buffer.from('out-O1')), 'our message keeps its content');
+  };
+  check(s.snapshot());
+  s.close();
+  check(open().snapshot());
+});
+
 // key.remoteJid is the sender's view of the chat and is never trusted to pick
 // it: an edit or revoke reaches only the chat it arrived in.
 test('a forged cross-chat edit is ignored', (t) => {
@@ -342,9 +381,13 @@ test('expired records are swept on open', (t) => {
 
   // Nothing asks for a snapshot; opening after the deadline is enough.
   clock.ms = T + 61000;
-  open();
+  const again = open();
   assert.equal(fs.readFileSync(snapFile(dir), 'utf8').includes(b64('disappearing')), false);
   assert.equal(fs.readFileSync(logFile(dir), 'utf8').includes(b64('disappearing')), false);
+  // Delivered again onto its tombstone, the content is not written back either.
+  incoming(again, 'E1', ts, { raw: Buffer.from('disappearing') });
+  assert.equal(fs.readFileSync(logFile(dir), 'utf8').includes(b64('disappearing')), false);
+  assert.equal(byId(again.snapshot(), 'E1').tombstone, 'expired');
 });
 
 test('leftover inflight not stored becomes a precise loss on reopen', (t) => {
@@ -562,6 +605,16 @@ test('a second open of the same store is refused while the first is open', (t) =
   assert.deepEqual(open().snapshot().records[CHAT].map(r => r.id), ['M1', 'M2']);
 });
 
+test('a second open by another letter case of the same dir is refused', (t) => {
+  const { dir, open } = setup(t);
+  const upper = path.join(path.dirname(dir), path.basename(dir).toUpperCase());
+  let same = false;
+  try { same = fs.statSync(upper).ino === fs.statSync(dir).ino; } catch (_) {}
+  if (!same) { t.skip('the tmp filesystem is case-sensitive'); return; }
+  open();
+  assert.throws(() => open({ dir: upper }), { code: 'PRIMARY_MESSAGE_STORE_BUSY' });
+});
+
 test('supersedes rekeys instead of duplicating', (t) => {
   const { open } = setup(t);
   const s = open();
@@ -605,6 +658,43 @@ test('a revoked message that left memory stays revoked when delivered again', (t
     assert.equal('raw' in r, false, id);
   }
   assert.equal(fs.readFileSync(snapFile(dir), 'utf8').includes(b64('revoked-secret')), false);
+});
+
+test('a flood of view-once messages does not push a revoked id out of memory', (t) => {
+  const { open } = setup(t);
+  const s = open();
+  incoming(s, 'R1', 10, { raw: Buffer.from('revoked-secret') });
+  protocol(s, 'P1', 11, { type: 0, key: { id: 'R1' } });
+  s.drop(CHAT, 'R1');
+  for (let i = 0; i < 5100; i++) incoming(s, 'V' + i, 100 + i, { chat: OTHER, info: { kind: 'content', viewOnce: true } });
+  incoming(s, 'R1', 10, { raw: Buffer.from('revoked-secret') });
+  const r = byId(s.snapshot(), 'R1');
+  assert.equal(r.tombstone, 'revoked');
+  assert.equal('raw' in r, false);
+});
+
+test('a known-revoked message delivered again never writes its bytes to disk', (t) => {
+  const { dir, open } = setup(t);
+  const s = open();
+  const logHas = () => fs.readFileSync(logFile(dir), 'utf8').includes(b64('revoked-secret'));
+  incoming(s, 'M1', 10, { raw: Buffer.from('revoked-secret') });
+  protocol(s, 'P1', 11, { type: 0, key: { id: 'M1' } });
+  s.compact();
+  assert.equal(logHas(), false);
+  incoming(s, 'M1', 10, { raw: Buffer.from('revoked-secret') });   // still stored, as a tombstone
+  assert.equal(logHas(), false, 'redelivered onto the tombstone');
+  s.drop(CHAT, 'M1');
+  incoming(s, 'M1', 10, { raw: Buffer.from('revoked-secret') });   // forgotten record, remembered id
+  assert.equal(logHas(), false, 'redelivered after it left memory');
+  protocol(s, 'P2', 21, { type: 0, key: { id: 'M2' } }, { chat: LID });
+  s.setChatMeta(CHAT, { lidJid: LID });
+  incoming(s, 'M2', 20, { raw: Buffer.from('revoked-secret') });   // revoked before it ever came
+  assert.equal(logHas(), false, 'revoked before it arrived');
+  const snap = s.snapshot();
+  for (const id of ['M1', 'M2']) {
+    assert.equal(byId(snap, id).tombstone, 'revoked', id);
+    assert.equal('raw' in byId(snap, id), false, id);
+  }
 });
 
 test('retention keeps the newest perChat and counts evictions', (t) => {
