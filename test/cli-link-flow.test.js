@@ -303,7 +303,7 @@ test('a QR link, a link refused before approval, a failure after it, and the eve
           blockers: [{ code: 'PRIMARY_LINK_RECONCILIATION_REQUIRED', detail: { phase: 'awaiting_confirmation', ageMs: 120000, retirable: false } }] } }
       ],
       approveCompanionQr: [{ result: { status: 'awaiting_confirmation', operationId: OP } }],
-      bootstrapPrimaryCompanion: [{ error: { code: 'PRIMARY_BOOTSTRAP_DEVICE_UNCONFIRMED' } }]
+      bootstrapPrimaryCompanion: [{ error: { code: 'PRIMARY_BOOTSTRAP_DEVICE_UNCONFIRMED' } }, { error: { code: 'PRIMARY_LINK_TIMEOUT', resumable: true } }]
     }
   });
   const start = await wa.until(new RegExp(ESC('then run /reconnect.') + '\\n' + ESC(PROMPT) + '$'));
@@ -329,6 +329,12 @@ test('a QR link, a link refused before approval, a failure after it, and the eve
   assert.ok(has(seen, '  (PRIMARY_BOOTSTRAP_DEVICE_UNCONFIRMED)'), seen);
   assert.ok(has(seen, 'The approval was already sent and stands, so do not repeat it; follow the next step above for the history.'), seen);
   assert.deepEqual(calls(dir, 'approveCompanionQr'), [['2@ref,noise,identity,adv', null]]);
+
+  // The handover, continued by hand, stops at its time limit: the way on is the resume, not a proof or a new code.
+  seen = await wa.type('/link-bootstrap --resume');
+  assert.ok(has(seen, 'error: The handover to the companion did not finish within 90 seconds (an upload of the history has time of its own).'), seen);
+  assert.ok(has(seen, '  next: The approval stands and every step already accepted is kept: continue with /link-bootstrap --resume.'), seen);
+  assert.ok(has(seen, '  (PRIMARY_LINK_TIMEOUT)'), seen);
 
   // Blocked by the readiness check: nothing is approved, and the blocker says what to do.
   seen = await wa.type('/link-code ABCD1234');

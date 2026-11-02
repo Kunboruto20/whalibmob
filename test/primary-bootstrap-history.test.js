@@ -408,6 +408,68 @@ test('deflated size 65537 selects the blob path', async t => {
     assert.deepEqual(notificationOf(messages(g)[1]).initialHistBootstrapInlinePayload, buildHistorySync(small));
 });
 
+// A large history used to have to go up inside the bootstrap's 90 seconds,
+// with everything else, so past a size it could never finish at all.
+test('the history upload runs on a clock of its own, outside the bootstrap\'s time limit', async t => {
+    // The limit is the caller's to set, and is kept: an ACK that never comes ends the bootstrap at it.
+    const f = await bootstrapFixture(t);
+    f.control.hangAck = (node, i) => i === 1;
+    const started = Date.now();
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(1), timeoutMs: 1000 }), { code: 'PRIMARY_LINK_TIMEOUT' });
+    assert.ok(Date.now() - started < 10000, 'stopped at the limit, not at the ACK wait');
+    assert.equal(journal(f).transaction.bootstrap.errorCode, 'PRIMARY_LINK_TIMEOUT');
+
+    // An upload slower than the whole limit still finishes, and the history goes.
+    const snap = sized(INLINE_MAX + 1), g = await bootstrapFixture(t);
+    const slow = buf => new Promise(resolve => setTimeout(() => resolve(fakeUpload(buf)), 1500));
+    const result = await g.client.bootstrapPrimaryCompanion({ history: async () => snap, upload: slow, timeoutMs: 1000 });
+    assert.equal(result.history.inline, false);
+    assert.equal(messages(g).length, 2);
+    assert.equal(journal(g).transaction.bootstrap.phase, 'sent');
+
+    // Its own limit: an upload that never finishes ends there, with the
+    // history pinned and not sent, and a resume uploads the pinned bytes again.
+    const h = await bootstrapFixture(t);
+    const uploads = [];
+    await assert.rejects(h.client.bootstrapPrimaryCompanion({ history: async () => snap, uploadTimeoutMs: 1000, upload: buf => { uploads.push(buf); return new Promise(() => { }); } }),
+        { code: 'PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT' });
+    assert.equal(journal(h).transaction.bootstrap.phase, 'history_prepared');
+    assert.equal(journal(h).transaction.bootstrap.errorCode, 'PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT');
+    assert.equal(messages(h).length, 1);
+    const resumed = await h.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(1), resume: true, upload: async buf => { uploads.push(buf); return fakeUpload(buf); } });
+    assert.equal(resumed.status, 'sent');
+    assert.equal(uploads.length, 2);
+    assert.deepEqual(uploads[1], uploads[0]);
+
+    // A cancel still stops it at once.
+    const k = await bootstrapFixture(t), abort = new AbortController();
+    await assert.rejects(k.client.bootstrapPrimaryCompanion({ history: async () => snap, signal: abort.signal, upload: () => { abort.abort(); return new Promise(() => { }); } }),
+        { code: 'PRIMARY_LINK_ABORTED' });
+    assert.equal(journal(k).transaction.bootstrap.errorCode, 'PRIMARY_LINK_ABORTED');
+
+    // An upload that fails says so, with what failed as its cause.
+    const u = await bootstrapFixture(t);
+    await assert.rejects(u.client.bootstrapPrimaryCompanion({ history: async () => snap, upload: async () => { throw new Error('Failed to upload media to all available hosts'); } }),
+        e => e.code === 'PRIMARY_BOOTSTRAP_UPLOAD_FAILED' && /all available hosts/.test(e.cause.message));
+    assert.equal(journal(u).transaction.bootstrap.errorCode, 'PRIMARY_BOOTSTRAP_UPLOAD_FAILED');
+
+    // Limits outside what is accepted are refused before anything is sent or recorded.
+    for (const [options, code] of [[{ uploadTimeoutMs: 999 }, 'PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT_INVALID'], [{ uploadTimeoutMs: 3600001 }, 'PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT_INVALID'],
+        [{ uploadTimeoutMs: '60000' }, 'PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT_INVALID'], [{ timeoutMs: 90001 }, 'PRIMARY_LINK_TIMEOUT_INVALID']]) {
+        const v = await bootstrapFixture(t), before = v.requests.length;
+        await assert.rejects(v.client.bootstrapPrimaryCompanion({ history: async () => snap, ...options }), { code }, JSON.stringify(options));
+        assert.equal(v.requests.length, before);
+        assert.equal(journal(v).transaction.bootstrap, undefined);
+    }
+});
+
+test('the upload is given a minute, and a second more for each 16 KiB, at most 20 minutes', () => {
+    assert.equal(Bootstrap.uploadBudget(0), 60000);
+    assert.equal(Bootstrap.uploadBudget(INLINE_MAX + 1), 65000);
+    assert.equal(Bootstrap.uploadBudget(1 << 20), 124000);
+    assert.equal(Bootstrap.uploadBudget(100 << 20), 1200000);
+});
+
 test('a blob upload that does not match the pinned bytes is not sent', async t => {
     const f = await bootstrapFixture(t), snap = sized(INLINE_MAX + 1);
     await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap, upload: async buf => ({ ...fakeUpload(buf), fileSha256: crypto.randomBytes(32) }) }), { code: 'PRIMARY_BOOTSTRAP_UPLOAD_INVALID' });
@@ -878,6 +940,30 @@ test('a patch the server refused is not written again on resume', async t => {
         assert.deepEqual(journal(f), before);
         assert.equal(patchWrites(f).length, 1);
     }
+});
+
+// Whether a stopped attempt can go on is the journal's to say, so that what
+// the person is told next is a resume only when a resume can work.
+test('a stopped bootstrap says whether its attempt can be resumed, in the error and in the status', async t => {
+    const history = async () => chatSnapshot(1);
+    // Refused by WhatsApp: never again.
+    const f = await bootstrapFixture(t);
+    f.server.refusePatch = 'iq';
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history }), e => e.code === 'PRIMARY_LINK_IQ_REJECTED' && e.resumable === false);
+    const refused = (await f.client.getPrimaryLinkStatus()).bootstrap;
+    assert.equal(refused.resumable, false);
+    assert.equal(refused.errorCode, 'PRIMARY_LINK_IQ_REJECTED');
+    // Stopped by the link's own limit: a resume goes on.
+    const g = await bootstrapFixture(t);
+    g.control.hangAck = (node, i) => i === 2;
+    await assert.rejects(g.client.bootstrapPrimaryCompanion({ history, timeoutMs: 1000 }), e => e.code === 'PRIMARY_LINK_TIMEOUT' && e.resumable === true);
+    assert.equal((await g.client.getPrimaryLinkStatus()).bootstrap.resumable, true);
+    g.control.hangAck = null;
+    assert.equal((await g.client.bootstrapPrimaryCompanion({ history, resume: true, resendUncertain: true })).status, 'sent');
+    assert.equal((await g.client.getPrimaryLinkStatus()).bootstrap.resumable, false, 'sent: nothing left to resume');
+    // Refused before anything was recorded: nothing to say.
+    const h = await bootstrapFixture(t);
+    await assert.rejects(h.client.bootstrapPrimaryCompanion({ history, uploadTimeoutMs: 1 }), e => e.code === 'PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT_INVALID' && e.resumable === undefined);
 });
 
 test('a history the encoder refuses is HISTORY_INVALID, with the encoder error as its cause', async t => {

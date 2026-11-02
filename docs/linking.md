@@ -552,7 +552,7 @@ history handed to the companion: 12 chats, 340 messages, 20.0 KB (sent inline), 
 The history is handed over; whether Web has finished showing it cannot be seen from here. If Web stays on "Loading chats", run /link-status.
 ```
 
-A history over 64 KiB deflated is uploaded rather than sent inline, and the line then reads `(uploaded as a blob)`. Web should now show the chats. The shell cannot see Web's screen, so "handed over" is all it can claim. Then:
+A history over 64 KiB deflated is uploaded rather than sent inline, and the line then reads `(uploaded as a blob)`. The upload has time of its own, outside the 90 seconds the rest of the handover gets: a minute, and a second more for each 16 KiB of history (so an upload slower than about 128 kbit/s), at most 20 minutes. Web should now show the chats. The shell cannot see Web's screen, so "handed over" is all it can claim. Then:
 
 ```
 wa +447949738354> /linked-devices
@@ -703,7 +703,7 @@ const sent = await client.bootstrapPrimaryCompanion({ history: 'store' })
 | `messageStore` (client option) | Off unless `true` or `{ perChat, maxMessages }`. Without it `bootstrapPrimaryCompanion({ history: 'store' })` throws `PRIMARY_MESSAGE_STORE_DISABLED` and readiness reports a blocker. |
 | `getPrimaryMessageStore()` | The store's snapshot, or `null`. Never throws; a failure is said on `primary_message_store_error`. |
 | `getPrimaryLinkReadiness({ timeoutMs, signal })` | Whether a link can be finished, found out before anything is approved. Each blocker has a stable `code` and a `detail`. |
-| `bootstrapPrimaryCompanion({ history, upload, resume, resendUncertain, delta })` | The key share, the app-state patch and the history. `history: 'store'` reads this client's store; a function returning a snapshot sends a history of your own. `upload` is used only above 64 KiB deflated and defaults to the `md-msg-hist` media upload. `resume` and `resendUncertain` are as above. `delta` is experimental and not verified on real Web. |
+| `bootstrapPrimaryCompanion({ history, upload, resume, resendUncertain, delta, timeoutMs, uploadTimeoutMs })` | The key share, the app-state patch and the history. `history: 'store'` reads this client's store; a function returning a snapshot sends a history of your own. `upload` is used only above 64 KiB deflated and defaults to the `md-msg-hist` media upload. `resume` and `resendUncertain` are as above. `delta` is experimental and not verified on real Web. `timeoutMs` (1 000 to 90 000, default 90 000) is the time for everything but the upload (`PRIMARY_LINK_TIMEOUT`); the upload runs on a clock of its own, `uploadTimeoutMs` (1 000 to 3 600 000), by default a minute plus a second for each 16 KiB, at most 20 minutes (`PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT`). An error from a bootstrap that had started carries `resumable`: whether `resume: true` can go on from where it stopped; `getPrimaryLinkStatus().bootstrap.resumable` says the same. |
 | `unlockPrimaryLink()` | Breaks the link journal lock, as `/link-unlock` does. Returns `{ holder }` (`null` when none was held) and throws `PRIMARY_LINK_BUSY` while this process holds the journal. |
 | `getPrimaryLinkInvitations()` | Each pending request carries `companion`, the browser's short fingerprint (`null` when the request has none). A label, never authorisation. |
 

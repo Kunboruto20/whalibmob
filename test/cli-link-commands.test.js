@@ -857,6 +857,78 @@ test('a refused bootstrap step is not sent back to a resume the library would re
     assert.match(status, /cannot be resumed/);
 });
 
+// A bootstrap stopped by the link's own limits (its time, a cancel, a dropped
+// connection, a disk that refused the journal, an upload that did not go
+// through) has every step it got through recorded: the approval stands, and
+// the way on is the resume, never a proof or a new approval.
+const HANDOVER_STOPS = ['PRIMARY_LINK_TIMEOUT', 'PRIMARY_LINK_ABORTED', 'PRIMARY_LINK_STOPPED', 'PRIMARY_LINK_CONNECTION_CLOSED', 'PRIMARY_LINK_CONNECTION_REQUIRED',
+    'PRIMARY_LINK_IQ_UNCONFIRMED', 'PRIMARY_LINK_STORE_WRITE_FAILED', 'PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT', 'PRIMARY_BOOTSTRAP_UPLOAD_FAILED'];
+const coded = (code, extra) => Object.assign(new Error(code), { code }, extra);
+const DEVICE = { deviceId: 12, keyIndex: 3 };
+const stoppedAt = (bootstrapPhase, errorCode, extra = {}) => L.formatLinkStatus({ hasADV: true, confirmed: false, phase: 'awaiting_confirmation', startedAt: LINKED_AT, expectedDeviceId: 12,
+    bootstrapPhase, bootstrap: { phase: bootstrapPhase, errorCode, iq: null, ...extra }, devices: [PRIMARY, DEVICE] });
+// The line /link-status gives for the bootstrap: the last `next`.
+const handoverNext = lines => lines.filter(l => l.startsWith('next')).pop();
+
+test('a handover stopped by a timeout, a cancel or a dropped connection is pointed at the resume', () => {
+    for (const code of HANDOVER_STOPS) {
+        // From /link-bootstrap, and after the approval in /link-code or /link-qr.
+        for (const lines of [L.describeError(coded(code), 'bootstrap'), L.describeError(coded(code, { afterApproval: true }))]) {
+            const text = lines.join('\n');
+            assert.match(text, /\/link-bootstrap --resume/, code + '\n' + text);
+            assert.ok(!/\/link-confirm|try again|\/link-code|\/link-status/i.test(text), code + '\n' + text);
+        }
+        // Recorded on the attempt, as /link-status shows it.
+        for (const phase of ['prepared', 'key_share_accepted', 'critical_patch_accepted', 'history_prepared', 'history_uploaded']) {
+            const next = handoverNext(stoppedAt(phase, code, { resumable: true }));
+            assert.match(next, /\/link-bootstrap --resume\b(?! --resend)/, code + ' at ' + phase + ': ' + next);
+            assert.ok(!/\/link-confirm|try again/i.test(next), code + ' at ' + phase + ': ' + next);
+        }
+        // Stopped with a step sent and not answered: that resume needs the resend. (An upload comes before its step is sent.)
+        if (/UPLOAD/.test(code)) continue;
+        for (const phase of ['key_share_sending', 'history_sending', 'delta_sending']) {
+            assert.match(handoverNext(stoppedAt(phase, code, { resumable: true })), /\/link-bootstrap --resume --resend-uncertain/, code + ' at ' + phase);
+        }
+        // An unanswered patch write is settled by reading it back: no resend.
+        assert.match(handoverNext(stoppedAt('critical_patch_sending', code, { resumable: true })), /\/link-bootstrap --resume\b(?! --resend)/, code);
+    }
+    // The same codes from the approval itself keep their own advice.
+    assert.match(L.describeError(coded('PRIMARY_LINK_TIMEOUT')).join('\n'), /\/link-confirm/);
+    // A dropped connection is reconnected first.
+    assert.match(L.describeError(coded('PRIMARY_LINK_CONNECTION_CLOSED'), 'bootstrap').join('\n'), /\/reconnect.*\/link-bootstrap --resume/);
+    // An upload that ran out of time or failed is uploaded again from the saved copy.
+    for (const code of ['PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT', 'PRIMARY_BOOTSTRAP_UPLOAD_FAILED']) assert.match(L.explainError(code).next, /upload/i);
+});
+
+test('/link-status never tells anyone to run /link-status', () => {
+    const codes = [...libCodes(), 'PRIMARY_BOOTSTRAP_ACK_401', 'PRIMARY_LINK_SOMETHING_NEW', null];
+    const steps = [null, 'prepared', 'key_share_sending', 'critical_patch_sending', 'critical_patch_accepted', 'history_prepared', 'history_uploaded', 'history_sending', 'delta_sending', 'sent'];
+    const phases = ['idle', 'exchange', 'finish_verified', 'pair_device_sending', 'awaiting_confirmation', 'uncertain', 'verification_required', 'exchange_failed', 'committed', 'abandoned'];
+    let seen = 0;
+    for (const phase of phases) for (const devices of [[PRIMARY], [PRIMARY, DEVICE]]) for (const bootstrapPhase of steps) {
+        for (const errorCode of bootstrapPhase ? codes : [null]) for (const resumable of bootstrapPhase ? [undefined, true, false] : [undefined]) {
+            const text = L.formatLinkStatus({ hasADV: true, confirmed: false, phase, startedAt: LINKED_AT, expectedDeviceId: 12, bootstrapPhase,
+                bootstrap: bootstrapPhase ? { phase: bootstrapPhase, errorCode, iq: null, resumable } : undefined, devices }).join('\n');
+            assert.ok(!text.includes('/link-status'), phase + ' / ' + bootstrapPhase + ' / ' + errorCode + '\n' + text);
+            seen++;
+        }
+    }
+    assert.ok(seen > 5000, 'only ' + seen + ' states');
+});
+
+test('an attempt that can never continue is shown with the way to start over, whatever its code', () => {
+    // A refused patch write answers with an IQ error: final, and a resume would be refused as already attempted.
+    const refused = handoverNext(stoppedAt('critical_patch_sending', 'PRIMARY_LINK_IQ_REJECTED', { resumable: false }));
+    assert.match(refused, /cannot be resumed/);
+    assert.ok(!refused.includes('/link-bootstrap'), refused);
+    // The same code on a read that may simply be tried again is a resume.
+    assert.match(handoverNext(stoppedAt('critical_patch_sending', 'PRIMARY_LINK_IQ_REJECTED', { resumable: true })), /\/link-bootstrap --resume/);
+    // A patch WhatsApp refused is never written again.
+    const patch = L.explainError('PRIMARY_BOOTSTRAP_PATCH_REJECTED').next;
+    assert.match(patch, /cannot be resumed/);
+    assert.ok(!patch.includes('/link-bootstrap'), patch);
+});
+
 test('the steps people are told to take are ones this CLI can do', () => {
     assert.match(L.explainError('PRIMARY_MESSAGE_STORE_DISABLED').next, /without --no-message-store/);
     // This tool cannot unlink a companion from the primary: it is logged out where it runs.

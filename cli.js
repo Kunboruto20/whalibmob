@@ -1657,7 +1657,7 @@ async function linkCommand(cmd, p, line) {
       }
     }
   } catch (e) {
-    failLink(e, cmd === '/link-unlock' ? 'unlock' : undefined);
+    failLink(e, cmd === '/link-unlock' ? 'unlock' : cmd === '/link-bootstrap' ? 'bootstrap' : undefined);
   } finally {
     _linkActive--;
   }

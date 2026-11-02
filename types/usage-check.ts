@@ -196,6 +196,11 @@ async function checkLinkCommands(client: wa.WhalibmobClient, readiness: wa.Prima
   // The question names the browser the request was chosen for.
   await L.runLinkCode({ client, code: 'ABCD1234', confirm: async (ready: wa.PrimaryLinkReadiness, ask: wa.LinkConfirmPrompt) => ready.ready && ask.question.length > 0 && ask.companion !== undefined });
   try { await L.runLinkQr({ client, payload: 'x' }); } catch (error) { L.describeError(error); }
+  try { await client.bootstrapPrimaryCompanion({ history: 'store', resume: true }); } catch (error) { L.describeError(error, 'bootstrap'); }
+  const status = await client.getPrimaryLinkStatus();
+  const resumable: boolean | undefined = status.bootstrap?.resumable;
+  const onStatus: wa.LinkExplanation = L.explainError(status.bootstrap?.errorCode, { resumable, bootstrapPhase: status.bootstrapPhase }, 'status');
+  void onStatus;
   L.formatLinkedDevices({ phone: '447949738354', devices: await client.listLinkedDevices(), journal: await client.getPrimaryLinkStatus(), history: { chats: 1, records: 2 } });
   const notice: string = L.formatInvitationNotice(client.getPrimaryLinkInvitations()[0], Date.now());
   const later: wa.LinkInvitationChoice = L.chooseInvitation(client.getPrimaryLinkInvitations(), 1, () => Date.now());
@@ -263,6 +268,10 @@ async function checkPrimaryBootstrap(client: wa.WhalibmobClient) {
   // Recovery: continue the recorded attempt; send again only a step whose reply never came.
   await client.bootstrapPrimaryCompanion({ history: 'store', resume: true });
   await client.bootstrapPrimaryCompanion({ history: 'store', resume: true, resendUncertain: true });
+  // Its own time, and a large history's upload on a clock of its own.
+  await client.bootstrapPrimaryCompanion({ history: 'store', timeoutMs: 90000, uploadTimeoutMs: 600000 });
+  // @ts-expect-error A time is a number of milliseconds.
+  await client.bootstrapPrimaryCompanion({ history: 'store', uploadTimeoutMs: '10m' });
   // Experimental, and not verified on real WhatsApp Web.
   const withDelta = await client.bootstrapPrimaryCompanion({ history: 'store', delta: true });
   const newer: number | undefined = withDelta.delta?.records;

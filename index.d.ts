@@ -1068,6 +1068,13 @@ export interface PrimaryBootstrapOptions {
   /** Retry a key share the server refused with 479, once, with the same key. */
   recoverRejected?: boolean;
   signal?: AbortSignal;
+  /** Time for the bootstrap, the history upload aside: 1000 to 90000 ms, default 90000 (PRIMARY_LINK_TIMEOUT). */
+  timeoutMs?: number;
+  /**
+   * Time for the history upload, which runs on a clock of its own: 1000 to 3600000 ms. Default: a minute, and a
+   * second more for each 16 KiB of the history, at most 20 minutes (PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT).
+   */
+  uploadTimeoutMs?: number;
 }
 export interface PrimaryBootstrapResult {
   status: 'sent';
@@ -1186,7 +1193,7 @@ export declare class WhalibmobClient extends EventEmitter {
   reconcilePrimaryLink(proof: PrimaryCompanionProof, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PrimaryLinkResult>;
   listLinkedDevices(): Promise<Array<{ deviceId: number; keyIndex: number }>>;
   /** Read-only: fresh own-device list and non-secret durable linking progress. */
-  getPrimaryLinkStatus(): Promise<{ hasADV: boolean; confirmed: boolean; phase: string; startedAt: number | null; expectedDeviceId: number | null; bootstrapPhase: string | null; bootstrap?: { phase: string; errorCode: string | null; iq: object | null; remote?: object }; devices: Array<{ deviceId: number; keyIndex: number }> }>;
+  getPrimaryLinkStatus(): Promise<{ hasADV: boolean; confirmed: boolean; phase: string; startedAt: number | null; expectedDeviceId: number | null; bootstrapPhase: string | null; bootstrap?: { phase: string; errorCode: string | null; iq: object | null; /** Whether a resume can go on from here: false once sent, or once a step was refused. */ resumable: boolean; remote?: object }; devices: Array<{ deviceId: number; keyIndex: number }> }>;
   /** Retire a >=5 minute pending transaction only after two exact baseline server lists. Never removes a device or reuses its reserved index. */
   retireAbsentPrimaryLink(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<{ status: 'abandoned'; operationId: string }>;
   /**
@@ -2280,7 +2287,7 @@ export interface LinkJournalView {
   startedAt?: number | null;
   expectedDeviceId?: number | null;
   bootstrapPhase?: string | null;
-  bootstrap?: { phase?: string; errorCode?: string | null };
+  bootstrap?: { phase?: string; errorCode?: string | null; resumable?: boolean };
   devices?: Array<{ deviceId: number; keyIndex: number }>;
   method?: string;
   deviceId?: number;
@@ -2296,6 +2303,8 @@ export interface LinkCommandError extends Error {
   afterApproval?: boolean;
   invitationId?: string;
   operationId?: string;
+  /** From a bootstrap that had started: whether a resume can go on from where it stopped. */
+  resumable?: boolean;
 }
 /** What `confirm` is asked about: the browser the request was chosen for (a QR names its own). */
 export interface LinkConfirmPrompt {
@@ -2347,13 +2356,19 @@ export interface LinkCommandsModule {
   /** One line for a request as it arrives (the `primary_link_invitation` event): `  link request   companion <c>   code window 3:00   id <first 8>`. */
   formatInvitationNotice(invitation: PrimaryLinkInvitation, now?: number | (() => number)): string;
   /**
-   * `error` is optional: a busy journal's `holder` makes the message say who has it. `context` is `'unlock'` when the
-   * error came from the unlock command itself (a takeover in progress is then told to wait and run it again).
+   * `error` is optional: a busy journal's `holder` makes the message say who has it; a bootstrap's `resumable` false
+   * says its attempt can never continue, and `bootstrapPhase` where it stopped. `context` is `'unlock'` when the error
+   * came from the unlock command itself (a takeover in progress is then told to wait and run it again), `'bootstrap'`
+   * when it came from a bootstrap (a timeout, a cancel or a dropped connection is then answered with the resume), and
+   * `'status'` for the error a bootstrap recorded, as `/link-status` shows it.
    */
-  explainError(code: unknown, error?: { holder?: PrimaryLinkHolder | null }, context?: 'unlock'): LinkExplanation;
+  explainError(code: unknown, error?: { holder?: PrimaryLinkHolder | null; resumable?: boolean; bootstrapPhase?: string | null } | null, context?: 'unlock' | 'bootstrap' | 'status'): LinkExplanation;
   explainBlocker(blocker: PrimaryLinkBlocker | { code?: string; detail?: object }): LinkExplanation;
-  /** An error caught from the link commands, as lines: what happened, what to do, the code. */
-  describeError(error: unknown, context?: 'unlock'): string[];
+  /**
+   * An error caught from the link commands, as lines: what happened, what to do, the code. `context` as for
+   * `explainError`; an error marked `afterApproval` is read as a bootstrap's.
+   */
+  describeError(error: unknown, context?: 'unlock' | 'bootstrap'): string[];
   formatReadiness(readiness: PrimaryLinkReadiness): string[];
   formatBootstrapResult(result: PrimaryBootstrapResult | undefined): string[];
   formatLinkedDevices(options: {
