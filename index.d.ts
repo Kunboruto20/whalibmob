@@ -1134,6 +1134,26 @@ export type PrimaryLinkBlocker =
       serverVersion: number | null } }
   | { code: 'PRIMARY_BOOTSTRAP_NAME_REQUIRED'; detail: { maxLength: number } }
   | { code: 'PRIMARY_MESSAGE_STORE_DISABLED'; detail: { reason: 'disabled' | 'unreadable'; code?: string } };
+/** `getPrimaryLinkStatus()`: the link journal's non-secret state, with a fresh device list. */
+export interface PrimaryLinkStatus {
+  hasADV: boolean;
+  /** A companion proof was reconciled (`committed`) and the device list still agrees. */
+  confirmed: boolean;
+  phase: string;
+  startedAt: number | null;
+  /** How the companion was approved; null before an approval, or for a journal that did not record it. */
+  method: 'code' | 'qr' | null;
+  /** When the approval went through (milliseconds since the epoch); null before that, or for an older journal. */
+  linkedAt: number | null;
+  expectedDeviceId: number | null;
+  /** The companion this link made, once a reconciled proof or the bootstrap (device list and identity key) has tied it down. */
+  deviceId: number | null;
+  bootstrapPhase: string | null;
+  bootstrap?: { phase: string; errorCode: string | null; iq: object | null; /** Whether a resume can go on from here: false once sent, or once a step was refused. */ resumable: boolean; remote?: object };
+  /** What the history handed over held, recorded when it was sent; null until then. */
+  delivered: { chats: number; records: number } | null;
+  devices: Array<{ deviceId: number; keyIndex: number }>;
+}
 /** What `getPrimaryLinkReadiness()` finds out before a link is approved. */
 export interface PrimaryLinkReadiness {
   /** No blocker. Whether `needsConfirmation` is set is a separate question. */
@@ -1193,7 +1213,7 @@ export declare class WhalibmobClient extends EventEmitter {
   reconcilePrimaryLink(proof: PrimaryCompanionProof, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PrimaryLinkResult>;
   listLinkedDevices(): Promise<Array<{ deviceId: number; keyIndex: number }>>;
   /** Read-only: fresh own-device list and non-secret durable linking progress. */
-  getPrimaryLinkStatus(): Promise<{ hasADV: boolean; confirmed: boolean; phase: string; startedAt: number | null; expectedDeviceId: number | null; bootstrapPhase: string | null; bootstrap?: { phase: string; errorCode: string | null; iq: object | null; /** Whether a resume can go on from here: false once sent, or once a step was refused. */ resumable: boolean; remote?: object }; devices: Array<{ deviceId: number; keyIndex: number }> }>;
+  getPrimaryLinkStatus(): Promise<PrimaryLinkStatus>;
   /** Retire a >=5 minute pending transaction only after two exact baseline server lists. Never removes a device or reuses its reserved index. */
   retireAbsentPrimaryLink(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<{ status: 'abandoned'; operationId: string }>;
   /**
@@ -2278,19 +2298,21 @@ export interface LinkCommandsClient {
   bootstrapPrimaryCompanion(options: PrimaryBootstrapOptions): Promise<PrimaryBootstrapResult>;
 }
 /**
- * `getPrimaryLinkStatus()`, optionally with what only the caller may know:
- * how the companion was linked, and which device the latest link made.
+ * `getPrimaryLinkStatus()` (a `PrimaryLinkStatus`), or as much of it as a caller has: how the companion was linked and
+ * when, which device the latest link made, and what history it was handed.
  */
 export interface LinkJournalView {
   phase?: string;
   confirmed?: boolean;
   startedAt?: number | null;
+  linkedAt?: number | null;
   expectedDeviceId?: number | null;
   bootstrapPhase?: string | null;
   bootstrap?: { phase?: string; errorCode?: string | null; resumable?: boolean };
+  delivered?: { chats: number; records: number } | null;
   devices?: Array<{ deviceId: number; keyIndex: number }>;
-  method?: string;
-  deviceId?: number;
+  method?: string | null;
+  deviceId?: number | null;
   keyIndex?: number;
 }
 /** What the link commands throw: the library's error, with the link's own context attached. */

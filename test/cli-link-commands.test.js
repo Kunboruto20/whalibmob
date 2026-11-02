@@ -637,6 +637,27 @@ test('formatLinkedDevices shows the primary, each companion, binding and history
     ]);
 });
 
+// The spec 6.9 row from getPrimaryLinkStatus() alone: how and when it was
+// linked, and what history it was handed, are in the journal.
+test('formatLinkedDevices reads the method, the time, the device and the delivered history from the status', () => {
+    const status = { hasADV: false, confirmed: false, phase: 'awaiting_confirmation', startedAt: LINKED_AT - 2 * MIN, method: 'code', linkedAt: LINKED_AT,
+        expectedDeviceId: null, deviceId: 12, bootstrapPhase: 'sent', bootstrap: { phase: 'sent', errorCode: null, iq: null, resumable: false },
+        delivered: { chats: 12, records: 340 }, devices: [PRIMARY, { deviceId: 12, keyIndex: 3 }, { deviceId: 15, keyIndex: 4 }] };
+    assert.deepEqual(L.formatLinkedDevices({ phone: '447949738354', devices: status.devices, journal: status }), [
+        'linked devices  +447949738354',
+        '  #0   this phone (primary)',
+        '  #12  companion   key index 3   linked 2026-11-02 15:31 by code   binding unconfirmed   history delivered (12 chats, 340 msgs)',
+        '  #15  companion   key index 4   binding unconfirmed   history unknown'
+    ]);
+    // By QR, and not sent yet: no counts.
+    const qr = L.formatLinkedDevices({ phone: '1', devices: [{ deviceId: 12, keyIndex: 3 }], journal: { ...status, method: 'qr', bootstrapPhase: 'history_sending', delivered: null } })[2];
+    assert.match(qr, /linked 2026-11-02 15:31 by qr/);
+    assert.match(qr, /history stopped at history_sending$/);
+    // A journal from before linkedAt was kept: the approval's start stands in for it.
+    const older = L.formatLinkedDevices({ phone: '1', devices: [{ deviceId: 12, keyIndex: 3 }], journal: { ...status, linkedAt: null, startedAt: LINKED_AT } })[2];
+    assert.match(older, /linked 2026-11-02 15:31 by code/);
+});
+
 test('formatLinkedDevices claims a confirmed binding only for a reconciled proof', () => {
     const base = { phone: '+447949738354', devices: [{ deviceId: 12, keyIndex: 3 }], history: { chats: 1, records: 2 } };
     const row = journal => L.formatLinkedDevices({ ...base, journal })[2];

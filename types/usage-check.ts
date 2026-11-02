@@ -197,7 +197,13 @@ async function checkLinkCommands(client: wa.WhalibmobClient, readiness: wa.Prima
   await L.runLinkCode({ client, code: 'ABCD1234', confirm: async (ready: wa.PrimaryLinkReadiness, ask: wa.LinkConfirmPrompt) => ready.ready && ask.question.length > 0 && ask.companion !== undefined });
   try { await L.runLinkQr({ client, payload: 'x' }); } catch (error) { L.describeError(error); }
   try { await client.bootstrapPrimaryCompanion({ history: 'store', resume: true }); } catch (error) { L.describeError(error, 'bootstrap'); }
-  const status = await client.getPrimaryLinkStatus();
+  const status: wa.PrimaryLinkStatus = await client.getPrimaryLinkStatus();
+  const how: 'code' | 'qr' | null = status.method;
+  const when: number | null = status.linkedAt;
+  const device: number | null = status.deviceId;
+  const delivered: number | undefined = status.delivered?.records;
+  void how; void when; void device; void delivered;
+  L.formatLinkedDevices({ phone: '447949738354', devices: status.devices, journal: status });
   const resumable: boolean | undefined = status.bootstrap?.resumable;
   const onStatus: wa.LinkExplanation = L.explainError(status.bootstrap?.errorCode, { resumable, bootstrapPhase: status.bootstrapPhase }, 'status');
   void onStatus;

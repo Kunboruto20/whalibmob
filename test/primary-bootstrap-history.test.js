@@ -966,6 +966,37 @@ test('a stopped bootstrap says whether its attempt can be resumed, in the error 
     await assert.rejects(h.client.bootstrapPrimaryCompanion({ history, uploadTimeoutMs: 1 }), e => e.code === 'PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT_INVALID' && e.resumable === undefined);
 });
 
+// /linked-devices shows how a companion was linked, when, and what history it
+// was handed. All of it is in the journal, so it survives a restart.
+test('the status says how and when the companion was linked, which device it is, and what history it got', async t => {
+    const f = await bootstrapFixture(t), before = Date.now();
+    const approved = await f.client.getPrimaryLinkStatus();
+    assert.equal(approved.method, 'code');
+    assert.ok(approved.linkedAt >= journal(f).transaction.startedAt && approved.linkedAt <= Date.now(), 'linked when the approval went through');
+    assert.equal(approved.deviceId, null, 'no device is claimed before one is seen');
+    assert.equal(approved.delivered, null);
+
+    const snap = snapshot({ seq: 4, chats: [{ id: ANA, conversationTimestamp: T + 3, unreadCount: 0 }, { id: GROUP, conversationTimestamp: T + 2, unreadCount: 0 }],
+        records: { [ANA]: [rec('A1', 1, T + 1), rec('A2', 2, T + 3)], [GROUP]: [rec('G1', 3, T + 2, { participant: ANA })] } });
+    // Stopped part-way: the device is known, nothing is delivered yet.
+    failPhaseOnce(f, 'history_sending');
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+    const stopped = await f.client.getPrimaryLinkStatus();
+    assert.equal(stopped.deviceId, 7);
+    assert.equal(stopped.delivered, null);
+    await f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(9), resume: true });
+
+    // After a restart, from the journal alone.
+    f.client._closePrimaryLinking();
+    const status = await f.client.getPrimaryLinkStatus();
+    assert.equal(status.method, 'code');
+    assert.equal(status.linkedAt, approved.linkedAt);
+    assert.equal(status.deviceId, 7);
+    assert.deepEqual(status.delivered, { chats: 2, records: 3 });
+    assert.equal(journal(f).transaction.bootstrap.delivered.records, 3);
+    assert.ok(approved.linkedAt >= before - 60000);
+});
+
 test('a history the encoder refuses is HISTORY_INVALID, with the encoder error as its cause', async t => {
     const noBytes = seq => ({ id: 'NORAW', seq, fromMe: false, ts: T, status: 3 });
     const broken = snapshot({ seq: 1, chats: [{ id: ANA, conversationTimestamp: T, unreadCount: 0 }], records: { [ANA]: [noBytes(1)] } });

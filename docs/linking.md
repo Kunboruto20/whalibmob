@@ -558,10 +558,10 @@ A history over 64 KiB deflated is uploaded rather than sent inline, and the line
 wa +447949738354> /linked-devices
 linked devices  +447949738354
   #0   this phone (primary)
-  #12  companion   key index 3   linked 2026-11-02 15:31   binding unconfirmed   history delivered (12 chats, 340 msgs)
+  #12  companion   key index 3   linked 2026-11-02 15:31 by code   binding unconfirmed   history delivered (12 chats, 340 msgs)
 ```
 
-`#12` is the companion's device slot, `key index` its place in the account's device list, and `linked` the time the approval was made (your local time). `binding unconfirmed` is normal for a Web link, see [Limits](#limits). `history delivered` carries the counts only for a handover made in this run of the shell; after a restart it says `history delivered` without them. The example numbers are made up.
+`#12` is the companion's device slot, `key index` its place in the account's device list, `linked` the time the approval went through (your local time) and `by code` or `by qr` how. `binding unconfirmed` is normal for a Web link, see [Limits](#limits). `history delivered` gives the chats and messages of the history that was handed over. All of it is kept in the link journal, so it reads the same after a restart. The example numbers are made up.
 
 `/link-status` says where the link stands and what to do next:
 

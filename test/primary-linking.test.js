@@ -158,8 +158,10 @@ test('read-only linking status refreshes the device list without exposing or cha
     const file = path.join(f.dir, '15550000123.primary-linking.json');
     const before = fs.readFileSync(file);
     const status = await f.client.getPrimaryLinkStatus();
-    assert.deepEqual(Object.keys(status).sort(), ['bootstrapPhase', 'confirmed', 'devices', 'expectedDeviceId', 'hasADV', 'phase', 'startedAt']);
+    // How and when it was linked, and what it was handed, are not secret; the reservation is.
+    assert.deepEqual(Object.keys(status).sort(), ['bootstrapPhase', 'confirmed', 'delivered', 'deviceId', 'devices', 'expectedDeviceId', 'hasADV', 'linkedAt', 'method', 'phase', 'startedAt']);
     assert.equal(status.phase, 'awaiting_confirmation');
+    assert.equal(status.method, 'code');
     assert.equal(status.hasADV, false);
     assert.deepEqual(status.devices, [{ deviceId: 0, keyIndex: 0 }, { deviceId: 7, keyIndex: 1 }]);
     assert.deepEqual(fs.readFileSync(file), before);
@@ -533,6 +535,11 @@ test('QR awaiting confirmation survives a normal owner restart; reconcile never 
     assert.equal(f.requests.length - before, 1);
     assert.equal(f.pairWrites, 1);
     await assert.rejects(f.client.approveCompanionQr(f.qr), { code: 'PRIMARY_LINK_QR_ALREADY_USED' });
+    // How it was linked, and the device the proof named, outlive the restart.
+    const status = await f.client.getPrimaryLinkStatus();
+    assert.equal(status.method, 'qr');
+    assert.ok(Number.isSafeInteger(status.linkedAt) && status.linkedAt >= status.startedAt);
+    assert.equal(status.deviceId, 7);
 });
 
 for (const [settings, expected] of [

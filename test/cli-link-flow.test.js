@@ -43,11 +43,12 @@ const COMPLETE = { ...PARTIAL, needsConfirmation: false,
   history: { ...PARTIAL.history, capture: { origin: 'registration', since: new Date(2026, 9, 1, 9, 0).getTime() } } };
 const SENT = { mode: 'first', history: { chats: 3, records: 42, bytes: 2048, inline: true } };
 const DEVICES = [{ deviceId: 0, keyIndex: 0 }, { deviceId: 3, keyIndex: 1 }];
+// getPrimaryLinkStatus() as the library returns it, the journal's link facts included.
 const AWAITING = {
-  phase: 'awaiting_confirmation', confirmed: false, startedAt: STARTED, expectedDeviceId: 3,
-  bootstrapPhase: 'sent', bootstrap: { phase: 'sent', errorCode: null, iq: null }, devices: DEVICES, hasADV: false
+  phase: 'awaiting_confirmation', confirmed: false, startedAt: STARTED - 60000, method: 'code', linkedAt: STARTED, expectedDeviceId: 3, deviceId: 3,
+  bootstrapPhase: 'sent', bootstrap: { phase: 'sent', errorCode: null, iq: null, resumable: false }, delivered: { chats: 3, records: 42 }, devices: DEVICES, hasADV: false
 };
-const COMMITTED = { ...AWAITING, phase: 'committed', confirmed: true, bootstrapPhase: null, bootstrap: undefined };
+const COMMITTED = { ...AWAITING, phase: 'committed', confirmed: true, bootstrapPhase: null, bootstrap: undefined, delivered: null };
 
 // A companion's public proof, in the shape lib/WhatsAppWebProof.js accepts.
 const b64 = (n, fill) => Buffer.alloc(n, fill).toString('base64');
@@ -225,9 +226,9 @@ test('the owner\'s flow: connect, requests, choose, confirm, approve, hand over,
   seen = await wa.type('/linked-devices');
   assert.ok(has(seen, 'linked devices  +' + PHONE), seen);
   assert.ok(has(seen, '  #0   this phone (primary)'), seen);
-  assert.ok(has(seen, '  #3   companion   key index 1   linked 2026-11-02 15:31   binding unconfirmed   history delivered (3 chats, 42 msgs)'), seen);
+  assert.ok(has(seen, '  #3   companion   key index 1   linked 2026-11-02 15:31 by code   binding unconfirmed   history delivered (3 chats, 42 msgs)'), seen);
   seen = await wa.type('/link-status');
-  assert.ok(has(seen, 'link       approval sent, not confirmed with a companion proof, started 2026-11-02 15:31'), seen);
+  assert.ok(has(seen, 'link       approval sent, not confirmed with a companion proof, started 2026-11-02 15:30'), seen);
   assert.ok(has(seen, 'bootstrap  sent'), seen);
   assert.ok(has(seen, 'companions #3 key index 1'), seen);
 

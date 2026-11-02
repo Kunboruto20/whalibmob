@@ -618,10 +618,6 @@ let _messageStoreOn = true;
 // redrawing the prompt in the middle of them.
 let _linkActive = 0;
 let _linkAsking = false;
-// What the last handover in this run sent, and from which number:
-// { phone, history: { chats, records } }, for the history column of
-// /linked-devices.
-let _linkHistory = null;
 
 // ─── shell help ───────────────────────────────────────────────────────────────
 
@@ -1500,14 +1496,8 @@ const confirmHistory = (readiness, ask) =>
 // The number this connection is the primary for.
 const linkPhone = () => String((_client && _client.store && _client.store.phoneNumber) || _phone || '');
 
-function noteHandover(history) {
-  if (history) _linkHistory = { phone: linkPhone(), history };
-}
-
 function linkOutcome(result) {
-  if (!result) return;
-  if (result.status === 'aborted') out('cancelled: nothing was approved');
-  if (result.status === 'sent') noteHandover(result.bootstrap && result.bootstrap.history);
+  if (result && result.status === 'aborted') out('cancelled: nothing was approved');
 }
 
 // The proof /link-confirm takes: a file, or the JSON itself. It is read off
@@ -1572,15 +1562,11 @@ async function linkCommand(cmd, p, line) {
       case '/linked-devices': {
         if (p.length > 1) return linkUsage('/linked-devices');
         requirePrimary();
-        // The status carries the device list and the journal, from one query.
+        // The status carries the device list and the journal, from one query:
+        // how and when the companion was linked and what history it was handed
+        // are kept in the journal, so they outlive the run that made the link.
         const status = await _client.getPrimaryLinkStatus();
-        const phone  = linkPhone();
-        printLines(LinkCli.formatLinkedDevices({
-          phone,
-          devices: status && status.devices,
-          journal: status,
-          history: _linkHistory && _linkHistory.phone === phone ? _linkHistory.history : undefined
-        }));
+        printLines(LinkCli.formatLinkedDevices({ phone: linkPhone(), devices: status && status.devices, journal: status }));
         return;
       }
 
@@ -1638,7 +1624,6 @@ async function linkCommand(cmd, p, line) {
         out('sending the stored history to the companion...');
         const result = await _client.bootstrapPrimaryCompanion(options);
         printLines(LinkCli.formatBootstrapResult(result));
-        noteHandover(result && result.history);
         return;
       }
 
