@@ -640,6 +640,19 @@ An approval and the handover of the history are two steps. If the second one sto
 
 There is no blind resend. A plain `/link-bootstrap` after an attempt is refused as already attempted (`PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED`); `--resume` continues the recorded attempt instead, and is harmless when none was recorded. A step that was sent and never answered stops the attempt with `PRIMARY_BOOTSTRAP_KEY_SHARE_UNCERTAIN` or `PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN`; only `--resend-uncertain` sends it again, under the same message id. A step the other side **refused** is never sent again; the shell then tells you to start over (log out on Web, `/linked-devices`, `/link-retire`, `/link-code` with a new code). A dropped connection mid-handover leaves the link uncertain and `--resume` continues it. `--resend-uncertain` on its own counts as a resume, and the shell says so.
 
+#### Testing an interrupted handover
+
+To check a resume by hand, the bootstrap can be made to stop at a phase of your choosing. Set `WA_DEBUG_BOOTSTRAP_STOP_AFTER` to the phase, and the program kills itself the moment that phase is written to the link journal: the same as `kill -9`, with no cleanup, so what is left on disk is what a real crash leaves.
+
+```sh
+WA_DEBUG_BOOTSTRAP_STOP_AFTER=history_uploaded wa connect 447949738354
+# /link-code ...   the program dies right after the history blob is uploaded and recorded
+wa connect 447949738354
+# /link-bootstrap --resume   sends the same pinned bytes
+```
+
+The phases, in order: `prepared`, `key_share_sending`, `key_share_accepted`, `critical_patch_sending`, `critical_patch_accepted`, `history_prepared`, `history_uploaded` (a blob only), `history_sending`, `history_accepted`, then `delta_prepared`, `delta_uploaded`, `delta_sending` and `delta_accepted` (the experimental delta only), and `sent`. A re-link has no `critical_patch_*` phases. Only one of these names turns it on; anything else, or the variable unset, does nothing. A stop at `key_share_sending`, `history_sending` or `delta_sending` comes before that message goes out, and the resume then stops with `..._UNCERTAIN` and asks for `--resend-uncertain`; a stop at `critical_patch_sending` is settled on resume by reading the server's copy back. The restarted program takes the journal's lock over by itself, as after any crash on the same machine. It is a testing aid: never leave it set.
+
 The link journal (`<phone>.primary-linking.json`) is guarded by a lock file beside it, so that two programs cannot write it at once. When a program dies holding it:
 
 - **A dead holder on the same machine is recovered automatically.** The lock names its holder's process, machine, boot and process namespace; when all of those match this machine and the process is gone, the next program takes the lock over without being asked.
