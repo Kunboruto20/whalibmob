@@ -23,6 +23,9 @@ const NOW = new Date(2026, 10, 2, 15, 40).getTime();       // local time: the ou
 const LINKED_AT = new Date(2026, 10, 2, 15, 31).getTime();
 const at = (y, mo, d, h, mi) => new Date(y, mo - 1, d, h, mi).getTime();
 
+// Requests are judged against a clock, so these hand them the one their expiries were made from.
+const grp = (list, now = NOW) => L.groupInvitations(list, now);
+const pick = (list, selector, now = NOW) => L.chooseInvitation(list, selector, now);
 const id = ch => ch.repeat(64);                           // an invitation id is a 64-hex sha256
 const inv = (ch, companion, expiresAt) => ({ id: id(ch), expiresAt, companion });
 
@@ -30,7 +33,7 @@ const inv = (ch, companion, expiresAt) => ({ id: id(ch), expiresAt, companion })
 
 test('same-companion duplicates collapse to the newest', () => {
     // Web sends the same request about 200 ms apart from one browser.
-    const groups = L.groupInvitations([
+    const groups = grp([
         inv('a', '1a2b3c4d', NOW + 100),
         inv('b', '1a2b3c4d', NOW + 300),
         inv('c', '1a2b3c4d', NOW + 200)
@@ -38,72 +41,72 @@ test('same-companion duplicates collapse to the newest', () => {
     assert.deepEqual(groups, [{ companion: '1a2b3c4d', newest: { id: id('b'), expiresAt: NOW + 300 }, count: 3 }]);
 
     // A tie goes to the later arrival, which is the later entry in the journal.
-    const tie = L.groupInvitations([inv('a', '1a2b3c4d', NOW), inv('b', '1a2b3c4d', NOW)]);
+    const tie = grp([inv('a', '1a2b3c4d', NOW + 5), inv('b', '1a2b3c4d', NOW + 5)]);
     assert.equal(tie[0].newest.id, id('b'));
 
     // Only a unique choice is made on its own.
-    assert.deepEqual(L.chooseInvitation([inv('a', '1a2b3c4d', NOW + 1), inv('b', '1a2b3c4d', NOW + 2)]), { id: id('b') });
+    assert.deepEqual(pick([inv('a', '1a2b3c4d', NOW + 1), inv('b', '1a2b3c4d', NOW + 2)]), { id: id('b') });
 });
 
 test('two companions require an explicit choice', () => {
     const list = [inv('a', '1a2b3c4d', NOW + 100), inv('b', '99887766', NOW + 200), inv('c', '1a2b3c4d', NOW + 300)];
-    const groups = L.groupInvitations(list);
+    const groups = grp(list);
     // Newest first: the browser that asked last is listed first.
     assert.deepEqual(groups.map(g => [g.companion, g.count, g.newest.id]), [['1a2b3c4d', 2, id('c')], ['99887766', 1, id('b')]]);
-    const choice = L.chooseInvitation(list);
+    const choice = pick(list);
     assert.deepEqual(Object.keys(choice), ['ambiguous']);
     assert.deepEqual(choice.ambiguous, groups);
 });
 
 test('invitations with no fingerprint are never grouped with each other', () => {
     // A 32-bit label is not proof, and an entry without one is not a duplicate of anything.
-    const groups = L.groupInvitations([inv('a', null, NOW + 1), inv('b', null, NOW + 2)]);
+    const groups = grp([inv('a', null, NOW + 1), inv('b', null, NOW + 2)]);
     assert.equal(groups.length, 2);
     assert.deepEqual(groups.map(g => [g.companion, g.count]), [[null, 1], [null, 1]]);
-    assert.ok('ambiguous' in L.chooseInvitation([inv('a', null, NOW + 1), inv('b', null, NOW + 2)]));
+    assert.ok('ambiguous' in pick([inv('a', null, NOW + 1), inv('b', null, NOW + 2)]));
 
     // Not with a fingerprinted one either.
-    assert.ok('ambiguous' in L.chooseInvitation([inv('a', null, NOW + 1), inv('b', '1a2b3c4d', NOW + 2)]));
+    assert.ok('ambiguous' in pick([inv('a', null, NOW + 1), inv('b', '1a2b3c4d', NOW + 2)]));
 
     // A lone one is a lone choice.
-    assert.deepEqual(L.chooseInvitation([inv('a', null, NOW + 1)]), { id: id('a') });
+    assert.deepEqual(pick([inv('a', null, NOW + 1)]), { id: id('a') });
 });
 
 test('no invitation is none, and so is a selector that matches nothing', () => {
-    assert.deepEqual(L.chooseInvitation([]), { none: true });
-    assert.deepEqual(L.chooseInvitation([], '1'), { none: true });
-    assert.deepEqual(L.chooseInvitation(undefined), { none: true });
+    assert.deepEqual(pick([]), { none: true });
+    assert.deepEqual(pick([], '1'), { none: true });
+    assert.deepEqual(pick(undefined), { none: true });
     const list = [inv('a', '1a2b3c4d', NOW + 1), inv('b', '99887766', NOW + 2)];
-    assert.deepEqual(L.chooseInvitation(list, '3'), { none: true });
-    assert.deepEqual(L.chooseInvitation(list, '0'), { none: true });
-    assert.deepEqual(L.chooseInvitation(list, 'zzzzzz'), { none: true });
-    assert.deepEqual(L.chooseInvitation(list, 'ab12'), { none: true });     // too short to be a prefix, not a number
-    assert.deepEqual(L.chooseInvitation(list, 'cccccc'), { none: true });   // a prefix nothing has
+    assert.deepEqual(pick(list, '3'), { none: true });
+    assert.deepEqual(pick(list, '0'), { none: true });
+    assert.deepEqual(pick(list, 'zzzzzz'), { none: true });
+    assert.deepEqual(pick(list, 'ab12'), { none: true });     // too short to be a prefix, not a number
+    assert.deepEqual(pick(list, 'cccccc'), { none: true });   // a prefix nothing has
 });
 
 test('numeric and prefix selectors pick the right invitation', () => {
     const list = [inv('a', '1a2b3c4d', NOW + 100), inv('b', '99887766', NOW + 200), inv('a', '1a2b3c4d', NOW + 50)];
     // The first two are two browsers; the third repeats the first. List order after grouping: b, then a (newest of its two).
-    const [first, second] = L.groupInvitations(list);
+    const [first, second] = grp(list);
     assert.equal(first.newest.id, id('b'));
 
-    assert.deepEqual(L.chooseInvitation(list, '1'), { id: first.newest.id });
-    assert.deepEqual(L.chooseInvitation(list, '2'), { id: second.newest.id });
-    assert.deepEqual(L.chooseInvitation(list, 2), { id: second.newest.id });   // a number is accepted as a number too
+    assert.deepEqual(pick(list, '1'), { id: first.newest.id });
+    assert.deepEqual(pick(list, '2'), { id: second.newest.id });
+    assert.deepEqual(pick(list, 2), { id: second.newest.id });   // a number is accepted as a number too
 
     // An id prefix of six or more hex characters names that invitation, not its group's newest.
     const two = [inv('a', '1a2b3c4d', NOW + 100), inv('b', '1a2b3c4d', NOW + 200)];
-    assert.deepEqual(L.chooseInvitation(two, 'aaaaaa'), { id: id('a') });
-    assert.deepEqual(L.chooseInvitation(two, id('a').slice(0, 20).toUpperCase()), { id: id('a') });
-    assert.deepEqual(L.chooseInvitation(two, id('b')), { id: id('b') });
+    assert.deepEqual(pick(two, 'aaaaaa'), { id: id('a') });
+    assert.deepEqual(pick(two, id('a').slice(0, 20).toUpperCase()), { id: id('a') });
+    assert.deepEqual(pick(two, id('b')), { id: id('b') });
 
     // Six digits is a prefix, not group 123456.
-    const digits = [{ id: '123456' + 'a'.repeat(58), expiresAt: NOW, companion: 'aaaaaaaa' }, inv('b', 'bbbbbbbb', NOW + 1)];
-    assert.deepEqual(L.chooseInvitation(digits, '123456'), { id: digits[0].id });
+    const digits = [{ id: '123456' + 'a'.repeat(58), expiresAt: NOW + 1, companion: 'aaaaaaaa' }, inv('b', 'bbbbbbbb', NOW + 1)];
+    assert.deepEqual(pick(digits, '123456'), { id: digits[0].id });
 
     // A prefix two invitations share is not a choice.
-    const shared = [{ id: 'abcdef' + '1'.repeat(58), expiresAt: NOW, companion: 'aaaaaaaa' }, { id: 'abcdef' + '2'.repeat(58), expiresAt: NOW + 1, companion: 'bbbbbbbb' }];
-    assert.ok('ambiguous' in L.chooseInvitation(shared, 'abcdef'));
+    const shared = [{ id: 'abcdef' + '1'.repeat(58), expiresAt: NOW + 1, companion: 'aaaaaaaa' }, { id: 'abcdef' + '2'.repeat(58), expiresAt: NOW + 2, companion: 'bbbbbbbb' }];
+    assert.ok('ambiguous' in pick(shared, 'abcdef'));
 });
 
 // ─── error messages ─────────────────────────────────────────────────────────
@@ -167,7 +170,7 @@ test('explainError gives each message a plain title and a next step', () => {
     assert.match(L.explainError('PRIMARY_LINK_INVITATION_AMBIGUOUS').next, /\/link-invitations/);
     assert.match(L.explainError('PRIMARY_LINK_STORE_BUSY').next, /\/link-unlock/);
     assert.match(L.explainError('PRIMARY_LINK_RETIRE_TOO_EARLY').next, /\/link-retire/);
-    assert.match(L.explainError('PRIMARY_LINK_RECONCILIATION_REQUIRED').next, /\/link-reconcile/);
+    assert.match(L.explainError('PRIMARY_LINK_RECONCILIATION_REQUIRED').next, /\/link-confirm/);
     assert.match(L.explainError('PRIMARY_LINK_RECONCILIATION_REQUIRED').next, /\/link-retire/);
 });
 
@@ -201,7 +204,6 @@ test('a busy journal names who holds it, and a takeover in progress is told apar
 
     const mutex = L.explainError('PRIMARY_LINK_STORE_BUSY', { holder: { pid: 77, host: 'box', at: null, legacy: false, mutex: true } });
     assert.match(mutex.title, /recover|takeover/i);
-    assert.match(mutex.next, /wait/i);
     assert.match(mutex.next, /\/link-unlock/);
     assert.notEqual(mutex.title, holder.title);
 
@@ -228,6 +230,9 @@ test('describeError says what happened, what to do, and keeps the code visible',
     // A bootstrap that failed after the approval must not be answered by approving again.
     const after = Object.assign(new Error('PRIMARY_BOOTSTRAP_ACK_UNCERTAIN'), { code: 'PRIMARY_BOOTSTRAP_ACK_UNCERTAIN', afterApproval: true });
     assert.ok(L.describeError(after).some(l => /already (sent|approved)/i.test(l) && /do not/i.test(l)));
+    // And the line does not promise a resume the library would refuse.
+    const refused = Object.assign(new Error('PRIMARY_BOOTSTRAP_ACK_REJECTED'), { code: 'PRIMARY_BOOTSTRAP_ACK_REJECTED', afterApproval: true });
+    assert.ok(!L.describeError(refused).join('\n').includes('/link-bootstrap'));
 });
 
 // ─── readiness ──────────────────────────────────────────────────────────────
@@ -336,7 +341,7 @@ test('formatReadiness lists every blocker with what to do about it', () => {
 
 test('a hold that is not yet retirable is pointed at reconcile, not retire', () => {
     const young = L.explainBlocker({ code: 'PRIMARY_LINK_RECONCILIATION_REQUIRED', detail: { phase: 'awaiting_confirmation', startedAt: NOW - MIN, ageMs: MIN, retirable: false } });
-    assert.match(young.next, /\/link-reconcile/);
+    assert.match(young.next, /\/link-confirm/);
     assert.match(young.next, /5 minutes/);
     const old = L.explainBlocker({ code: 'PRIMARY_LINK_RECONCILIATION_REQUIRED', detail: { phase: 'uncertain', startedAt: NOW - 9 * MIN, ageMs: 9 * MIN, retirable: true } });
     assert.match(old.next, /\/link-retire/);
@@ -568,8 +573,7 @@ test('formatLinkedDevices shows the primary, each companion, binding and history
         phone: '447949738354',
         devices: [{ deviceId: 12, keyIndex: 3 }],
         journal: { phase: 'awaiting_confirmation', confirmed: false, startedAt: LINKED_AT, expectedDeviceId: 12, method: 'code', bootstrapPhase: 'sent' },
-        history: { chats: 12, records: 340 },
-        now: NOW
+        history: { chats: 12, records: 340 }
     });
     assert.deepEqual(lines, [
         'linked devices  +447949738354',
@@ -579,7 +583,7 @@ test('formatLinkedDevices shows the primary, each companion, binding and history
 });
 
 test('formatLinkedDevices claims a confirmed binding only for a reconciled proof', () => {
-    const base = { phone: '+447949738354', devices: [{ deviceId: 12, keyIndex: 3 }], history: { chats: 1, records: 2 }, now: NOW };
+    const base = { phone: '+447949738354', devices: [{ deviceId: 12, keyIndex: 3 }], history: { chats: 1, records: 2 } };
     const row = journal => L.formatLinkedDevices({ ...base, journal })[2];
     const sent = { startedAt: LINKED_AT, expectedDeviceId: 12, method: 'qr', bootstrapPhase: 'sent' };
 
@@ -603,7 +607,7 @@ test('formatLinkedDevices claims a confirmed binding only for a reconciled proof
 
 test('formatLinkedDevices ties the journal to a device only when it can', () => {
     const j = { phase: 'committed', confirmed: true, startedAt: LINKED_AT, method: 'code', bootstrapPhase: 'sent' };
-    const base = { phone: '1', now: NOW, history: { chats: 1, records: 1 } };
+    const base = { phone: '1', history: { chats: 1, records: 1 } };
 
     // One companion and a link in the journal: it is that one.
     assert.match(L.formatLinkedDevices({ ...base, devices: [{ deviceId: 12, keyIndex: 3 }], journal: j })[2], /linked 2026-11-02 15:31 by code/);
@@ -624,7 +628,7 @@ test('formatLinkedDevices ties the journal to a device only when it can', () => 
 });
 
 test('formatLinkedDevices reports how far the history got', () => {
-    const base = { phone: '1', devices: [{ deviceId: 12, keyIndex: 3 }], now: NOW };
+    const base = { phone: '1', devices: [{ deviceId: 12, keyIndex: 3 }] };
     const row = (bootstrapPhase, extra = {}, history) => L.formatLinkedDevices({ ...base, history, journal: { phase: 'awaiting_confirmation', startedAt: LINKED_AT, method: 'code', bootstrapPhase, ...extra } })[2];
 
     assert.match(row('sent', {}, { chats: 1, records: 1 }), /history delivered \(1 chat, 1 msg\)/);
@@ -634,7 +638,7 @@ test('formatLinkedDevices reports how far the history got', () => {
     assert.ok(!/delivered/.test(row('history_sending', {}, { chats: 9, records: 9 })), 'numbers are shown only for a delivery');
 
     // No companions at all.
-    assert.deepEqual(L.formatLinkedDevices({ phone: '447949738354', devices: [], journal: null, now: NOW }), [
+    assert.deepEqual(L.formatLinkedDevices({ phone: '447949738354', devices: [], journal: null }), [
         'linked devices  +447949738354',
         '  #0   this phone (primary)',
         '  no companion linked'
@@ -645,8 +649,11 @@ test('formatLinkedDevices reports how far the history got', () => {
 
 // ─── /link-status ───────────────────────────────────────────────────────────
 
+// getPrimaryLinkStatus().devices always lists the primary, device 0, with the companions.
+const PRIMARY = { deviceId: 0, keyIndex: 0 };
+
 test('formatLinkStatus names the binding, the bootstrap and the companions', () => {
-    const idle = L.formatLinkStatus({ hasADV: false, confirmed: false, phase: 'idle', startedAt: null, expectedDeviceId: null, bootstrapPhase: null, devices: [] }).join('\n');
+    const idle = L.formatLinkStatus({ hasADV: false, confirmed: false, phase: 'idle', startedAt: null, expectedDeviceId: null, bootstrapPhase: null, devices: [{ deviceId: 0, keyIndex: 0 }] }).join('\n');
     assert.match(idle, /link\s+idle/i);
     assert.match(idle, /binding\s+unconfirmed/i);
     assert.match(idle, /bootstrap\s+not started/i);
@@ -654,7 +661,7 @@ test('formatLinkStatus names the binding, the bootstrap and the companions', () 
 
     const sent = L.formatLinkStatus({
         hasADV: true, confirmed: true, phase: 'committed', startedAt: LINKED_AT, expectedDeviceId: 12, bootstrapPhase: 'sent',
-        bootstrap: { phase: 'sent', errorCode: null, iq: null }, devices: [{ deviceId: 12, keyIndex: 3 }]
+        bootstrap: { phase: 'sent', errorCode: null, iq: null }, devices: [PRIMARY, { deviceId: 12, keyIndex: 3 }]
     }).join('\n');
     assert.match(sent, /binding\s+confirmed/i);
     assert.match(sent, /bootstrap\s+sent/i);
@@ -662,15 +669,15 @@ test('formatLinkStatus names the binding, the bootstrap and the companions', () 
     assert.match(sent, /key index 3/);
 
     // Awaiting the browser's proof: the binding is not confirmed, and the way forward is given.
-    const waiting = L.formatLinkStatus({ hasADV: true, confirmed: false, phase: 'awaiting_confirmation', startedAt: LINKED_AT, expectedDeviceId: 12, bootstrapPhase: null, devices: [{ deviceId: 12, keyIndex: 3 }] }).join('\n');
+    const waiting = L.formatLinkStatus({ hasADV: true, confirmed: false, phase: 'awaiting_confirmation', startedAt: LINKED_AT, expectedDeviceId: 12, bootstrapPhase: null, devices: [PRIMARY, { deviceId: 12, keyIndex: 3 }] }).join('\n');
     assert.match(waiting, /binding\s+unconfirmed/i);
     assert.ok(!/binding\s+confirmed/i.test(waiting));
-    assert.match(waiting, /\/link-reconcile/);
+    assert.match(waiting, /\/link-confirm/);
 
     // A bootstrap that stopped says why and what to do.
     const stopped = L.formatLinkStatus({
         hasADV: true, confirmed: false, phase: 'awaiting_confirmation', startedAt: LINKED_AT, expectedDeviceId: 12, bootstrapPhase: 'history_sending',
-        bootstrap: { phase: 'history_sending', errorCode: 'PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN', iq: null }, devices: [{ deviceId: 12, keyIndex: 3 }]
+        bootstrap: { phase: 'history_sending', errorCode: 'PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN', iq: null }, devices: [PRIMARY, { deviceId: 12, keyIndex: 3 }]
     }).join('\n');
     assert.match(stopped, /history_sending/);
     assert.match(stopped, new RegExp(L.explainError('PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN').next.slice(0, 30).replace(/[/.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -680,7 +687,7 @@ test('formatLinkStatus names the binding, the bootstrap and the companions', () 
 // ─── invitations listing ────────────────────────────────────────────────────
 
 test('formatInvitations numbers the browsers, newest first, with how long each has left', () => {
-    const groups = L.groupInvitations([inv('a', '1a2b3c4d', NOW + 100000), inv('b', '1a2b3c4d', NOW + 120000), inv('c', null, NOW + 30000)]);
+    const groups = grp([inv('a', '1a2b3c4d', NOW + 100000), inv('b', '1a2b3c4d', NOW + 120000), inv('c', null, NOW + 30000)]);
     const lines = L.formatInvitations(groups, NOW);
     const text = lines.join('\n');
     assert.match(lines.find(l => /^\s*1\b/.test(l)), /1a2b3c4d.*2 requests.*2m 00s/);
@@ -688,15 +695,305 @@ test('formatInvitations numbers the browsers, newest first, with how long each h
     assert.match(text, /\/link-code/);
     assert.ok(text.includes(id('b').slice(0, 12)), 'the newest request is named by a prefix the person can paste');
     assert.deepEqual(L.formatInvitations([], NOW).join('\n').match(/no pairing request/i)?.length, 1);
-    // Already gone.
-    assert.match(L.formatInvitations(L.groupInvitations([inv('a', 'aaaaaaaa', NOW - 1)]), NOW).join('\n'), /expired/);
+});
+
+// ─── every instruction is a command, and a flag, that exists ────────────────
+
+function libCodes() {
+    const found = new Set();
+    for (const file of sources(LIB)) {
+        for (const m of fs.readFileSync(file, 'utf8').matchAll(/['"](PRIMARY_(?:LINK|BOOTSTRAP|MESSAGE_STORE)_[A-Z0-9_]+)['"]/g)) found.add(m[1]);
+    }
+    for (const code of [...composed('primary/MessageStore.js', 'PRIMARY_MESSAGE_STORE_'), ...composed('primary/HistoryExport.js', 'PRIMARY_HISTORY_EXPORT_')]) found.add(code);
+    return [...found].sort();
+}
+
+// Everything the module can say to a person, from every state it can describe.
+function corpus() {
+    const out = [];
+    const take = (...parts) => { for (const part of parts.flat(Infinity)) out.push(String(part)); };
+    for (const code of [...libCodes(), 'PRIMARY_BOOTSTRAP_ACK_401', 'PRIMARY_BOOTSTRAP_ACK_479', 'PRIMARY_LINK_SOMETHING_NEW']) {
+        const e = L.explainError(code);
+        take(e.title, e.next);
+    }
+    for (const holder of [null, { pid: 1, host: 'h', at: NOW, legacy: false }, { pid: 2, host: 'h', at: null, legacy: false, mutex: true }, { legacy: true, pid: null, at: null }]) {
+        for (const context of [undefined, 'unlock']) {
+            const e = L.explainError('PRIMARY_LINK_STORE_BUSY', { holder }, context);
+            take(e.title, e.next);
+        }
+    }
+    const detail = {
+        PRIMARY_LINK_RECONCILIATION_REQUIRED: [{ phase: 'uncertain', ageMs: 9 * MIN, retirable: true }, { phase: 'awaiting_confirmation', ageMs: MIN, retirable: false }, {}],
+        PRIMARY_BOOTSTRAP_EXISTING_COMPANIONS_UNSUPPORTED: [{ companions: 2 }, { companions: null }],
+        PRIMARY_BOOTSTRAP_FOREIGN_STATE: [{ reasons: ['local_keys', 'server_unknown', 'server_foreign', 'server_unverified', 'local_state', 'local_history'] }, {}],
+        PRIMARY_MESSAGE_STORE_DISABLED: [{ reason: 'disabled' }, { reason: 'unreadable', code: 'PRIMARY_MESSAGE_STORE_LOG_CORRUPT' }]
+    };
+    for (const [code, details] of Object.entries(detail)) for (const d of details) { const e = L.explainBlocker({ code, detail: d }); take(e.title, e.next); }
+    for (const code of libCodes()) {
+        const error = Object.assign(new Error(code), { code, afterApproval: true, blockers: [{ code, detail: {} }, { code: 'PRIMARY_BOOTSTRAP_NAME_REQUIRED', detail: {} }] });
+        take(L.describeError(error), L.describeError(error, 'unlock'));
+    }
+    const phases = ['idle', 'exchange', 'finish_verified', 'pair_device_sending', 'awaiting_confirmation', 'uncertain', 'verification_required', 'exchange_failed', 'committed', 'abandoned'];
+    const steps = [null, 'prepared', 'key_share_sending', 'critical_patch_sending', 'history_sending', 'delta_sending', 'sent'];
+    for (const phase of phases) for (const bootstrapPhase of steps) for (const companions of [[], [{ deviceId: 12, keyIndex: 3 }]]) for (const confirmed of [false, true]) {
+        for (const errorCode of [null, 'PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN', 'PRIMARY_BOOTSTRAP_ACK_REJECTED', 'PRIMARY_BOOTSTRAP_PATCH_REJECTED']) {
+            take(L.formatLinkStatus({ hasADV: true, confirmed, phase, startedAt: LINKED_AT, expectedDeviceId: null, bootstrapPhase,
+                bootstrap: bootstrapPhase ? { phase: bootstrapPhase, errorCode, iq: null } : undefined, devices: [PRIMARY, ...companions] }));
+        }
+    }
+    take(L.formatReadiness(BLOCKED(Object.keys(detail).map(code => ({ code, detail: detail[code][0] })))));
+    take(L.formatReadiness(PARTIAL({ origin: 'enabled', evicted: 3, losses: [{ reason: 'undecryptable', ids: ids(2) }] })), L.formatReadiness(READY()));
+    take(L.formatInvitations(grp([inv('a', '1a2b3c4d', NOW + 1000), inv('b', null, NOW + 2000)]), NOW), L.formatInvitations([], NOW));
+    take(L.formatInvitationNotice(inv('a', '1a2b3c4d', NOW + 180000), NOW), L.formatInvitationNotice(inv('b', null, NOW + 180000), NOW));
+    take(L.formatBootstrapResult({ status: 'sent', mode: 'first', history: { chats: 1, records: 1, bytes: 1, inline: true }, delta: { records: 2 } }));
+    take(L.formatLinkedDevices({ phone: '1', devices: [{ deviceId: 12, keyIndex: 3 }], journal: { phase: 'awaiting_confirmation', method: 'code', bootstrapPhase: null, startedAt: LINKED_AT } }));
+    return out;
+}
+
+test('no message sends anyone to a command the CLI does not have', () => {
+    const text = corpus().join('\n');
+    assert.ok(text.length > 20000, 'the corpus is the whole vocabulary, not a sample');
+    assert.ok(!text.includes('/link-reconcile'), 'the command that confirms a link is /link-confirm');
+    // The commands of spec 6.9, plus the ones the CLI already has that the messages lean on.
+    const known = new Set(['/link-code', '/link-qr', '/link-invitations', '/link-status', '/linked-devices', '/link-retire', '/link-confirm', '/link-bootstrap', '/link-unlock',
+        '/connect', '/disconnect', '/reconnect', '/name', '/reg']);
+    const named = new Set([...text.matchAll(/(?:^|[\s(])(\/[a-z][a-z-]*)/gm)].map(m => m[1]));
+    assert.deepEqual([...named].filter(c => !known.has(c)), [], 'a command that does not exist');
+    for (const c of ['/link-code', '/link-status', '/link-bootstrap', '/link-confirm', '/link-retire', '/link-unlock', '/linked-devices', '/link-invitations']) assert.ok(named.has(c), c + ' is never named');
+    assert.match(L.COMMANDS.reconcile, /^\/link-confirm FILE\|JSON$/);
+});
+
+test('the bootstrap is always named with --resume, and the resend flag is the one the library honours', () => {
+    const text = corpus().join('\n');
+    assert.ok(text.includes('/link-bootstrap --resume'));
+    // A bare /link-bootstrap after an attempt is refused as already attempted, whose own message must not send anyone back to it.
+    assert.deepEqual(text.match(/\/link-bootstrap(?! --resume)/g), null, 'a /link-bootstrap with no --resume');
+    assert.ok(!/--resend(\s|$)/m.test(text), '--resend is not a flag');
+    assert.deepEqual(text.match(/(?<!--resume )--resend-uncertain/g), null, 'resendUncertain only counts on a resume');
+    for (const code of ['PRIMARY_BOOTSTRAP_KEY_SHARE_UNCERTAIN', 'PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN', 'PRIMARY_BOOTSTRAP_ACK_UNCERTAIN']) {
+        assert.match(L.explainError(code).next, /\/link-bootstrap --resume --resend-uncertain/, code);
+    }
+    assert.match(L.COMMANDS.bootstrap, /^\/link-bootstrap --resume$/);
+    assert.match(L.COMMANDS.resend, /^\/link-bootstrap --resume --resend-uncertain$/);
+});
+
+test('a refused bootstrap step is not sent back to a resume the library would refuse', () => {
+    // Any ACK that refuses a step stops the attempt at that step: resuming it is ALREADY_ATTEMPTED, so a message that
+    // says "continue" would loop. The approval stands; the way out is to start over.
+    for (const code of ['PRIMARY_BOOTSTRAP_ACK_REJECTED', 'PRIMARY_BOOTSTRAP_ACK_', 'PRIMARY_BOOTSTRAP_ACK_401', 'PRIMARY_BOOTSTRAP_ACK_479']) {
+        const { title, next } = L.explainError(code);
+        assert.ok(title.length > 20, code);
+        assert.ok(!next.includes('/link-bootstrap'), code + ' must not send anyone to a resume that cannot work');
+        assert.ok(!/do not approve again/i.test(next), code + ' must not forbid and recommend approving in one breath');
+        assert.match(next, /cannot be resumed/, code);
+        assert.match(next, /Log out/, code);
+        assert.match(next, /\/linked-devices/, code);
+        assert.match(next, /\/link-retire/, code);
+        assert.match(next, /\/link-code/, code);
+    }
+    // Already attempted points at the status, then at the right way on, and says which is which.
+    const attempted = L.explainError('PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED').next;
+    assert.match(attempted, /\/link-status/);
+    assert.match(attempted, /\/link-bootstrap --resume/);
+    assert.match(attempted, /refus/i);
+    // A refusal recorded in the journal is shown with its own way on, never with a resume.
+    const status = L.formatLinkStatus({ hasADV: true, confirmed: false, phase: 'awaiting_confirmation', startedAt: LINKED_AT, expectedDeviceId: 12, bootstrapPhase: 'key_share_sending',
+        bootstrap: { phase: 'key_share_sending', errorCode: 'PRIMARY_BOOTSTRAP_ACK_REJECTED', iq: null }, devices: [PRIMARY, { deviceId: 12, keyIndex: 3 }] }).join('\n');
+    assert.match(status, /cannot be resumed/);
+});
+
+test('the steps people are told to take are ones this CLI can do', () => {
+    assert.match(L.explainError('PRIMARY_MESSAGE_STORE_DISABLED').next, /without --no-message-store/);
+    // This tool cannot unlink a companion from the primary: it is logged out where it runs.
+    for (const e of [L.explainError('PRIMARY_BOOTSTRAP_EXISTING_COMPANIONS_UNSUPPORTED'), L.explainBlocker({ code: 'PRIMARY_BOOTSTRAP_EXISTING_COMPANIONS_UNSUPPORTED', detail: { companions: 2 } })]) {
+        assert.match(e.next, /log out on that device/i);
+        assert.match(e.next, /WhatsApp Web: Menu → Log out/);
+        assert.match(e.next, /\/linked-devices/);
+        assert.ok(!/unlink/i.test(e.next), e.next);
+    }
+    const stranger = L.explainError('PRIMARY_BOOTSTRAP_PEER_UNMATCHED').next;
+    assert.match(stranger, /Log out/);
+    assert.match(stranger, /\/linked-devices/);
+    assert.ok(!/unlink/i.test(stranger), stranger);
+    // /connect refuses while connected, and a number that is not registered is /reg's business.
+    const account = L.explainError('PRIMARY_LINK_ACCOUNT_REQUIRED').next;
+    assert.ok(account.indexOf('/disconnect') !== -1 && account.indexOf('/disconnect') < account.indexOf('/connect <phone>'), account);
+    assert.match(account, /\/reg/);
+    // Anywhere /connect is named, /disconnect (or /reconnect) comes first.
+    for (const text of corpus()) {
+        const at = text.indexOf('/connect');
+        if (at !== -1) assert.ok(/\/disconnect|\/reconnect/.test(text.slice(0, at)) || /\/disconnect/.test(text), text);
+    }
+});
+
+// ─── status, with the real shape ────────────────────────────────────────────
+
+test('formatLinkStatus lists companions only: the primary is device 0 and is always on the list', () => {
+    const none = L.formatLinkStatus({ hasADV: false, confirmed: false, phase: 'idle', startedAt: null, expectedDeviceId: null, bootstrapPhase: null, devices: [PRIMARY] }).join('\n');
+    assert.match(none, /companions\s+none/);
+    assert.ok(!/#0\b/.test(none));
+    const one = L.formatLinkStatus({ hasADV: true, confirmed: false, phase: 'awaiting_confirmation', startedAt: LINKED_AT, expectedDeviceId: 12, bootstrapPhase: null, devices: [PRIMARY, { deviceId: 12, keyIndex: 3 }] }).join('\n');
+    assert.match(one, /companions\s+#12 key index 3$/m);
+    assert.ok(!/#0\b/.test(one));
+});
+
+test('formatLinkStatus does not suggest the bootstrap before a companion has appeared', () => {
+    const state = (phase, devices) => L.formatLinkStatus({ hasADV: true, confirmed: false, phase, startedAt: LINKED_AT, expectedDeviceId: 12, bootstrapPhase: null, devices }).join('\n');
+    for (const phase of ['awaiting_confirmation', 'committed', 'uncertain']) {
+        const text = state(phase, [PRIMARY]);
+        assert.ok(!text.includes('/link-bootstrap'), phase + ': ' + text);
+    }
+    assert.match(state('awaiting_confirmation', [PRIMARY]), /companion has not appeared/);
+    assert.match(state('awaiting_confirmation', [PRIMARY]), /\/link-retire/);
+    // Once it has, the history is the next thing, and Web will wait on it.
+    assert.match(state('awaiting_confirmation', [PRIMARY, { deviceId: 12, keyIndex: 3 }]), /\/link-bootstrap --resume/);
+    assert.ok(!/has not appeared/.test(state('awaiting_confirmation', [PRIMARY, { deviceId: 12, keyIndex: 3 }])));
+});
+
+test('formatLinkedDevices does not show the primary as a companion', () => {
+    const lines = L.formatLinkedDevices({ phone: '1', devices: [PRIMARY, { deviceId: 12, keyIndex: 3 }], journal: null });
+    assert.equal(lines.filter(l => /#0\b/.test(l)).length, 1);
+    assert.equal(lines.filter(l => l.includes('companion')).length, 1);
+    assert.deepEqual(L.formatLinkedDevices({ phone: '1', devices: [PRIMARY], journal: null }), ['linked devices  +1', '  #0   this phone (primary)', '  no companion linked']);
+});
+
+test('a commit whose device has left the list is not reported as having no proof', () => {
+    const gone = L.formatLinkStatus({ hasADV: true, confirmed: false, phase: 'committed', startedAt: LINKED_AT, expectedDeviceId: 12, bootstrapPhase: 'sent', devices: [PRIMARY] }).join('\n');
+    assert.match(gone, /binding\s+unconfirmed/);
+    assert.match(gone, /proof was reconciled/);
+    assert.match(gone, /no longer listed/);
+    assert.ok(!/no companion proof/i.test(gone));
+    // Never reconciled is still said plainly.
+    const never = L.formatLinkStatus({ hasADV: true, confirmed: false, phase: 'awaiting_confirmation', startedAt: LINKED_AT, expectedDeviceId: 12, bootstrapPhase: null, devices: [PRIMARY, { deviceId: 12, keyIndex: 3 }] }).join('\n');
+    assert.match(never, /no companion proof has been reconciled/);
+    // The device row for the same commit says the same, and never "confirmed".
+    const row = L.formatLinkedDevices({ phone: '1', devices: [{ deviceId: 12, keyIndex: 3 }], journal: { phase: 'committed', confirmed: false, expectedDeviceId: 12, bootstrapPhase: 'sent' } })[2];
+    assert.match(row, /binding unconfirmed/);
+    assert.match(row, /proof was reconciled/);
+    assert.ok(!/binding confirmed/.test(row));
+});
+
+test('a companion proof is something the person has, never something Web is said to show', () => {
+    const text = corpus().join('\n');
+    // (Web does show the pairing code; it is the proof that nothing here says it shows.)
+    assert.ok(!/web shows (its |the |a )?proof|shows its proof|as the page gives it|page gives/i.test(text));
+    assert.match(L.explainError('PRIMARY_LINK_WEB_PROOF_INVALID').next, /companion's public proof JSON/);
+    assert.match(L.explainError('PRIMARY_LINK_WEB_PROOF_INVALID').next, /\/link-confirm FILE\|JSON/);
+    assert.match(L.explainError('PRIMARY_LINK_RECONCILIATION_REQUIRED').next, /public proof JSON/);
+    assert.match(L.explainBlocker({ code: 'PRIMARY_LINK_RECONCILIATION_REQUIRED', detail: { phase: 'uncertain', retirable: false } }).next, /public proof JSON/);
+    const waiting = L.formatLinkStatus({ hasADV: true, confirmed: false, phase: 'awaiting_confirmation', startedAt: LINKED_AT, expectedDeviceId: 12, bootstrapPhase: null, devices: [PRIMARY, { deviceId: 12, keyIndex: 3 }] }).join('\n');
+    assert.match(waiting, /if you have the companion's public proof JSON/);
+});
+
+// ─── no guessing at the retained range ──────────────────────────────────────
+
+test('a retained range with a part missing says unknown, never nothing', () => {
+    const row = retained => L.formatReadiness(READY({ history: { ...coverage(), retained } })).find(l => l.includes('retained range'));
+    const t0 = sec(at(2026, 6, 1, 10, 0)), t1 = sec(at(2026, 11, 2, 14, 58));
+
+    // How many were dropped is not said.
+    const noCount = row({ from: t0, to: t1 });
+    assert.match(noCount, /2026-06-01 10:00 to 2026-11-02 14:58/);
+    assert.match(noCount, /dropped is unknown/);
+    assert.ok(!/nothing older/.test(noCount));
+    // The range is not said.
+    const noRange = row({ evicted: 5 });
+    assert.match(noRange, /range unknown/);
+    assert.match(noRange, /5 older messages were dropped/);
+    assert.ok(!/no messages kept/.test(noRange));
+    // Half a range is not a range, and not an empty one.
+    for (const half of [{ evicted: 0, from: t0 }, { evicted: 0, to: t1 }, { evicted: 0, from: null, to: t1 }, { evicted: 0, from: t0, to: null }]) {
+        assert.match(row(half), /range unknown/, JSON.stringify(half));
+        assert.ok(!/no messages kept/.test(row(half)));
+    }
+    assert.ok(!/nothing older/.test(row({ evicted: 'x', from: t0, to: t1 })));
+    assert.match(row({ evicted: 'x', from: t0, to: t1 }), /dropped is unknown/);
+    // Both null is the store saying it holds nothing.
+    assert.match(row({ evicted: 0, from: null, to: null }), /no messages kept; nothing older was dropped/);
+    assert.match(row({}), /unknown/);
+});
+
+// ─── expired pairing requests ───────────────────────────────────────────────
+
+test('expired pairing requests are not grouped, offered or chosen', () => {
+    const list = [inv('a', '1a2b3c4d', NOW - 1), inv('b', '1a2b3c4d', NOW), inv('c', '99887766', NOW + 1000)];
+    // The first two ran out (at or before now); only the third is live.
+    assert.deepEqual(grp(list).map(g => [g.companion, g.count]), [['99887766', 1]]);
+    assert.deepEqual(pick(list), { id: id('c') });
+    assert.deepEqual(pick(list, id('a').slice(0, 8)), { none: true });
+    assert.deepEqual(pick(list, '2'), { none: true });
+    assert.deepEqual(pick([inv('a', '1a2b3c4d', NOW - 1)]), { none: true });
+    // An earlier clock brings them back: it is the clock that decides, and they count with their browser.
+    assert.deepEqual(grp(list, NOW - 10).map(g => g.count).sort(), [1, 2]);
+    assert.deepEqual(grp(list, NOW - 10).map(g => g.companion).sort(), ['1a2b3c4d', '99887766']);
+    // The clock defaults to now.
+    const live = { id: id('d'), expiresAt: Date.now() + 60000, companion: 'aaaaaaaa' }, dead = { id: id('e'), expiresAt: Date.now() - 1, companion: 'bbbbbbbb' };
+    assert.deepEqual(L.groupInvitations([live, dead]).map(g => g.companion), ['aaaaaaaa']);
+    assert.deepEqual(L.chooseInvitation([live, dead]), { id: id('d') });
+    // A listing drops them too, and numbers what is left from 1.
+    const groups = [{ companion: 'aaaaaaaa', newest: { id: id('a'), expiresAt: NOW - 1 }, count: 1 }, { companion: 'bbbbbbbb', newest: { id: id('b'), expiresAt: NOW + 60000 }, count: 1 }];
+    const lines = L.formatInvitations(groups, NOW);
+    assert.ok(!lines.join('\n').includes('aaaaaaaa'));
+    assert.match(lines.find(l => /^\s*1\b/.test(l)), /bbbbbbbb/);
+    assert.match(L.formatInvitations([groups[0]], NOW).join('\n'), /no pairing request/i);
+});
+
+test('runLinkCode with only expired requests says they expired', async () => {
+    const client = fake({ invitations: [inv('a', '1a2b3c4d', NOW - 5)] });
+    await assert.rejects(run(client), error => error.code === 'PRIMARY_LINK_INVITATION_EXPIRED');
+    assert.ok(!client.names().includes('approveCompanionCode'));
+    // A group that expired between the listing and the choice is not chosen: the clock is the caller's.
+    const live = fake({ invitations: [inv('a', '1a2b3c4d', NOW + 5), inv('b', '99887766', NOW - 5)] });
+    const result = await run(live);
+    assert.equal(result.invitationId, id('a'));
+});
+
+test('the invitation listing recommends the id, which does not move, alongside the number', () => {
+    const text = L.formatInvitations(grp([inv('a', '1a2b3c4d', NOW + 100000), inv('b', '99887766', NOW + 90000)]), NOW).join('\n');
+    assert.match(text, /\/link-code CODE <id>/);
+    assert.match(text, /\/link-code CODE <number>/);
+    assert.match(text, /numbers? (shift|change)/i);
+    assert.ok(text.includes(id('a').slice(0, 12)));
+});
+
+test('a takeover in progress is told differently before and after an unlock', () => {
+    const busy = { holder: { pid: 77, host: 'box', at: null, legacy: false, mutex: true } };
+    const first = L.explainError('PRIMARY_LINK_STORE_BUSY', busy);
+    assert.match(first.next, /^Run \/link-unlock/);
+    assert.ok(!/again/i.test(first.next), first.next);
+    const after = L.explainError('PRIMARY_LINK_STORE_BUSY', busy, 'unlock');
+    assert.match(after.next, /wait/i);
+    assert.match(after.next, /\/link-unlock again/);
+    assert.equal(after.title, first.title);
+    // The same through describeError, which is what a front end calls.
+    const error = Object.assign(new Error('PRIMARY_LINK_STORE_BUSY'), { code: 'PRIMARY_LINK_STORE_BUSY', ...busy });
+    assert.ok(!L.describeError(error).join('\n').includes('/link-unlock again'));
+    assert.ok(L.describeError(error, 'unlock').join('\n').includes('/link-unlock again'));
+    // A holder that is not a takeover reads the same either way.
+    const plain = { holder: { pid: 4242, host: 'box', at: null, legacy: false } };
+    assert.deepEqual(L.explainError('PRIMARY_LINK_STORE_BUSY', plain, 'unlock'), L.explainError('PRIMARY_LINK_STORE_BUSY', plain));
+});
+
+test('formatInvitationNotice is one line in the plan layout', () => {
+    const request = { id: 'abcdef123456' + '0'.repeat(52), expiresAt: NOW + 180000, companion: '1a2b3c4d' };
+    assert.equal(L.formatInvitationNotice(request, NOW), '  link request   companion 1a2b3c4d   code window 3:00   id abcdef12');
+    assert.equal(L.formatInvitationNotice({ ...request, companion: null }, NOW), '  link request   companion unknown   code window 3:00   id abcdef12');
+    assert.equal(L.formatInvitationNotice({ ...request, companion: undefined }, NOW), '  link request   companion unknown   code window 3:00   id abcdef12');
+    // The window runs down; once it has run out it says so rather than counting below zero.
+    assert.match(L.formatInvitationNotice({ ...request, expiresAt: NOW + 125000 }, NOW), /code window 2:05/);
+    assert.match(L.formatInvitationNotice({ ...request, expiresAt: NOW + 5000 }, NOW), /code window 0:05/);
+    assert.match(L.formatInvitationNotice({ ...request, expiresAt: NOW - 1 }, NOW), /code window expired/);
+    // The event as the client emits it, on arrival, now being now.
+    assert.match(L.formatInvitationNotice({ id: id('f'), expiresAt: Date.now() + 180000, companion: 'cafebabe' }), /code window 3:00/);
+    assert.doesNotThrow(() => L.formatInvitationNotice(undefined));
+    assert.ok(!L.formatInvitationNotice(request, NOW).includes('\n'));
 });
 
 // ─── the public surface ─────────────────────────────────────────────────────
 
 test('the link logic is reachable from the package, and nothing in it needs a socket', () => {
     assert.equal(wa.Cli.LinkCommands, L);
-    for (const name of ['groupInvitations', 'chooseInvitation', 'explainError', 'formatReadiness', 'formatLinkedDevices', 'formatLinkStatus', 'runLinkCode', 'runLinkQr']) {
+    for (const name of ['groupInvitations', 'chooseInvitation', 'formatInvitationNotice', 'explainError', 'formatReadiness', 'formatLinkedDevices', 'formatLinkStatus', 'runLinkCode', 'runLinkQr']) {
         assert.equal(typeof L[name], 'function', name);
     }
     // Pure formatting never reaches for the network, the disk, or the clock it was not given.

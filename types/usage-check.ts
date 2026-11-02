@@ -194,7 +194,11 @@ async function checkLinkCommands(client: wa.WhalibmobClient, readiness: wa.Prima
   if (result.status === 'choose') { const n: number = result.groups.length; void n; }
   const qr: wa.LinkQrResult = await L.runLinkQr({ client, payload: 'https://wa.me/settings/linked_devices#x' });
   try { await L.runLinkQr({ client, payload: 'x' }); } catch (error) { L.describeError(error); }
-  L.formatLinkedDevices({ phone: '447949738354', devices: await client.listLinkedDevices(), journal: await client.getPrimaryLinkStatus(), history: { chats: 1, records: 2 }, now: Date.now() });
+  L.formatLinkedDevices({ phone: '447949738354', devices: await client.listLinkedDevices(), journal: await client.getPrimaryLinkStatus(), history: { chats: 1, records: 2 } });
+  const notice: string = L.formatInvitationNotice(client.getPrimaryLinkInvitations()[0], Date.now());
+  const later: wa.LinkInvitationChoice = L.chooseInvitation(client.getPrimaryLinkInvitations(), 1, () => Date.now());
+  const busy: wa.LinkExplanation = L.explainError('PRIMARY_LINK_STORE_BUSY', { holder: null }, 'unlock');
+  void notice; void later; void busy;
   void groups; void lines; void qr;
   // @ts-expect-error A pairing code is text.
   await L.runLinkCode({ client, code: 12345678 });

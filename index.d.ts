@@ -2280,23 +2280,39 @@ export type LinkQrResult =
  * for every error code.
  */
 export interface LinkCommandsModule {
-  /** The commands the messages point to. */
+  /**
+   * The commands the messages point to (spec 6.9): `/link-code`, `/link-qr`, `/link-invitations`, `/link-status`,
+   * `/linked-devices`, `/link-retire`, `/link-confirm FILE|JSON`, `/link-bootstrap --resume` (also under `resend`, with
+   * `--resend-uncertain`) and `/link-unlock`, with the CLI's own `/connect`, `/disconnect`, `/reconnect`, `/reg` and `/name`.
+   */
   COMMANDS: Readonly<Record<string, string>>;
-  /** Collapse duplicate requests from one browser to its newest, newest browser first. A request without a fingerprint is its own group. */
-  groupInvitations(invitations: PrimaryLinkInvitation[]): LinkInvitationGroup[];
-  /** Never guesses between browsers. `selector` is a group number (`'1'`) or an id prefix of 6 or more hex characters. */
-  chooseInvitation(invitations: PrimaryLinkInvitation[], selector?: string | number): LinkInvitationChoice;
+  /**
+   * Collapse duplicate requests from one browser to its newest, newest browser first. A request without a fingerprint is its
+   * own group. A request that has expired by `now` (default: the present, as a number or a function) is not counted.
+   */
+  groupInvitations(invitations: PrimaryLinkInvitation[], now?: number | (() => number)): LinkInvitationGroup[];
+  /**
+   * Never guesses between browsers. `selector` is a group number (`'1'`) or an id prefix of 6 or more hex characters.
+   * Requests that have expired by `now` (default: the present) are not offered.
+   */
+  chooseInvitation(invitations: PrimaryLinkInvitation[], selector?: string | number, now?: number | (() => number)): LinkInvitationChoice;
+  /** The groups still live at `now`, numbered from 1 as `chooseInvitation` numbers them, with the id to choose by. */
   formatInvitations(groups: LinkInvitationGroup[], now?: number | (() => number)): string[];
-  /** `error` is optional: a busy journal's `holder` makes the message say who has it. */
-  explainError(code: unknown, error?: { holder?: PrimaryLinkHolder | null }): LinkExplanation;
+  /** One line for a request as it arrives (the `primary_link_invitation` event): `  link request   companion <c>   code window 3:00   id <first 8>`. */
+  formatInvitationNotice(invitation: PrimaryLinkInvitation, now?: number | (() => number)): string;
+  /**
+   * `error` is optional: a busy journal's `holder` makes the message say who has it. `context` is `'unlock'` when the
+   * error came from the unlock command itself (a takeover in progress is then told to wait and run it again).
+   */
+  explainError(code: unknown, error?: { holder?: PrimaryLinkHolder | null }, context?: 'unlock'): LinkExplanation;
   explainBlocker(blocker: PrimaryLinkBlocker | { code?: string; detail?: object }): LinkExplanation;
   /** An error caught from the link commands, as lines: what happened, what to do, the code. */
-  describeError(error: unknown): string[];
+  describeError(error: unknown, context?: 'unlock'): string[];
   formatReadiness(readiness: PrimaryLinkReadiness): string[];
   formatBootstrapResult(result: PrimaryBootstrapResult | undefined): string[];
   formatLinkedDevices(options: {
     phone?: string; devices?: Array<{ deviceId: number; keyIndex: number }>;
-    journal?: LinkJournalView | null; history?: { chats?: number; records?: number } | null; now?: number;
+    journal?: LinkJournalView | null; history?: { chats?: number; records?: number } | null;
   }): string[];
   formatLinkStatus(status: LinkJournalView | undefined): string[];
   runLinkCode(options: LinkRunOptions & { code: string; selector?: string | number; now?: number | (() => number) }): Promise<LinkCodeResult>;
