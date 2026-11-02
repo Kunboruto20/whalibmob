@@ -1053,6 +1053,47 @@ export interface PrimaryBootstrapResult {
   delta: null | { records: number };
 }
 
+/** How much of the primary's history would be sent, and where it falls short. Never holds message content or ids. */
+export interface PrimaryHistoryCoverage {
+  /** Chats the store holds; null if it did not say. */
+  chats: number | null;
+  /** Messages the store holds, tombstones included; null if it did not say. */
+  messages: number | null;
+  /** Milliseconds since the epoch the store began capturing; null if it did not say. */
+  since: number | null;
+  /** `'registration'` for a store that has kept everything since the account was registered, `'enabled'` for one switched on later. */
+  origin: string | null;
+  /** Messages the store let go of to stay within its limits. */
+  evicted: number;
+  /** Messages seen and not kept (`count`), or a time window nothing was kept for (`from`/`to`, milliseconds). */
+  losses: Array<{ reason: string; count?: number; from?: number; to?: number }>;
+}
+/** One reason a link would not complete, found before it is approved. The codes are stable. */
+export type PrimaryLinkBlocker =
+  | { code: 'PRIMARY_LINK_ACCOUNT_REQUIRED'; detail: { registered: boolean; phoneOk: boolean } }
+  | { code: 'PRIMARY_LINK_RECONCILIATION_REQUIRED'; detail: {
+      phase: string; startedAt: number | null; ageMs: number | null;
+      /** `retireAbsentPrimaryLink()` will retire this hold: an unfinished approval at least five minutes old. */
+      retirable: boolean } }
+  | { code: 'PRIMARY_BOOTSTRAP_EXISTING_COMPANIONS_UNSUPPORTED'; detail: { companions: number | null } }
+  | { code: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE'; detail: {
+      reasons: Array<'local_keys' | 'server_unknown' | 'server_foreign' | 'server_unverified' | 'local_state' | 'local_history'>;
+      serverVersion: number | null } }
+  | { code: 'PRIMARY_BOOTSTRAP_NAME_REQUIRED'; detail: { maxLength: number } }
+  | { code: 'PRIMARY_MESSAGE_STORE_DISABLED'; detail: { reason: 'disabled' | 'unreadable'; code?: string } };
+/** What `getPrimaryLinkReadiness()` finds out before a link is approved. */
+export interface PrimaryLinkReadiness {
+  /** No blocker. Whether `needsConfirmation` is set is a separate question. */
+  ready: boolean;
+  /** What the bootstrap would run as: `first`, or `relink` over our own earlier state. Null when it cannot be told. */
+  mode: 'first' | 'relink' | null;
+  blockers: PrimaryLinkBlocker[];
+  /** The history that would be sent; null when there is no store to send it from. */
+  history: PrimaryHistoryCoverage | null;
+  /** The history is known to be partial (the store began when it was enabled, lost messages, or let some go): ask before sending it. */
+  needsConfirmation: boolean;
+}
+
 export declare class WhalibmobClient extends EventEmitter {
   constructor(opts?: WhalibmobClientOptions);
 
@@ -1095,6 +1136,12 @@ export declare class WhalibmobClient extends EventEmitter {
   getPrimaryLinkStatus(): Promise<{ hasADV: boolean; confirmed: boolean; phase: string; startedAt: number | null; expectedDeviceId: number | null; bootstrapPhase: string | null; bootstrap?: { phase: string; errorCode: string | null; iq: object | null; remote?: object }; devices: Array<{ deviceId: number; keyIndex: number }> }>;
   /** Retire a >=5 minute pending transaction only after two exact baseline server lists. Never removes a device or reuses its reserved index. */
   retireAbsentPrimaryLink(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<{ status: 'abandoned'; operationId: string }>;
+  /**
+   * Whether this primary can finish a link, found out before one is approved: reads the device list, critical_block
+   * and the local state the bootstrap reads. Never approves, sends, or writes the link journal. Throws when it cannot
+   * look (not a primary, not connected, another link operation running); a link it would refuse comes back as `blockers`.
+   */
+  getPrimaryLinkReadiness(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PrimaryLinkReadiness>;
   /** Explicit first bootstrap only: requires a real empty application store and no existing sync keys/collections. Does not report Web ready. */
   bootstrapEmptyPrimaryCompanion(options: { getInitialHistory: () => Promise<{ source: 'owned_primary_store'; messageCount: 0; conversationCount: 0 }>; recoverRejected?: boolean; signal?: AbortSignal }): Promise<{ status: 'sent'; browserReady: false; operationId: string }>;
   /**
@@ -2137,4 +2184,5 @@ export declare const PrimaryBootstrap: LibModule;
 export declare const Primary: {
   MessageStore: LibModule;
   HistoryExport: LibModule;
+  Readiness: LibModule;
 };

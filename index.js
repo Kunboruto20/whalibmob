@@ -218,7 +218,8 @@ const Signal = Object.assign({},
 // hands it over.
 const Primary = {
   MessageStore:  require('./lib/primary/MessageStore'),
-  HistoryExport: require('./lib/primary/HistoryExport')
+  HistoryExport: require('./lib/primary/HistoryExport'),
+  Readiness:     require('./lib/primary/Readiness')
 };
 
 // App state — lib/appstate/. AppStateStore.js is spread because the flat

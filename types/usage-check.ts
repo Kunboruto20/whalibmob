@@ -146,3 +146,34 @@ async function checkPrimaryQrApi(client: wa.WhalibmobClient, qr: string, code: s
   await client.approveCompanionQr({ qr });
 }
 void checkPrimaryQrApi;
+
+async function checkPrimaryReadinessApi(client: wa.WhalibmobClient, signal: AbortSignal) {
+  const verdict: wa.PrimaryLinkReadiness = await client.getPrimaryLinkReadiness({ timeoutMs: 30000, signal });
+  await client.getPrimaryLinkReadiness();
+  const mode: 'first' | 'relink' | null = verdict.mode;
+  void mode;
+  // @ts-expect-error A blocker's detail depends on its code; narrow on the code first.
+  void verdict.blockers[0].detail.retirable;
+  for (const blocker of verdict.blockers) {
+    // A blocker's detail is typed by its code.
+    if (blocker.code === 'PRIMARY_LINK_RECONCILIATION_REQUIRED') {
+      const retirable: boolean = blocker.detail.retirable;
+      if (retirable) await client.retireAbsentPrimaryLink();
+    } else if (blocker.code === 'PRIMARY_BOOTSTRAP_FOREIGN_STATE') {
+      const reasons: string[] = blocker.detail.reasons;
+      void reasons;
+    } else if (blocker.code === 'PRIMARY_MESSAGE_STORE_DISABLED') {
+      const reason: 'disabled' | 'unreadable' = blocker.detail.reason;
+      void reason;
+    }
+  }
+  if (verdict.ready && verdict.needsConfirmation && verdict.history) {
+    const coverage: wa.PrimaryHistoryCoverage = verdict.history;
+    const origin: string | null = coverage.origin;
+    const lost: number | undefined = coverage.losses[0]?.count;
+    void origin; void lost;
+  }
+  const evaluated: wa.PrimaryLinkReadiness = wa.Primary.Readiness.evaluateReadiness({});
+  void evaluated;
+}
+void checkPrimaryReadinessApi;
