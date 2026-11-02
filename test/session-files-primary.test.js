@@ -13,13 +13,21 @@ const SessionPaths = require('../lib/SessionPaths');
 const PRIMARY_SUFFIXES = [
   '.primary-messages.log',
   '.primary-messages.json',
+  // Empty; its mtime is when the store's disk began refusing writes it has not
+  // written down yet. It is the store's, so it goes where the store goes.
+  '.primary-messages.write-failed',
   '.primary-history-outbox.json',
   '.primary-linking.json'
 ];
+const MARKER_SUFFIX = '.primary-messages.write-failed';
+const MARKER_TIME = new Date('2026-09-03T10:00:00Z');
 
 // Held while a link attempt is in flight. It belongs to a process, not to a
 // number, and must never follow a session to a new place.
 const LINK_LOCK_SUFFIX = '.primary-linking.json.lock';
+// Held by the process that has the message store open. The same: never moved.
+const STORE_LOCK_SUFFIX = '.primary-messages.lock';
+const LOCK_SUFFIXES = [LINK_LOCK_SUFFIX, STORE_LOCK_SUFFIX];
 
 const PHONE = '919634847671';
 
@@ -27,12 +35,13 @@ function tmpBase() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'whalibmob-primary-files-'));
 }
 
-test('session move carries primary files but not the link lock', () => {
+test('session move carries primary files but not the locks', () => {
   const base = tmpBase();
   try {
-    for (const suffix of PRIMARY_SUFFIXES.concat(LINK_LOCK_SUFFIX)) {
+    for (const suffix of PRIMARY_SUFFIXES.concat(LOCK_SUFFIXES)) {
       fs.writeFileSync(path.join(base, PHONE + suffix), 'body of ' + suffix);
     }
+    fs.utimesSync(path.join(base, PHONE + MARKER_SUFFIX), MARKER_TIME, MARKER_TIME);
 
     const r = SessionPaths.migrateSession(base, PHONE);
     const to = path.join(base, PHONE);
@@ -46,13 +55,17 @@ test('session move carries primary files but not the link lock', () => {
         name + ' must arrive intact'
       );
     }
+    // What the marker says is its time, and the move keeps it.
+    assert.equal(fs.statSync(path.join(to, PHONE + MARKER_SUFFIX)).mtimeMs, MARKER_TIME.getTime());
 
-    // The lock is not carried: it is not reported, not at the destination, and
-    // still where it was.
-    const lock = PHONE + LINK_LOCK_SUFFIX;
-    assert.ok(!r.moved.includes(lock), 'the lock must not be moved');
-    assert.equal(fs.existsSync(path.join(to, lock)), false, 'the lock must not reach the destination');
-    assert.equal(fs.existsSync(path.join(base, lock)), true, 'the lock stays behind');
+    // The locks are not carried: not reported, not at the destination, and
+    // still where they were.
+    for (const suffix of LOCK_SUFFIXES) {
+      const lock = PHONE + suffix;
+      assert.ok(!r.moved.includes(lock), lock + ' must not be moved');
+      assert.equal(fs.existsSync(path.join(to, lock)), false, lock + ' must not reach the destination');
+      assert.equal(fs.readFileSync(path.join(base, lock), 'utf8'), 'body of ' + suffix, lock + ' stays behind, untouched');
+    }
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
@@ -62,7 +75,7 @@ test('the companion half of a session carries its primary files too', () => {
     for (const suffix of PRIMARY_SUFFIXES) {
       fs.writeFileSync(path.join(base, PHONE + '.web' + suffix), 'web ' + suffix);
     }
-    fs.writeFileSync(path.join(base, PHONE + '.web' + LINK_LOCK_SUFFIX), '');
+    for (const suffix of LOCK_SUFFIXES) fs.writeFileSync(path.join(base, PHONE + '.web' + suffix), '');
 
     const r = SessionPaths.migrateSession(base, PHONE);
     const to = path.join(base, PHONE);
@@ -73,18 +86,23 @@ test('the companion half of a session carries its primary files too', () => {
       assert.equal(fs.existsSync(path.join(base, name)), false, name + ' must leave the old place');
       assert.equal(fs.readFileSync(path.join(to, name), 'utf8'), 'web ' + suffix);
     }
-    assert.equal(fs.existsSync(path.join(to, PHONE + '.web' + LINK_LOCK_SUFFIX)), false);
+    for (const suffix of LOCK_SUFFIXES) {
+      assert.equal(fs.existsSync(path.join(to, PHONE + '.web' + suffix)), false);
+      assert.equal(fs.existsSync(path.join(base, PHONE + '.web' + suffix)), true);
+    }
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test('the primary files are in SESSION_SUFFIXES for both halves, the lock in neither', () => {
+test('the primary files are in SESSION_SUFFIXES for both halves, the locks in neither', () => {
   const known = new Set(SessionPaths.SESSION_SUFFIXES);
   for (const suffix of PRIMARY_SUFFIXES) {
     assert.ok(known.has(suffix), suffix + ' missing from the mobile half');
     assert.ok(known.has('.web' + suffix), '.web' + suffix + ' missing from the companion half');
   }
-  assert.ok(!known.has(LINK_LOCK_SUFFIX));
-  assert.ok(!known.has('.web' + LINK_LOCK_SUFFIX));
+  for (const suffix of LOCK_SUFFIXES) {
+    assert.ok(!known.has(suffix), suffix);
+    assert.ok(!known.has('.web' + suffix), '.web' + suffix);
+  }
 });
 
 test('the backend keys map to those same suffixes', () => {
@@ -93,6 +111,7 @@ test('the backend keys map to those same suffixes', () => {
   const expected = {
     'primary-messages-log':   '.primary-messages.log',
     'primary-messages':       '.primary-messages.json',
+    'primary-messages-write-failed': '.primary-messages.write-failed',
     'primary-history-outbox': '.primary-history-outbox.json',
     'primary-linking':        '.primary-linking.json'
   };
@@ -128,9 +147,10 @@ test('re-filing a session under its canonical number renames the message files, 
     const dir = path.join(base, PHONE);
     const store = createNewStore(PHONE);
     saveStore(store, path.join(dir, PHONE + '.json'));
-    for (const suffix of PRIMARY_SUFFIXES.concat(LINK_LOCK_SUFFIX)) {
+    for (const suffix of PRIMARY_SUFFIXES.concat(LOCK_SUFFIXES)) {
       fs.writeFileSync(path.join(dir, PHONE + suffix), 'body of ' + suffix);
     }
+    fs.utimesSync(path.join(dir, PHONE + MARKER_SUFFIX), MARKER_TIME, MARKER_TIME);
 
     const client = Object.create(WhalibmobClient.prototype);
     Object.assign(client, { _store: store, _sessionDir: dir, _baseDir: base, _connected: false });
@@ -148,8 +168,12 @@ test('re-filing a session under its canonical number renames the message files, 
       );
       assert.equal(fs.existsSync(path.join(to, PHONE + suffix)), false, suffix + ' must not keep the old name');
     }
+    // The store's marker follows the store, its time with it.
+    assert.ok(r.files.includes(MARKER_SUFFIX), 'the marker is reported as renamed');
+    assert.equal(fs.statSync(path.join(to, canonical + MARKER_SUFFIX)).mtimeMs, MARKER_TIME.getTime());
 
-    for (const suffix of [LINK_JOURNAL_SUFFIX, LINK_LOCK_SUFFIX]) {
+    // Neither lock is renamed to the new number: each stays under the old name.
+    for (const suffix of [LINK_JOURNAL_SUFFIX].concat(LOCK_SUFFIXES)) {
       assert.equal(
         fs.readFileSync(path.join(to, PHONE + suffix), 'utf8'), 'body of ' + suffix,
         suffix + ' stays under the old number, untouched'
