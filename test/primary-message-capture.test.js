@@ -1391,3 +1391,23 @@ test('the store is held by this client alone until it closes', async t => {
     f.client.disconnect();
     assert.equal(fs.existsSync(lock), false);
 });
+
+// An operator elsewhere broke this client's lock (PrimaryMessageStore.breakLock):
+// the store stops at its next write, the client says so once and lets it go,
+// and the next login opens the store again (or reports who holds it now).
+test('a store whose lock was broken is let go, said once, and opened again at the next login', async t => {
+    const f = fixture(t);
+    f.login();
+    await f.receive(dm('IN1', encode({ conversation: 'bir' })));
+    fs.unlinkSync(path.join(f.dir, PHONE + '.primary-messages.lock'));
+    await f.receive(dm('IN2', encode({ conversation: 'iki' })));
+    await f.receive(dm('IN3', encode({ conversation: 'uc' })));
+    assert.deepEqual(f.errors, ['PRIMARY_MESSAGE_STORE_LOST']);
+    assert.equal(f.client._messageStore, null);
+    assert.ok(!logEvents(f.dir).some(e => e.id === 'IN2' || e.id === 'IN3'), 'nothing written after the break');
+    f.login();
+    assert.ok(f.client._messageStore, 'open again');
+    await f.receive(dm('IN4', encode({ conversation: 'dort' })));
+    assert.deepEqual(records(f, PEER).map(r => r.id), ['IN1', 'IN4']);
+    assert.deepEqual(f.errors, ['PRIMARY_MESSAGE_STORE_LOST']);
+});

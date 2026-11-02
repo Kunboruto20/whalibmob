@@ -1080,6 +1080,175 @@ test('the store lock belongs to a process and never moves with a session', () =>
   assert.ok(!SESSION_SUFFIXES.includes('.web.primary-messages.lock'));
 });
 
+// ─── an operator's break ─────────────────────────────────────────────────────
+//
+// A holder that cannot be proven dead from here (another host, a reused pid, a
+// lock its writer died before filling in) keeps the store BUSY until someone
+// breaks the lock on purpose: readHolder to show who, breakLock to break it.
+
+const FOREIGN = { v: 2, pid: 4242, host: 'elsewhere.example', bootId: 'b', procStart: null, token: 'f'.repeat(32), gen: 1, at: T, pidNs: null };
+const leftovers = dir => fs.readdirSync(dir).filter(name => /\.lock\.(takeover|dead-)/.test(name));
+
+test('readHolder names who holds the store, and breakLock breaks that holder and no other', (t) => {
+  const { dir, open } = setup(t);
+  open().close();
+  assert.equal(PrimaryMessageStore.readHolder({ dir, phone: PHONE }), null, 'nothing held');
+  assert.deepEqual(PrimaryMessageStore.breakLock({ dir, phone: PHONE }), { holder: null });
+
+  fs.writeFileSync(lockFile(dir), JSON.stringify(FOREIGN), { mode: 0o600 });
+  const shown = PrimaryMessageStore.readHolder({ dir, phone: PHONE });
+  assert.equal(shown.pid, 4242);
+  assert.equal(shown.host, 'elsewhere.example');
+  assert.equal(shown.at, T);
+  assert.throws(() => open(), { code: 'PRIMARY_MESSAGE_STORE_BUSY' }, 'never taken over without the break');
+
+  // Shown one holder, and another has the lock by the time of the yes: left alone.
+  const other = { ...FOREIGN, token: 'e'.repeat(32), pid: 4343 };
+  fs.writeFileSync(lockFile(dir), JSON.stringify(other), { mode: 0o600 });
+  assert.throws(() => PrimaryMessageStore.breakLock({ dir, phone: PHONE, holder: shown }),
+    e => e.code === 'PRIMARY_MESSAGE_STORE_BUSY' && e.holder.pid === 4343);
+  assert.equal(fs.readFileSync(lockFile(dir), 'utf8'), JSON.stringify(other), 'left exactly as it was');
+  assert.throws(() => PrimaryMessageStore.breakLock({ dir, phone: PHONE, holder: null }),
+    e => e.code === 'PRIMARY_MESSAGE_STORE_BUSY' && e.holder.pid === 4343, 'none was shown, one is there now');
+
+  const now = PrimaryMessageStore.readHolder({ dir, phone: PHONE });
+  const broken = PrimaryMessageStore.breakLock({ dir, phone: PHONE, holder: now });
+  assert.equal(broken.holder.pid, 4343);
+  assert.equal(fs.existsSync(lockFile(dir)), false, 'released for the next opener');
+  assert.deepEqual(leftovers(dir), []);
+  // The one breaker that got there first wins; the next finds nothing to break.
+  assert.deepEqual(PrimaryMessageStore.breakLock({ dir, phone: PHONE, holder: now }), { holder: null });
+  open().close();
+});
+
+test('a lock its writer never filled in, or in the old bare-pid form, is broken the same way', (t) => {
+  const { dir, open } = setup(t);
+  for (const text of ['', '4242']) {
+    fs.writeFileSync(lockFile(dir), text, { mode: 0o600 });
+    const shown = PrimaryMessageStore.readHolder({ dir, phone: PHONE });
+    assert.equal(shown.legacy, true, JSON.stringify(text));
+    assert.equal(shown.pid, text ? 4242 : null);
+    assert.throws(() => open(), { code: 'PRIMARY_MESSAGE_STORE_BUSY' });
+    assert.equal(PrimaryMessageStore.breakLock({ dir, phone: PHONE, holder: shown }).holder.legacy, true);
+    open().close();
+  }
+});
+
+test('a lock this process holds for an open store is never read out or broken', (t) => {
+  const { dir, open } = setup(t);
+  const s = open();
+  const mine = fs.readFileSync(lockFile(dir), 'utf8');
+  for (const spelling of [dir, path.join(dir, '.')]) {
+    assert.throws(() => PrimaryMessageStore.readHolder({ dir: spelling, phone: PHONE }), { code: 'PRIMARY_MESSAGE_STORE_BUSY' });
+    assert.throws(() => PrimaryMessageStore.breakLock({ dir: spelling, phone: PHONE }), { code: 'PRIMARY_MESSAGE_STORE_BUSY' });
+  }
+  assert.equal(fs.readFileSync(lockFile(dir), 'utf8'), mine, 'untouched');
+  incoming(s, 'A1', 1);
+  s.close();
+
+  // Nor a lock that names this very process, through any store in it.
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'whalib-pms-'));
+  t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }));
+  const held = PrimaryMessageStore.open({ dir: elsewhere, phone: PHONE });
+  try {
+    fs.writeFileSync(lockFile(dir), fs.readFileSync(lockFile(elsewhere)), { mode: 0o600 });
+    assert.throws(() => PrimaryMessageStore.breakLock({ dir, phone: PHONE }), { code: 'PRIMARY_MESSAGE_STORE_BUSY' });
+    assert.ok(fs.existsSync(lockFile(dir)));
+    fs.unlinkSync(lockFile(dir));
+  } finally { held.close(); }
+});
+
+test('a store whose lock was broken stops at its next write and touches nothing more', (t) => {
+  const { dir, open } = setup(t);
+  const s = open();
+  incoming(s, 'A1', 1);
+  const log = fs.readFileSync(logFile(dir));
+  // Broken from elsewhere and released: the name is free, or someone else's.
+  fs.unlinkSync(lockFile(dir));
+  assert.throws(() => incoming(s, 'B2', 2), { code: 'PRIMARY_MESSAGE_STORE_LOST' });
+  assert.ok(fs.readFileSync(logFile(dir)).equals(log), 'nothing written after the break');
+  assert.throws(() => incoming(s, 'C3', 3), { code: 'PRIMARY_MESSAGE_STORE_CLOSED' });
+  assert.doesNotThrow(() => s.close());
+
+  const next = open();
+  fs.writeFileSync(lockFile(dir) + '.x', JSON.stringify(FOREIGN), { mode: 0o600 });
+  fs.renameSync(lockFile(dir) + '.x', lockFile(dir));
+  assert.throws(() => next.compact(), { code: 'PRIMARY_MESSAGE_STORE_LOST' });
+  assert.equal(fs.readFileSync(lockFile(dir), 'utf8'), JSON.stringify(FOREIGN), 'the new holder\'s lock is left be');
+  fs.unlinkSync(lockFile(dir));
+  assert.deepEqual(open().snapshot().records[CHAT].map(r => r.id), ['A1']);
+});
+
+// A process holding the store, whose next write is triggered from here.
+const HOLDS_THEN_WRITES = `
+const { PrimaryMessageStore } = require(${JSON.stringify(STORE_MODULE)});
+const [dir, phone] = process.argv.slice(1);
+const s = PrimaryMessageStore.open({ dir, phone });
+s.recordIncoming({ id: 'K1', chat: ${JSON.stringify(CHAT)}, ts: 5, raw: Buffer.from('k1'), info: { kind: 'content' } });
+process.stdout.write('ready\\n');
+process.stdin.once('data', () => {
+  let code = 'written';
+  try { s.recordIncoming({ id: 'K2', chat: ${JSON.stringify(CHAT)}, ts: 6, raw: Buffer.from('k2'), info: { kind: 'content' } }); }
+  catch (e) { code = e.code; }
+  s.close();
+  process.stdout.write(code + '\\n');
+  process.exit(0);
+});
+`;
+
+test('a live holder whose lock an operator broke stops at its next write, and the new owner\'s store stays whole', async (t) => {
+  const { dir, open } = setup(t);
+  const child = spawn(process.execPath, ['-e', HOLDS_THEN_WRITES, dir, PHONE], { stdio: ['pipe', 'pipe', 'inherit'] });
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  t.after(() => { child.kill(); return exited; });
+  let text = '';
+  child.stdout.setEncoding('utf8');
+  const said = line => new Promise((resolve, reject) => {
+    const check = () => { if (text.includes(line + '\n')) resolve(); };
+    child.stdout.on('data', d => { text += d; check(); });
+    child.once('exit', code => reject(new Error('the holder exited, code ' + code + ': ' + text)));
+    check();
+  });
+  await said('ready');
+
+  const shown = PrimaryMessageStore.readHolder({ dir, phone: PHONE });
+  assert.equal(shown.pid, child.pid);
+  assert.equal(PrimaryMessageStore.breakLock({ dir, phone: PHONE, holder: shown }).holder.pid, child.pid);
+  const s = open();
+  incoming(s, 'P1', 7);
+  const answer = said('PRIMARY_MESSAGE_STORE_LOST');
+  child.stdin.write('write\n');
+  await answer;
+  await exited;
+  assert.equal(JSON.parse(fs.readFileSync(lockFile(dir), 'utf8')).pid, process.pid, 'its close left the new lock be');
+  s.close();
+  assert.deepEqual(open().snapshot().records[CHAT].map(r => r.id), ['K1', 'P1']);
+});
+
+test('withLock runs under the store lock, and is BUSY where an open would be', (t) => {
+  const { dir, open } = setup(t);
+  let inside = null;
+  assert.equal(PrimaryMessageStore.withLock({ dir, phone: PHONE }, () => {
+    inside = JSON.parse(fs.readFileSync(lockFile(dir), 'utf8')).pid;
+    assert.throws(() => open(), { code: 'PRIMARY_MESSAGE_STORE_BUSY' });
+    return 'done';
+  }), 'done');
+  assert.equal(inside, process.pid);
+  assert.equal(fs.existsSync(lockFile(dir)), false, 'released after');
+  assert.throws(() => PrimaryMessageStore.withLock({ dir, phone: PHONE }, () => { throw new Error('inner'); }), /inner/);
+  assert.equal(fs.existsSync(lockFile(dir)), false, 'released after a throw too');
+
+  const s = open();
+  let ran = false;
+  assert.throws(() => PrimaryMessageStore.withLock({ dir, phone: PHONE }, () => { ran = true; }), { code: 'PRIMARY_MESSAGE_STORE_BUSY' });
+  s.close();
+  fs.writeFileSync(lockFile(dir), JSON.stringify(FOREIGN), { mode: 0o600 });
+  assert.throws(() => PrimaryMessageStore.withLock({ dir, phone: PHONE }, () => { ran = true; }),
+    e => e.code === 'PRIMARY_MESSAGE_STORE_BUSY' && e.holder.host === 'elsewhere.example');
+  assert.equal(ran, false);
+  assert.equal(fs.readFileSync(lockFile(dir), 'utf8'), JSON.stringify(FOREIGN));
+});
+
 test('a process that dies while writes fail still has its window reported at the next open', (t) => {
   const { dir, clock, open } = setup(t);
   execFileSync(process.execPath, ['-e', DIES, dir, PHONE, String(T + 1000), 'fail']);
