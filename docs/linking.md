@@ -549,8 +549,13 @@ approving with the request a1a1a1a1a1a1...
 approval sent. The binding to the browser stays unconfirmed unless you confirm it with /link-confirm FILE|JSON (needs the companion's public proof JSON).
 sending the stored history to the companion...
 history handed to the companion: 12 chats, 340 messages, 20.0 KB (sent inline), first link
+capture period: since the store was switched on, after registration, so anything earlier was never captured
+25 older messages had been dropped from the store before this
+known or possible losses: 1 recorded by the store (messages it saw and could not keep, or a time it was not capturing), so this history is partial
 The history is handed over; whether Web has finished showing it cannot be seen from here. If Web stays on "Loading chats", run /link-status.
 ```
+
+The lines after the first say again, for the record, what the check before the approval found in the history that went: where capture began, how many older messages had been dropped, and how many losses the store had recorded (a run of messages it could not keep counts as one). A history kept whole since registration says `capture period: since registration: the store has been on since this number was registered` and nothing more.
 
 A history over 64 KiB deflated is uploaded rather than sent inline, and the line then reads `(uploaded as a blob)`. The upload has time of its own, outside the 90 seconds the rest of the handover gets: a minute, and a second more for each 16 KiB of history (so an upload slower than about 128 kbit/s), at most 20 minutes. Web should now show the chats. The shell cannot see Web's screen, so "handed over" is all it can claim. Then:
 

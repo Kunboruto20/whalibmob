@@ -391,7 +391,8 @@ function fake(over = {}) {
         async bootstrapPrimaryCompanion(options) {
             log('bootstrapPrimaryCompanion', options);
             if (over.bootstrapError) throw over.bootstrapError;
-            return over.bootstrap || { status: 'sent', mode: 'first', operationId: 'op-1', history: { chats: 12, records: 340, bytes: 20480, inline: true }, delta: null };
+            return over.bootstrap || { status: 'sent', mode: 'first', operationId: 'op-1', delta: null,
+                history: { chats: 12, records: 340, bytes: 20480, inline: true, losses: 0, evicted: 0, captureOrigin: 'registration' } };
         },
         confirm: async (readiness, ask) => { log('confirm', ask); return over.confirm === undefined ? true : over.confirm; },
         printed: [],
@@ -574,13 +575,24 @@ test('formatBootstrapResult reports history, the newer messages and whatever els
     assert.match(blob, /5 newer/i);
     assert.match(blob, /re-link|relink/i);
 
-    const extra = L.formatBootstrapResult({
-        status: 'sent', mode: 'first', operationId: 'op', history: { chats: 2, records: 9, bytes: 10, inline: true }, delta: null,
-        losses: [{ reason: 'undecryptable', ids: ids(3) }], evicted: 7, captureOrigin: 'enabled'
-    }).join('\n');
-    assert.match(extra, /3 .*decrypt/i);
-    assert.match(extra, /7/);
-    assert.match(extra, /switched on|enabled/i);
+    // What bootstrapPrimaryCompanion() returns (PrimaryBootstrapResult): what it knows it missed is under
+    // `history`, and `losses` there is how many loss records the store held, not the records themselves.
+    const result = (history, more = {}) => ({ status: 'sent', mode: 'first', operationId: 'op', delta: null,
+        history: { chats: 2, records: 9, bytes: 10, inline: true, losses: 0, evicted: 0, captureOrigin: 'registration', ...history }, ...more });
+    const extra = L.formatBootstrapResult(result({ losses: 3, evicted: 7, captureOrigin: 'enabled' })).join('\n');
+    assert.match(extra, /known or possible losses: 3 recorded by the store/);
+    assert.match(extra, /7 older messages had been dropped/);
+    assert.match(extra, /capture period: .*switched on/);
+    assert.match(L.formatBootstrapResult(result({ losses: 1 })).join('\n'), /losses: 1 recorded by the store/);
+    assert.match(L.formatBootstrapResult(result({})).join('\n'), /capture period: since registration/);
+    // Nothing missed, or a history provider that does not say: no such line.
+    for (const history of [{}, { losses: null, evicted: null, captureOrigin: null }]) {
+        const text = L.formatBootstrapResult(result(history)).join('\n');
+        assert.ok(!/loss|dropped/i.test(text), text);
+    }
+    // Only `history` is read: the same facts beside it are not the bootstrap's.
+    const beside = L.formatBootstrapResult(result({ losses: 0 }, { losses: [{ reason: 'undecryptable', ids: ids(3) }], evicted: 7, captureOrigin: 'enabled' })).join('\n');
+    assert.ok(!/decrypt|dropped|switched on/i.test(beside), beside);
 
     // A bootstrap that says none of that is not made to.
     assert.ok(!/decrypt|dropped/i.test(plain));

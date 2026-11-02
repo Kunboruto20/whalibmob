@@ -41,7 +41,9 @@ const PARTIAL = {
 };
 const COMPLETE = { ...PARTIAL, needsConfirmation: false,
   history: { ...PARTIAL.history, capture: { origin: 'registration', since: new Date(2026, 9, 1, 9, 0).getTime() } } };
-const SENT = { mode: 'first', history: { chats: 3, records: 42, bytes: 2048, inline: true } };
+// bootstrapPrimaryCompanion() as it resolves (PrimaryBootstrapResult).
+const SENT = { status: 'sent', mode: 'first', operationId: OP, delta: null,
+  history: { chats: 3, records: 42, bytes: 2048, inline: true, losses: 1, evicted: 0, captureOrigin: 'enabled' } };
 const DEVICES = [{ deviceId: 0, keyIndex: 0 }, { deviceId: 3, keyIndex: 1 }];
 // getPrimaryLinkStatus() as the library returns it, the journal's link facts included.
 const AWAITING = {
@@ -214,7 +216,9 @@ test('the owner\'s flow: connect, requests, choose, confirm, approve, hand over,
     '  link       approval sent, not confirmed with a companion proof',
     'approval sent. The binding to the browser stays unconfirmed unless you confirm it with /link-confirm FILE|JSON (needs the companion\'s public proof JSON).',
     'sending the stored history to the companion...',
-    'history handed to the companion: 3 chats, 42 messages, 2.0 KB (sent inline), first link'
+    'history handed to the companion: 3 chats, 42 messages, 2.0 KB (sent inline), first link',
+    'capture period: since the store was switched on, after registration, so anything earlier was never captured',
+    'known or possible losses: 1 recorded by the store (messages it saw and could not keep, or a time it was not capturing), so this history is partial'
   ];
   const printed = seen.split('\n');
   assert.deepEqual(order.map(l => printed.indexOf(l)).map((at, n, all) => at >= 0 && (n === 0 || at > all[n - 1])), order.map(() => true), seen);
