@@ -88,13 +88,22 @@ function fixture(t, options = {}) {
             await client._messageMutex.runExclusive(() => { });
         },
         snapshot() { return client.getPrimaryMessageStore(); },
-        // The sender's other half: device lists and sessions, all answered here.
+        // The sender's other half: device lists, sessions and sender keys, all
+        // answered here. GROUP has one member and is phone-number addressed.
         useSender() {
             client._devMgr = {
                 async bulkEnsureSessions(phones) { return phones.map(p => p + '@s.whatsapp.net'); },
                 async ensureOwnDeviceSessions() { return []; },
+                async rebuildSessionsForJids() { return []; },
                 clearCache() { }, _jidsFromCache() { return []; }, _dcGet() { return null; }, _dcDel() { }
             };
+            Object.assign(client._signal, {
+                async buildSKDM() { return Buffer.from('skdm'); },
+                async senderKeyEncrypt() { return Buffer.from('skmsg'); },
+                senderKeyStore: { getSKDMMap: () => ({}), markSKDMSent() { }, invalidateSKDM() { } }
+            });
+            client._groupMembers.set(GROUP, new Set([MEMBER]));
+            client._groupAddressingMode.set(GROUP, 'pn');
             client._sender = new MessageSender(client);
             return client._sender;
         }
@@ -132,7 +141,8 @@ test('incoming DM is recorded with raw, pushName and inflight resolved', async t
     assert.equal(r.fromMe, false);
     assert.equal(r.ts, T);
     assert.equal(r.pushName, 'Ana');
-    assert.equal(r.status, STATUS.DELIVERY_ACK);
+    // Delivered, then read by the read receipt autoRead sends on arrival.
+    assert.equal(r.status, STATUS.READ);
     assert.ok(r.raw.equals(raw));
     assert.deepEqual(snap.pushNames, [{ id: PEER, pushname: 'Ana' }]);
     assert.deepEqual(logEvents(f.dir).filter(e => e.id === 'IN1').map(e => e.t), ['inflight', 'put']);
@@ -300,15 +310,15 @@ test('reactions, sender-key distributions, status and newsletter messages are no
     const skdmOnly = field(2, Buffer.concat([field(1, Buffer.from(GROUP)), field(2, Buffer.from([0x01]))]));
     await f.receive(dm('RX1', reaction));
     await f.receive(dm('SK1', skdmOnly));
-    // Nothing the decoder knows.
-    await f.receive(dm('UK1', field(100, Buffer.alloc(0))));
+    // Message { messageContextInfo = 35 } and nothing beside it.
+    await f.receive(dm('MC1', field(35, field(3, Buffer.alloc(32, 7)))));
     await f.receive(dm('ST1', encode({ conversation: 'story' }), { from: 'status@broadcast', participant: PEER }));
     await f.receive(dm('NL1', encode({ conversation: 'news' }), { from: '120363000000000002@newsletter' }));
     const snap = f.snapshot();
     assert.equal(snap.counts.records, 0);
     assert.deepEqual(snap.losses, []);
     // Skipped, yet no longer in flight; status and channels never were.
-    for (const id of ['RX1', 'SK1', 'UK1']) assert.deepEqual(logEvents(f.dir).filter(e => e.id === id).map(e => e.t), ['inflight', 'resolve'], id);
+    for (const id of ['RX1', 'SK1', 'MC1']) assert.deepEqual(logEvents(f.dir).filter(e => e.id === id).map(e => e.t), ['inflight', 'resolve'], id);
     assert.deepEqual(logEvents(f.dir).filter(e => ['ST1', 'NL1'].includes(e.id)), []);
     assert.deepEqual(f.errors, []);
 });
@@ -395,19 +405,26 @@ test('delivery and read receipts raise status, including list items', async t =>
     assert.deepEqual(f.errors, []);
 });
 
-test('markRead clears the unread count of the chat', async t => {
+test('markRead clears the unread count and marks the messages read', async t => {
     const f = fixture(t);
     f.login();
     f.client.autoRead = false;
+    const status = () => Object.fromEntries(records(f, PEER).map(r => [r.id, r.status]));
     await f.receive(dm('IN7', encode({ conversation: 'bir' })));
     await f.receive(dm('IN8', encode({ conversation: 'iki' })));
     assert.equal(f.snapshot().chats.find(x => x.id === PEER).unreadCount, 2);
     f.client.markRead(PEER, ['IN7', 'IN8']);
     assert.equal(f.snapshot().chats.find(x => x.id === PEER).unreadCount, 0);
-    // Read receipts sent on arrival read the chat as they go.
+    assert.deepEqual(status(), { IN7: STATUS.READ, IN8: STATUS.READ });
+    // Read receipts sent on arrival read the chat, and the message, as they go.
     f.client.autoRead = true;
     await f.receive(dm('IN9', encode({ conversation: 'uc' })));
     assert.equal(f.snapshot().chats.find(x => x.id === PEER).unreadCount, 0);
+    assert.equal(status().IN9, STATUS.READ);
+    // A voice note listened to.
+    f.client.markRead(PEER, ['IN9'], { type: 'played' });
+    assert.equal(status().IN9, STATUS.PLAYED);
+    assert.deepEqual(f.errors, []);
 });
 
 test('editMessage replaces the stored content; deleteMessage forEveryone tombstones it', async t => {
@@ -494,4 +511,268 @@ test('the store stays open across a reconnect and closes when the client stops',
     const reopened = PrimaryMessageStore.open({ dir: f.dir, phone: PHONE, lc: f.client._store.connectionLc });
     try { assert.deepEqual(reopened.snapshot().losses, []); } finally { reopened.close(); }
     assert.deepEqual(f.errors, []);
+});
+
+test('chat-visible types the decoder does not know are kept as they came', async t => {
+    const f = fixture(t);
+    f.login();
+    // pollCreationMessageV3 = 64, ptvMessage = 66, contactsArrayMessage = 13,
+    // liveLocationMessage = 18: none of them has a branch in the decoder.
+    const kept = {
+        P64: field(64, field(2, Buffer.from('Ne yiyelim?'))),
+        P66: field(66, field(1, Buffer.from('https://mmg/x'))),
+        P13: field(13, field(1, Buffer.from('2 kisi'))),
+        P18: field(18, field(3, Buffer.from('x'))),
+        // The first message in a group rides with a sender-key distribution,
+        // which the decoder then takes for the whole message.
+        PSK: Buffer.concat([field(2, field(1, Buffer.from(GROUP))), field(64, field(2, Buffer.from('ilk')))])
+    };
+    for (const [id, raw] of Object.entries(kept)) await f.receive(dm(id, raw));
+    const byId = Object.fromEntries(records(f, PEER).map(r => [r.id, r]));
+    for (const [id, raw] of Object.entries(kept)) {
+        assert.ok(byId[id], id);
+        assert.ok(byId[id].raw.equals(raw), id);
+        assert.equal(byId[id].tombstone, undefined, id);
+    }
+    // Sent from a companion: ours, in the chat the envelope names.
+    const inner = field(64, field(2, Buffer.from('webden anket')));
+    await f.receive(dm('PDS', encode({ deviceSentMessage: { destinationJID: OTHER, message: inner } }), { from: OWN_DEVICE }));
+    const [own] = records(f, OTHER);
+    assert.equal(own.id, 'PDS');
+    assert.equal(own.fromMe, true);
+    assert.ok(own.raw.equals(inner));
+    // A video note sent view-once: kept without its content.
+    const ptv = field(66, field(1, Buffer.from('gizli-video')));
+    await f.receive(dm('PVO', encode({ viewOnceMessageV2: wrapped(ptv) })));
+    const vo = records(f, PEER).find(r => r.id === 'PVO');
+    assert.equal(vo.tombstone, 'view-once');
+    assert.equal(vo.raw, undefined);
+    assert.ok(!logText(f.dir).includes(ptv.toString('base64')));
+    // Nothing a chat would show: a keep, a pin, an encrypted reaction, an
+    // event response, beside a message context at most.
+    const context = field(35, field(3, Buffer.alloc(32, 1)));
+    await f.receive(dm('NC1', Buffer.concat([field(51, field(2, Buffer.from('x'))), context])));
+    await f.receive(dm('NC2', field(63, field(1, Buffer.from('x')))));
+    await f.receive(dm('NC3', field(56, field(2, Buffer.from('x')))));
+    await f.receive(dm('NC4', field(76, field(2, Buffer.from('x')))));
+    for (const id of ['NC1', 'NC2', 'NC3', 'NC4']) {
+        assert.deepEqual(logEvents(f.dir).filter(e => e.id === id).map(e => e.t), ['inflight', 'resolve'], id);
+    }
+    assert.deepEqual(f.snapshot().losses, []);
+    assert.deepEqual(f.errors, []);
+});
+
+test('a poll vote is not kept and leaves the chat as it was', async t => {
+    const f = fixture(t);
+    f.login();
+    f.client.autoRead = false;
+    await f.receive(dm('POLL1', encode({ conversation: 'anket' })));
+    const before = f.snapshot().chats.find(c => c.id === PEER);
+    // Message { pollUpdateMessage = 50 { pollCreationMessageKey = 1, vote = 2 } }
+    const vote = field(50, Buffer.concat([field(1, field(3, Buffer.from('POLL1'))), field(2, Buffer.concat([field(1, Buffer.from('enc')), field(2, Buffer.from('iv'))]))]));
+    await f.receive(dm('V1', vote, { t: String(T + 100) }));
+    const after = f.snapshot().chats.find(c => c.id === PEER);
+    assert.deepEqual(records(f, PEER).map(r => r.id), ['POLL1']);
+    assert.equal(after.unreadCount, before.unreadCount);
+    assert.equal(after.conversationTimestamp, before.conversationTimestamp);
+    assert.deepEqual(logEvents(f.dir).filter(e => e.id === 'V1').map(e => e.t), ['inflight', 'resolve']);
+    assert.deepEqual(f.snapshot().losses, []);
+});
+
+test('a device-sent message without a destination is filed by its stanza, never as unreadable', async t => {
+    const f = fixture(t);
+    f.login();
+    // DeviceSentMessage { message = 2, phash = 3 }, naming no chat.
+    const phashOnly = inner => field(31, Buffer.concat([field(2, inner), field(3, Buffer.from('2:abcdef'))]));
+    const toGroup = encode({ conversation: 'gruba webden' });
+    await f.receive(inGroup('DP1', phashOnly(toGroup), { participant: OWN_DEVICE }));
+    const toPeer = encode({ conversation: 'birebir' });
+    await f.receive(dm('DP2', phashOnly(toPeer), { from: OWN_DEVICE, recipient: PEER }));
+    await f.receive(dm('DP3', phashOnly(encode({ conversation: 'nereye' })), { from: OWN_DEVICE }));
+    const [g] = records(f, GROUP);
+    assert.equal(g.id, 'DP1');
+    assert.equal(g.fromMe, true);
+    assert.ok(g.raw.equals(toGroup));
+    const [p] = records(f, PEER);
+    assert.equal(p.id, 'DP2');
+    assert.equal(p.fromMe, true);
+    assert.ok(p.raw.equals(toPeer));
+    assert.equal(f.snapshot().counts.records, 2);
+    assert.deepEqual(logEvents(f.dir).filter(e => e.id === 'DP3').map(e => e.t), ['inflight', 'resolve']);
+    assert.deepEqual(f.snapshot().losses, []);
+});
+
+test('a reaction delivered again and failing to decrypt is not a loss', async t => {
+    const f = fixture(t);
+    f.login();
+    await f.receive(dm('RXD', field(46, field(2, Buffer.from('x')))));
+    await f.receive(dm('RXD', UNDECRYPTABLE));
+    assert.deepEqual(f.snapshot().losses, []);
+    f.client.disconnect();
+    const reopened = PrimaryMessageStore.open({ dir: f.dir, phone: PHONE, lc: f.client._store.connectionLc });
+    try { assert.deepEqual(reopened.snapshot().losses, []); } finally { reopened.close(); }
+});
+
+test('a group admin revoke tombstones another member\'s message', async t => {
+    const f = fixture(t);
+    f.login();
+    await f.receive(inGroup('GA1', encode({ conversation: 'silinecek' })));
+    const revoke = encode({ protocolMessage: { type: 0, key: { remoteJID: GROUP, fromMe: false, ID: 'GA1', participant: MEMBER } } });
+    await f.receive(inGroup('GA2', revoke, { participant: '15550000444@s.whatsapp.net', edit: '8' }));
+    const [r] = records(f, GROUP);
+    assert.equal(r.id, 'GA1');
+    assert.equal(r.tombstone, 'revoked');
+    assert.equal(r.raw, undefined);
+    assert.deepEqual(f.errors, []);
+});
+
+test('a device-sent message to a lid is filed under the phone number its stanza names', async t => {
+    const f = fixture(t);
+    f.login();
+    const inner = encode({ conversation: 'lid adresine' });
+    await f.receive(dm('DL1', encode({ deviceSentMessage: { destinationJID: PEER_LID, message: inner } }), { from: OWN_DEVICE, peer_recipient_pn: PEER }));
+    const snap = f.snapshot();
+    assert.deepEqual(Object.keys(snap.records), [PEER]);
+    assert.equal(snap.records[PEER][0].fromMe, true);
+    assert.ok(snap.records[PEER][0].raw.equals(inner));
+    const chat = snap.chats.find(c => c.id === PEER);
+    assert.equal(chat.pnJid, PEER);
+    assert.equal(chat.lidJid, PEER_LID);
+});
+
+test('both sides of a phone-number and lid pair carry the tie', async t => {
+    const f = fixture(t);
+    f.login();
+    // Before the pairing is known the chat is the lid; after, the phone number.
+    await f.receive(dm('LT1', encode({ conversation: 'once' }), { from: PEER_LID }));
+    await f.receive(dm('LT2', encode({ conversation: 'sonra' }), { from: PEER_LID, sender_pn: PEER }));
+    const snap = f.snapshot();
+    assert.deepEqual(snap.records[PEER_LID].map(r => r.id), ['LT1']);
+    assert.deepEqual(snap.records[PEER].map(r => r.id), ['LT2']);
+    for (const id of [PEER, PEER_LID]) {
+        const chat = snap.chats.find(c => c.id === id);
+        assert.equal(chat.pnJid, PEER, id);
+        assert.equal(chat.lidJid, PEER_LID, id);
+    }
+});
+
+test('the record follows a send through the group 479, NO_OPEN_SESSION and 463 retries', async t => {
+    const f = fixture(t);
+    f.login();
+    const sender = f.useSender();
+    // Group, 479: the stanza is sent again under a new id.
+    let ids = [];
+    f.ack = node => { ids.push(node.attrs.id); return ids.length === 1 ? { error: '479' } : { t: String(T + 1) }; };
+    const g = await sender.sendText(GROUP, 'grup', { id: 'G479' });
+    assert.equal(ids[0], 'G479');
+    assert.equal(g.id, ids[1]);
+    assert.deepEqual(records(f, GROUP).map(r => [r.id, r.status]), [[ids[1], STATUS.SERVER_ACK]]);
+    // NO_OPEN_SESSION: nothing went out under the first id at all.
+    ids = [];
+    f.ack = node => { ids.push(node.attrs.id); return { t: String(T + 1) }; };
+    const encrypt = f.client._signal.bulkEncryptForDevicesDetailed;
+    let refused = false;
+    f.client._signal.bulkEncryptForDevicesDetailed = async jids => {
+        if (refused) return encrypt(jids);
+        refused = true;
+        return { encrypted: [], failed: jids.map(jid => ({ jid, reason: 'no session' })) };
+    };
+    const n = await sender.sendText(PEER, 'oturum', { id: 'NOS1' });
+    f.client._signal.bulkEncryptForDevicesDetailed = encrypt;
+    assert.deepEqual(ids, [n.id]);
+    assert.notEqual(n.id, 'NOS1');
+    assert.deepEqual(records(f, PEER).map(r => [r.id, r.status]), [[n.id, STATUS.SERVER_ACK]]);
+    // 463: the same stanza again under a new id, once a token is in hand.
+    Object.assign(f.client, {
+        _tcTokenStore: { get: () => ({ token: Buffer.from('tok'), timestamp: Math.floor(Date.now() / 1000) }), shouldIssue: () => false, clearToken() { } },
+        async ensureTcTokenBeforeSend() { }, async _issuePrivacyTokens() { return {}; }, _storeTcTokenFromIqResult() { },
+        _refreshReachoutTimelockAfter463() { }, _resolveTcTokenJid: jid => String(jid), _resolveTcTokenIssuanceJid: jid => String(jid)
+    });
+    ids = [];
+    f.ack = node => { ids.push(node.attrs.id); return ids.length === 1 ? { error: '463' } : { t: String(T + 1) }; };
+    const tc = await sender.sendText(OTHER, 'token', { id: 'TC1' });
+    assert.equal(ids[0], 'TC1');
+    assert.equal(tc.id, ids[1]);
+    assert.deepEqual(records(f, OTHER).map(r => [r.id, r.status]), [[ids[1], STATUS.SERVER_ACK]]);
+    assert.deepEqual(f.errors, []);
+});
+
+test('a store that throws never breaks the message path', async t => {
+    const f = fixture(t);
+    f.client.on('primary_message_store_error', () => { throw new Error('a listener that throws too'); });
+    // Even working out where the store lives can fail.
+    f.client._sessionDir = 42;
+    f.login();
+    assert.equal(f.client._messageStore, null);
+    assert.equal(f.client._connected, true);
+    assert.deepEqual(f.errors, ['PRIMARY_MESSAGE_STORE_FAILED']);
+    f.client._sessionDir = f.dir;
+    f.login();
+    assert.ok(f.client._messageStore);
+    // A store that refuses a record, and a chat that cannot be worked out.
+    const messages = [];
+    f.client.on('message', m => messages.push(m.id));
+    f.client._messageStore.recordIncoming = () => { throw new TypeError('store bug'); };
+    await f.receive(dm('TH1', encode({ conversation: 'yine de' })));
+    f.client._captureChat = () => { throw new TypeError('chat bug'); };
+    await f.receive(dm('TH2', encode({ conversation: 'yine de' })));
+    assert.deepEqual(messages, ['TH1', 'TH2']);
+    assert.ok(f.sent.some(n => n.description === 'ack' && n.attrs.id === 'TH2'));
+    assert.deepEqual(f.errors.slice(1), ['PRIMARY_MESSAGE_STORE_FAILED', 'PRIMARY_MESSAGE_STORE_FAILED', 'PRIMARY_MESSAGE_STORE_FAILED']);
+});
+
+test('a snapshot whose sweep cannot be written is still handed out, without expired content', async t => {
+    const f = fixture(t);
+    f.login();
+    // A disappearing message long past its minute.
+    await f.receive(dm('EX1', encode({ extendedTextMessage: { text: 'bir dakika', contextInfo: { expiration: 60 } } })));
+    await f.receive(dm('EX2', encode({ conversation: 'kalici' })));
+    f.client._messageStore._sweep = () => {
+        const err = new Error('PRIMARY_MESSAGE_STORE_WRITE_FAILED: disk full');
+        err.code = 'PRIMARY_MESSAGE_STORE_WRITE_FAILED';
+        throw err;
+    };
+    const snap = f.client.getPrimaryMessageStore();
+    assert.deepEqual(f.errors, ['PRIMARY_MESSAGE_STORE_WRITE_FAILED']);
+    const byId = Object.fromEntries(snap.records[PEER].map(r => [r.id, r]));
+    assert.equal(byId.EX1.tombstone, 'expired');
+    assert.equal(byId.EX1.raw, undefined);
+    assert.ok(byId.EX2.raw);
+});
+
+test('disconnect lets the messages still being decrypted reach the store first', async t => {
+    const f = fixture(t);
+    f.login();
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const decrypt = f.client._decryptWithCandidates;
+    f.client._decryptWithCandidates = async (...args) => { await gate; return decrypt(...args); };
+    await f.client._handleMessage(dm('Q1', encode({ conversation: 'kuyrukta' })));
+    const store = f.client._messageStore;
+    f.client.disconnect();
+    assert.equal(f.client._messageStore, store);
+    release();
+    await f.client._messageMutex.waitForUnlock();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.client._messageStore, null);
+    const reopened = PrimaryMessageStore.open({ dir: f.dir, phone: PHONE, lc: f.client._store.connectionLc });
+    try {
+        const snap = reopened.snapshot();
+        assert.deepEqual(snap.records[PEER].map(r => r.id), ['Q1']);
+        assert.deepEqual(snap.losses, []);
+    } finally { reopened.close(); }
+});
+
+test('disconnect waits for the decrypt queue only briefly', async t => {
+    const f = fixture(t);
+    f.login();
+    f.client._messageStoreDrainMs = 20;
+    f.client._decryptWithCandidates = () => new Promise(() => { });   // never
+    await f.client._handleMessage(dm('Q2', encode({ conversation: 'takildi' })));
+    f.client.disconnect();
+    assert.ok(f.client._messageStore);
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.equal(f.client._messageStore, null);
+    const reopened = PrimaryMessageStore.open({ dir: f.dir, phone: PHONE, lc: f.client._store.connectionLc });
+    try { assert.deepEqual(reopened.snapshot().losses, [{ reason: 'received-not-stored', ids: ['Q2'] }]); } finally { reopened.close(); }
 });

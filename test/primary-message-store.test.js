@@ -747,13 +747,64 @@ test('compaction truncates the log and preserves the snapshot', (t) => {
   assert.deepEqual(snap.records[CHAT].map(r => [r.id, r.status]), [['M1', STATUS.DELIVERY_ACK], ['O1', STATUS.SERVER_ACK], ['M2', STATUS.DELIVERY_ACK]]);
 });
 
-test('the log compacts itself past 5 000 lines', (t) => {
+test('the log compacts itself past 5 000 lines, off the stack that appended', async (t) => {
+  const { dir, open } = setup(t);
+  const s = open({ perChat: 10 });
+  const lines = () => fs.readFileSync(logFile(dir), 'utf8').split('\n').length - 1;
+  for (let i = 0; i < 5001; i++) s.recordInflight({ id: 'I' + i, chat: CHAT, ts: i });
+  // Whoever appended the 5 001st line may be holding an ack: not on its time.
+  assert.ok(lines() > 5000, `${lines()} lines`);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(lines() < 5000, `${lines()} lines`);
+  assert.ok(JSON.parse(fs.readFileSync(snapFile(dir), 'utf8')).seq > 5000);
+});
+
+test('a compaction still pending at close is done by close', async (t) => {
   const { dir, open } = setup(t);
   const s = open({ perChat: 10 });
   for (let i = 0; i < 5001; i++) s.recordInflight({ id: 'I' + i, chat: CHAT, ts: i });
-  const lines = fs.readFileSync(logFile(dir), 'utf8').split('\n').length - 1;
-  assert.ok(lines < 5000, `${lines} lines`);
-  assert.ok(JSON.parse(fs.readFileSync(snapFile(dir), 'utf8')).seq > 5000);
+  s.close();
+  assert.equal(fs.statSync(logFile(dir)).size, 0);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(open().snapshot().losses[0].ids.length, 5001);
+});
+
+test('an id resolved without being stored is not lost when a redelivery fails to decrypt', (t) => {
+  const { open } = setup(t);
+  const s = open();
+  s.recordInflight({ id: 'R1', chat: CHAT, ts: 100 });
+  s.recordIncoming({ id: 'R1', chat: CHAT, ts: 100, info: { kind: 'skip' } });
+  // The same stanza again, its ratchet step already spent.
+  s.recordInflight({ id: 'R1', chat: CHAT, ts: 100 });
+  s.recordDecryptFailure({ id: 'R1' });
+  assert.deepEqual(s.snapshot().losses, []);
+  s.close();
+  // Nor at the next open, where whatever was left in flight is counted.
+  const again = open();
+  assert.deepEqual(again.snapshot().losses, []);
+  again.recordDecryptFailure({ id: 'R1' });
+  assert.deepEqual(again.snapshot().losses, []);
+  // Anything else still is.
+  again.recordDecryptFailure({ id: 'R2' });
+  assert.deepEqual(again.snapshot().losses, [{ reason: 'undecryptable', ids: ['R2'] }]);
+});
+
+test('a snapshot taken without the sweep still withholds expired content', (t) => {
+  const { dir, clock, open } = setup(t);
+  const s = open();
+  incoming(s, 'E1', 100, { info: { kind: 'content', expiration: 60 } });
+  incoming(s, 'E2', 100);
+  assert.equal(s.hasChat(CHAT), true);
+  assert.equal(s.hasChat(OTHER), false);
+  clock.ms = 100 * 1000 + 61 * 1000;
+  const before = fs.readFileSync(logFile(dir), 'utf8');
+  const snap = s.snapshot({ sweep: false });
+  assert.equal(fs.readFileSync(logFile(dir), 'utf8'), before, 'nothing written');
+  const byId = Object.fromEntries(snap.records[CHAT].map(r => [r.id, r]));
+  assert.equal(byId.E1.tombstone, 'expired');
+  assert.equal(byId.E1.raw, undefined);
+  assert.ok(byId.E2.raw);
+  assert.equal(s.snapshot().records[CHAT].find(r => r.id === 'E1').tombstone, 'expired');
 });
 
 test('a crash between snapshot write and log truncation replays idempotently', (t) => {
