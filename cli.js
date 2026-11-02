@@ -2906,7 +2906,12 @@ async function main() {
   // The authentication folder first: it decides where everything this run
   // touches lives, and asking it after the other two made the answer to the
   // first question land in the wrong prompt.
-  _sessDir = await askSessionDir(cmd, flags.session);
+  //
+  // Absolute from here on, however it was given — --session, WA_SESSION_DIR,
+  // the remembered answer or the prompt all come back through askSessionDir.
+  // It is published below and handed to every client, and none of them should
+  // depend on the directory the command happens to run in.
+  _sessDir = path.resolve(await askSessionDir(cmd, flags.session));
 
   // One source of truth for the rest of the run. The library resolves the files
   // that belong to the installation rather than to a number — the Android token
