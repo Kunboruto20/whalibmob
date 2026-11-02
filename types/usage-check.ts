@@ -180,3 +180,23 @@ async function checkPrimaryReadinessApi(client: wa.WhalibmobClient, signal: Abor
   void evaluated;
 }
 void checkPrimaryReadinessApi;
+
+// The link commands take a real client, and answer in the shapes they declare.
+async function checkLinkCommands(client: wa.WhalibmobClient, readiness: wa.PrimaryLinkReadiness) {
+  const L = wa.Cli.LinkCommands;
+  const groups: wa.LinkInvitationGroup[] = L.groupInvitations(client.getPrimaryLinkInvitations());
+  const choice: wa.LinkInvitationChoice = L.chooseInvitation(client.getPrimaryLinkInvitations(), '1');
+  if ('id' in choice) { const id: string = choice.id; void id; }
+  const explained: wa.LinkExplanation = L.explainError('PRIMARY_LINK_STORE_BUSY');
+  const lines: string[] = L.formatReadiness(readiness).concat(L.formatLinkStatus(await client.getPrimaryLinkStatus()), explained.title, explained.next);
+  const result: wa.LinkCodeResult = await L.runLinkCode({ client, code: 'ABCD1234', selector: '2', confirm: async () => true, print: line => void line.length });
+  if (result.status === 'sent') { const op: string = result.approval.operationId; const chats: number = result.bootstrap.history.chats; void op; void chats; }
+  if (result.status === 'choose') { const n: number = result.groups.length; void n; }
+  const qr: wa.LinkQrResult = await L.runLinkQr({ client, payload: 'https://wa.me/settings/linked_devices#x' });
+  try { await L.runLinkQr({ client, payload: 'x' }); } catch (error) { L.describeError(error); }
+  L.formatLinkedDevices({ phone: '447949738354', devices: await client.listLinkedDevices(), journal: await client.getPrimaryLinkStatus(), history: { chats: 1, records: 2 }, now: Date.now() });
+  void groups; void lines; void qr;
+  // @ts-expect-error A pairing code is text.
+  await L.runLinkCode({ client, code: 12345678 });
+}
+void checkLinkCommands;

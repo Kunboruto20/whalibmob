@@ -2211,3 +2211,98 @@ export declare const Primary: {
   HistoryExport: LibModule;
   Readiness: LibModule;
 };
+
+/** One browser asking to link: its pairing requests collapsed to the newest. */
+export interface LinkInvitationGroup {
+  /** The browser's fingerprint (`PrimaryLinkInvitation.companion`); null when the request carries none. A label, not proof. */
+  companion: string | null;
+  newest: { id: string; expiresAt: number };
+  /** How many requests this browser sent. A request without a fingerprint is always a group of one. */
+  count: number;
+}
+/** `{ id }` is one request; `{ ambiguous }` is a choice the person has to make; `{ none }` is nothing to pick. */
+export type LinkInvitationChoice = { id: string } | { ambiguous: LinkInvitationGroup[] } | { none: true };
+/** What went wrong in one line, and the step to take in another. Plain English; the error code is unchanged. */
+export interface LinkExplanation { title: string; next: string; }
+/** The slice of a primary client the link commands use. `WhalibmobClient` satisfies it. */
+export interface LinkCommandsClient {
+  getPrimaryLinkReadiness(): Promise<PrimaryLinkReadiness>;
+  getPrimaryLinkInvitations(): PrimaryLinkInvitation[] | Promise<PrimaryLinkInvitation[]>;
+  approveCompanionCode(code: string, options: { invitationId: string }): Promise<PrimaryLinkResult>;
+  approveCompanionQr(payload: string, options?: PrimaryLinkCommonOptions): Promise<PrimaryLinkResult>;
+  bootstrapPrimaryCompanion(options: PrimaryBootstrapOptions): Promise<PrimaryBootstrapResult>;
+}
+/**
+ * `getPrimaryLinkStatus()`, optionally with what only the caller may know:
+ * how the companion was linked, and which device the latest link made.
+ */
+export interface LinkJournalView {
+  phase?: string;
+  confirmed?: boolean;
+  startedAt?: number | null;
+  expectedDeviceId?: number | null;
+  bootstrapPhase?: string | null;
+  bootstrap?: { phase?: string; errorCode?: string | null };
+  devices?: Array<{ deviceId: number; keyIndex: number }>;
+  method?: string;
+  deviceId?: number;
+  keyIndex?: number;
+}
+/** What the link commands throw: the library's error, with the link's own context attached. */
+export interface LinkCommandError extends Error {
+  code?: string;
+  /** Every reason readiness refused, first one being `code`. */
+  blockers?: PrimaryLinkBlocker[];
+  readiness?: PrimaryLinkReadiness;
+  /** The approval went through and the bootstrap then failed: approving again is the wrong answer. */
+  afterApproval?: boolean;
+  invitationId?: string;
+  operationId?: string;
+}
+export interface LinkRunOptions {
+  client: LinkCommandsClient;
+  /** Asked once, only when the history is known to be partial; no function is a no. */
+  confirm?: (readiness: PrimaryLinkReadiness) => boolean | Promise<boolean>;
+  /** One line at a time. */
+  print?: (line: string) => void;
+}
+export type LinkCodeResult =
+  | { status: 'sent'; invitationId: string; approval: PrimaryLinkResult; bootstrap: PrimaryBootstrapResult }
+  | { status: 'choose'; groups: LinkInvitationGroup[] }
+  | { status: 'aborted' };
+export type LinkQrResult =
+  | { status: 'sent'; approval: PrimaryLinkResult; bootstrap: PrimaryBootstrapResult }
+  | { status: 'aborted' };
+/**
+ * `whalibmob/lib/cli/linkCommands` — the logic behind the CLI's link commands, with no terminal in it:
+ * readiness, an optional coverage confirmation, the choice between pairing requests, the approval, then the
+ * bootstrap with the stored history; the `/linked-devices` and `/link-status` views; a message and a next step
+ * for every error code.
+ */
+export interface LinkCommandsModule {
+  /** The commands the messages point to. */
+  COMMANDS: Readonly<Record<string, string>>;
+  /** Collapse duplicate requests from one browser to its newest, newest browser first. A request without a fingerprint is its own group. */
+  groupInvitations(invitations: PrimaryLinkInvitation[]): LinkInvitationGroup[];
+  /** Never guesses between browsers. `selector` is a group number (`'1'`) or an id prefix of 6 or more hex characters. */
+  chooseInvitation(invitations: PrimaryLinkInvitation[], selector?: string | number): LinkInvitationChoice;
+  formatInvitations(groups: LinkInvitationGroup[], now?: number | (() => number)): string[];
+  /** `error` is optional: a busy journal's `holder` makes the message say who has it. */
+  explainError(code: unknown, error?: { holder?: PrimaryLinkHolder | null }): LinkExplanation;
+  explainBlocker(blocker: PrimaryLinkBlocker | { code?: string; detail?: object }): LinkExplanation;
+  /** An error caught from the link commands, as lines: what happened, what to do, the code. */
+  describeError(error: unknown): string[];
+  formatReadiness(readiness: PrimaryLinkReadiness): string[];
+  formatBootstrapResult(result: PrimaryBootstrapResult | undefined): string[];
+  formatLinkedDevices(options: {
+    phone?: string; devices?: Array<{ deviceId: number; keyIndex: number }>;
+    journal?: LinkJournalView | null; history?: { chats?: number; records?: number } | null; now?: number;
+  }): string[];
+  formatLinkStatus(status: LinkJournalView | undefined): string[];
+  runLinkCode(options: LinkRunOptions & { code: string; selector?: string | number; now?: number | (() => number) }): Promise<LinkCodeResult>;
+  runLinkQr(options: LinkRunOptions & { payload: string; options?: PrimaryLinkCommonOptions }): Promise<LinkQrResult>;
+}
+/** `whalibmob/lib/cli/` — the command line's logic, for a front end other than `cli.js` too. */
+export declare const Cli: {
+  LinkCommands: LinkCommandsModule;
+};

@@ -222,6 +222,14 @@ const Primary = {
   Readiness:     require('./lib/primary/Readiness')
 };
 
+// lib/cli/ — the logic behind the command line's link commands (choosing
+// among pairing requests, the readiness and coverage notices, the order of
+// approve then bootstrap, a message and a next step for every error code),
+// with no terminal in it so a front end other than cli.js can use it too.
+const Cli = {
+  LinkCommands: require('./lib/cli/linkCommands')
+};
+
 // App state — lib/appstate/. AppStateStore.js is spread because the flat
 // AppStateStore is its class; the other three are whole.
 const AppState = Object.assign({}, require('./lib/appstate/AppStateStore'), {
@@ -437,5 +445,6 @@ module.exports = {
   WAUSync,
   Signal,
   AppState,
-  Primary
+  Primary,
+  Cli
 };
