@@ -188,5 +188,14 @@ The **Sponsor** button at the top of the repository leads back here.
 
 ## License
 
-MIT     
-.
+MIT
+
+## Star History
+
+<a href="https://star-history.com/#Kunboruto20/whalibmob&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Kunboruto20/whalibmob&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Kunboruto20/whalibmob&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Kunboruto20/whalibmob&type=Date" />
+  </picture>
+</a>
