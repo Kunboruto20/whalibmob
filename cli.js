@@ -613,6 +613,12 @@ let _rl      = null;
 // number sends and receives that a companion it links is handed as history.
 // On unless `--no-message-store` was given (the library's own default is off).
 let _messageStoreOn = true;
+// --reset-message-store: a store whose files are damaged is started again,
+// its files kept beside it as <file>.corrupt-<time> (PRIMARY_MESSAGE_STORE_
+// LOG_CORRUPT and SNAPSHOT_CORRUPT say to run with it).
+let _messageStoreReset = false;
+// What the clients are given as their messageStore option.
+const messageStoreOption = () => (!_messageStoreOn ? false : _messageStoreReset ? { setAsideCorrupt: true } : true);
 // Link commands still running, and whether one of them is waiting on a y/N.
 // An event that arrives meanwhile prints among the command's lines rather than
 // redrawing the prompt in the middle of them.
@@ -788,10 +794,21 @@ const HELP = `
 
 // A failure reported by an event rather than by a command: what went wrong and
 // the step to take, in linkCommands' words, with the code to report.
-function failEvent(what, code, detail) {
-  const { title, next } = LinkCli.explainError(code);
+function failEvent(what, code, detail, context) {
+  const { title, next } = LinkCli.explainError(code, null, context);
   fail(what + ': ' + title + '  (' + code + (detail ? ', ' + detail : '') + ')');
   out('  next: ' + next);
+}
+
+// The message store reports each message it could not record, and on a full
+// disk that is every message. Shown once per code a minute; the next one shown
+// says how many were held back meanwhile.
+const storeErrors = LinkCli.createEventLimiter();
+
+function storeErrorEvent(e, held, context) {
+  const event = e || {};
+  failEvent('message store', event.code, event.op, context);
+  if (held) out(LinkCli.formatHeldBack(held));
 }
 
 function attachEvents(client) {
@@ -1026,7 +1043,10 @@ function attachEvents(client) {
   client.on('primary_linked', linkEvent(e => out('  ' + LinkCli.formatLinkStatus({ phase: 'committed', confirmed: true })[0] +
     '   companion #' + e.deviceId + ', key index ' + e.keyIndex)));
   client.on('primary_link_error', linkEvent(e => failEvent('link request', e.code)));
-  client.on('primary_message_store_error', linkEvent(e => failEvent('message store', e.code, e.op)));
+  client.on('primary_message_store_error', (e) => {
+    const shown = storeErrors(e && e.code);
+    if (shown) linkEvent(event => storeErrorEvent(event, shown.held))(e);
+  });
 
   client.on('error', (e) => {
     _rl && _rl.pause();
@@ -1176,7 +1196,7 @@ function registrationPrompts() {
 async function doConnectWeb(phone, opts) {
   opts  = opts || {};
   phone = normalizePhone(phone);
-  const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: _messageStoreOn });
+  const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: messageStoreOption() });
   attachEvents(client);
 
   client.on('pair_device', () => { /* QR path — nothing to draw in a terminal */ });
@@ -1236,7 +1256,7 @@ async function doConnectWeb(phone, opts) {
 // ref into a QR, and this draws it in the terminal for the phone to scan.
 async function doConnectWebQr(phone) {
   phone = normalizePhone(phone);
-  const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: _messageStoreOn });
+  const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: messageStoreOption() });
   attachEvents(client);
 
   let renderQr = null;
@@ -1313,7 +1333,7 @@ async function doConnect(phone) {
          'stored in the session. Unset it to use the session\'s own.');
   }
 
-  const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: _messageStoreOn });
+  const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: messageStoreOption() });
   attachEvents(client);
 
   // The session may be re-filed mid-connect when WhatsApp turns out to keep the
@@ -3098,7 +3118,7 @@ async function handleLine(line) {
 // so `wa connect --no-message-store <phone>` keeps the phone as the phone.
 // Every other option takes the argument after it as its value, unless that is
 // itself an option.
-const SWITCHES = new Set(['no-message-store', 'sms', 'pair', 'business', 'all', 'download']);
+const SWITCHES = new Set(['no-message-store', 'reset-message-store', 'sms', 'pair', 'business', 'all', 'download']);
 // What `--switch=value` may say.
 const SWITCH_VALUES = { 'true': true, 'yes': true, 'on': true, '1': true,
                         'false': false, 'no': false, 'off': false, '0': false };
@@ -3174,6 +3194,8 @@ options:  before or after the command; --session <dir> and --session=<dir> are t
   --session <dir>   authentication folder (default: remembered, else ~/.waSession)
   --no-message-store  keep no record of messages. By default a registered number keeps
                     one, from registration on, to hand a companion it links as history
+  --reset-message-store  when the message store's files are damaged, keep them (renamed
+                    <file>.corrupt-<time>) and start the store again; history starts from now
   --out <file>      where apk-material writes  (default: <session dir>/android-apk-material.json)
   --sms             connect by registering this number over SMS
   --pair            connect by linking to an existing account (8-digit code)
@@ -3272,6 +3294,11 @@ async function main() {
     process.exit(1);
   }
   _messageStoreOn = !flags['no-message-store'];
+  _messageStoreReset = !!flags['reset-message-store'];
+  if (_messageStoreReset && !_messageStoreOn) {
+    fail('--reset-message-store starts the message store again, and --no-message-store keeps none: use one of them');
+    process.exit(1);
+  }
 
   // `--session` with nothing after it parses as `true`, and so does an empty
   // value, which is what `--session "$DIR"` turns into when $DIR is unset.
@@ -3681,7 +3708,7 @@ async function main() {
     const phone = normalizePhone(sub || pos[0] || flags.phone || '');
     if (!phone) { fail('phone number required'); process.exit(1); }
 
-    const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: _messageStoreOn });
+    const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: messageStoreOption() });
 
     client.on('connected', () => {
       _client = client;
@@ -3761,7 +3788,10 @@ async function main() {
     client.on('reconnecting', ({ delay }) => out('  reconnecting in ' + delay / 1000 + 's...'));
     client.on('reconnected',  ()   => out('  reconnected'));
     client.on('auth_failure', (f)  => { fail('session revoked: ' + f.reason); process.exit(1); });
-    client.on('primary_message_store_error', (e) => failEvent('message store', e.code, e.op));
+    client.on('primary_message_store_error', (e) => {
+      const shown = storeErrors(e && e.code);
+      if (shown) storeErrorEvent(e, shown.held, 'listen');
+    });
     client.on('error',        (e)  => fail(e.message));
 
     process.on('SIGINT', () => { out('\nstopping...'); client.disconnect(); process.exit(0); });

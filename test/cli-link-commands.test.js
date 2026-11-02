@@ -314,6 +314,88 @@ test('formatReadiness counts each reason once and tells the reasons apart', () =
     assert.match(L.formatReadiness(PARTIAL({ losses: [{ reason: 'undecryptable', ids: ids(1) }] })).find(l => l.includes('known or possible losses')), /1 received message could not be decrypted/);
 });
 
+// The store notes a stretch it could not write to disk as a loss of its own
+// ({ reason: 'write-failed', from, to }, in milliseconds).
+test('a stretch the store could not write to disk is reported as a loss, with its window', () => {
+    const line = L.formatReadiness(PARTIAL({ losses: [{ reason: 'write-failed', from: at(2026, 9, 3, 10, 0), to: at(2026, 9, 3, 10, 20) }, { reason: 'undecryptable', ids: ids(1) }] }))
+        .find(l => l.includes('known or possible losses'));
+    assert.match(line, /messages were not saved from 2026-09-03 10:00 to 2026-09-03 10:20 \(the store could not write to disk\)/);
+    assert.match(line, /1 received message could not be decrypted/);
+    assert.match(L.formatReadiness(PARTIAL({ losses: [{ reason: 'write-failed', from: at(2026, 9, 3, 10, 0) }] })).join('\n'), /not saved from 2026-09-03 10:00 \(the store could not write/);
+    assert.match(L.formatReadiness(PARTIAL({ losses: [{ reason: 'write-failed' }] })).join('\n'), /not saved for a while \(the store could not write/);
+});
+
+// ─── the message store ──────────────────────────────────────────────────────
+
+const STORE_CODES = () => libCodes().filter(code => code.startsWith('PRIMARY_MESSAGE_STORE_'));
+
+test('a damaged store is started again with --reset-message-store, and its files are kept', () => {
+    for (const code of ['PRIMARY_MESSAGE_STORE_LOG_CORRUPT', 'PRIMARY_MESSAGE_STORE_SNAPSHOT_CORRUPT']) {
+        for (const { next } of [L.explainError(code), L.explainBlocker({ code: 'PRIMARY_MESSAGE_STORE_DISABLED', detail: { reason: 'unreadable', code } })]) {
+            assert.match(next, /restart wa with --reset-message-store/i, code);
+            assert.match(next, /\.corrupt-/, code);
+            assert.match(next, /starts again from now/, code);
+        }
+    }
+});
+
+test('a busy store may be held by another process, and the way out says so', () => {
+    const { title, next } = L.explainError('PRIMARY_MESSAGE_STORE_BUSY');
+    assert.match(title, /another (wa|program|process)/i);
+    assert.match(title, /process/);
+    assert.match(next, /close the other wa using this session, or wait/i);
+});
+
+test('a store that could not write to disk is pointed at the disk, then at /reconnect, as an event and as a blocker', () => {
+    const event = L.explainError('PRIMARY_MESSAGE_STORE_WRITE_FAILED');
+    const blocker = L.explainBlocker({ code: 'PRIMARY_MESSAGE_STORE_DISABLED', detail: { reason: 'unreadable', code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED' } });
+    for (const { next } of [event, blocker]) {
+        assert.match(next, /^Free disk space/);
+        assert.match(next, /then run \/reconnect\.$/);
+        assert.ok(!/report|back up/i.test(next), next);
+    }
+    assert.match(blocker.title, /could not write to disk/);
+    assert.match(blocker.title, /no history to hand over/);
+    // One it cannot name keeps the old advice, which no longer points at /link-status.
+    const unnamed = L.explainBlocker({ code: 'PRIMARY_MESSAGE_STORE_DISABLED', detail: { reason: 'unreadable' } });
+    assert.match(unnamed.next, /report/);
+    assert.ok(!unnamed.next.includes('/link-status'), unnamed.next);
+});
+
+// wa listen has no shell: nothing it prints may name a shell command.
+test('in wa listen a store failure is never answered with a shell command', () => {
+    for (const code of STORE_CODES()) {
+        const { next } = L.explainError(code, null, 'listen');
+        assert.ok(!/(^|\s)\/[a-z]/.test(next), code + ': ' + next);
+    }
+    assert.match(L.explainError('PRIMARY_MESSAGE_STORE_WRITE_FAILED', null, 'listen').next, /^Free disk space.*then restart wa\.$/);
+    assert.match(L.explainError('PRIMARY_MESSAGE_STORE_BUSY', null, 'listen').next, /restart wa/);
+});
+
+// The store reports each message it could not record; on a full disk that is every message.
+test('store failures are shown once per code a minute, with how many were held back', () => {
+    let now = 0;
+    const show = L.createEventLimiter({ now: () => now });
+    assert.deepEqual(show('PRIMARY_MESSAGE_STORE_WRITE_FAILED'), { held: 0 });
+    now = 1000;
+    assert.equal(show('PRIMARY_MESSAGE_STORE_WRITE_FAILED'), null);
+    assert.deepEqual(show('PRIMARY_MESSAGE_STORE_CLOSED'), { held: 0 }, 'another code has its own minute');
+    now = 59999;
+    assert.equal(show('PRIMARY_MESSAGE_STORE_WRITE_FAILED'), null);
+    now = 60000;
+    assert.deepEqual(show('PRIMARY_MESSAGE_STORE_WRITE_FAILED'), { held: 2 });
+    now = 60001;
+    assert.equal(show('PRIMARY_MESSAGE_STORE_WRITE_FAILED'), null);
+    now = 200000;
+    assert.deepEqual(show('PRIMARY_MESSAGE_STORE_WRITE_FAILED'), { held: 1 });
+    assert.equal(L.formatHeldBack(1), '  (1 more like this since the last one was not shown)');
+    assert.equal(L.formatHeldBack(2), '  (2 more like this since the last one were not shown)');
+    // A limiter of its own each, on the real clock by default.
+    const other = L.createEventLimiter();
+    assert.deepEqual(other('X'), { held: 0 });
+    assert.equal(other('X'), null);
+});
+
 test('formatReadiness says so when nothing is missing, and never calls it complete', () => {
     const lines = L.formatReadiness(READY());
     const text = lines.join('\n');
@@ -364,7 +446,10 @@ test('a hold that is not yet retirable is pointed at reconcile, not retire', () 
     // A blocker it knows nothing extra about still explains itself.
     assert.deepEqual(L.explainBlocker({ code: 'PRIMARY_BOOTSTRAP_NAME_REQUIRED' }), L.explainError('PRIMARY_BOOTSTRAP_NAME_REQUIRED'));
     assert.match(L.explainBlocker({ code: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE', detail: { reasons: ['local_history', 'server_foreign'], serverVersion: 4 } }).title, /history files/);
-    assert.match(L.explainBlocker({ code: 'PRIMARY_MESSAGE_STORE_DISABLED', detail: { reason: 'unreadable', code: 'PRIMARY_MESSAGE_STORE_LOG_CORRUPT' } }).title, /read/i);
+    // A store that could not be read says why, in the store's own words.
+    assert.match(L.explainBlocker({ code: 'PRIMARY_MESSAGE_STORE_DISABLED', detail: { reason: 'unreadable', code: 'PRIMARY_MESSAGE_STORE_LOG_CORRUPT' } }).title,
+        /^There is no history to hand over: the message log on disk is damaged/);
+    assert.match(L.explainBlocker({ code: 'PRIMARY_MESSAGE_STORE_DISABLED', detail: { reason: 'unreadable' } }).title, /could not be read/);
 });
 
 // ─── runLinkCode ────────────────────────────────────────────────────────────

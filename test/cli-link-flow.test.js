@@ -311,6 +311,9 @@ test('a QR link, a link refused before approval, a failure after it, and the eve
   const wa = shell(t, dir, ['--session=./sessions', '--no-message-store', 'connect', PHONE], {
     onConnect: [
       ['primary_link_error', { code: 'PRIMARY_LINK_NOTIFICATION_REJECTED', scope: 'notification', operationId: null }],
+      // On a full disk every message fails to be recorded: one report a minute, not one per message.
+      ['primary_message_store_error', { code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED', op: 'append' }],
+      ['primary_message_store_error', { code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED', op: 'append' }],
       ['primary_message_store_error', { code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED', op: 'append' }]
     ],
     answers: {
@@ -333,6 +336,7 @@ test('a QR link, a link refused before approval, a failure after it, and the eve
   const storeError = at('error: message store: The message store could not write to disk.  (PRIMARY_MESSAGE_STORE_WRITE_FAILED, append)');
   assert.ok(storeError >= 0, start);
   assert.equal(events[storeError + 1], '  next: Free disk space or fix permissions on the session folder, then run /reconnect.', start);
+  assert.equal(events.filter(line => line.includes('message store:')).length, 1, start);
   const [[opts]] = calls(dir, 'constructor');
   assert.deepEqual(opts, { sessionDir: path.join(dir, 'sessions'), messageStore: false });
 
@@ -397,6 +401,52 @@ test('without a connection, and on a companion session, the link commands say wh
   assert.ok(has(seen, 'error: Only a number registered through this tool can approve companions, and this session is a companion.'), seen);
   assert.ok(has(seen, '  (PRIMARY_LINK_PRIMARY_REQUIRED)'), seen);
   await wa.quit();
+});
+
+// wa listen has no shell: a store failure says to restart wa, never a
+// command it cannot take, and a flood of them is one line a minute.
+test('wa listen reports store failures once a minute, in words that need no shell', async (t) => {
+  const dir = home(t);
+  sessions(dir, ['mobile']);
+  const write = ['primary_message_store_error', { code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED', op: 'append' }];
+  const child = spawn(process.execPath, ['-r', FAKE, CLI, 'listen', PHONE, '--session', './sessions'], {
+    cwd: dir, env: env(dir, { onConnect: [write, write, write, ['primary_message_store_error', { code: 'PRIMARY_MESSAGE_STORE_BUSY', op: 'open' }]] }), stdio: 'pipe'
+  });
+  t.after(() => { if (child.exitCode === null) child.kill(); });
+  let text = '';
+  child.stdout.setEncoding('utf8');
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('no store errors in the output:\n' + text)), 15000);
+    child.stdout.on('data', d => {
+      text += d;
+      if (/PRIMARY_MESSAGE_STORE_BUSY[\s\S]*next: .*\n/.test(text)) { clearTimeout(timer); resolve(); }
+    });
+  });
+  child.kill();
+  const lines = printedLines(text);
+  assert.ok(has(text, 'connected  listening on +' + PHONE + '  (Ctrl+C to stop)'), text);
+  assert.equal(lines.filter(l => l.includes('PRIMARY_MESSAGE_STORE_WRITE_FAILED')).length, 1, text);
+  assert.ok(has(text, '  next: Free disk space or fix permissions on the session folder, then restart wa.'), text);
+  assert.ok(has(text, '  next: Close the other wa using this session, or wait until it has finished, then restart wa.'), text);
+  assert.ok(!/\/reconnect/.test(text), text);
+});
+
+test('--reset-message-store starts a damaged store again, and needs the store on', (t) => {
+  const dir = home(t);
+  sessions(dir, ['mobile']);
+  const r = spawnSync(process.execPath, ['-r', FAKE, CLI, 'connect', PHONE, '--reset-message-store', '--session', './sessions'], {
+    cwd: dir, env: env(dir, {}), input: '/quit\n', encoding: 'utf8', timeout: 20000
+  });
+  assert.equal(r.status, 0, r.stdout);
+  const [[opts]] = calls(dir, 'constructor');
+  assert.deepEqual(opts, { sessionDir: path.join(dir, 'sessions'), messageStore: { setAsideCorrupt: true } });
+
+  const off = spawnSync(process.execPath, ['-r', FAKE, CLI, 'connect', PHONE, '--no-message-store', '--reset-message-store'], {
+    cwd: dir, env: env(dir, {}), input: '/quit\n', encoding: 'utf8', timeout: 20000
+  });
+  assert.equal(off.status, 1, off.stdout);
+  assert.match(off.stdout, /--reset-message-store starts the message store again, and --no-message-store keeps none: use one of them/);
+  assert.equal(calls(dir, 'constructor').length, 1, 'nothing connected');
 });
 
 // ─── the message store starts at registration ────────────────────────────────

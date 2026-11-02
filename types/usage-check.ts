@@ -204,6 +204,10 @@ async function checkLinkCommands(client: wa.WhalibmobClient, readiness: wa.Prima
   const delivered: number | undefined = status.delivered?.records;
   void how; void when; void device; void delivered;
   L.formatLinkedDevices({ phone: '447949738354', devices: status.devices, journal: status });
+  const limit = L.createEventLimiter({ windowMs: 60000 });
+  const shown = limit('PRIMARY_MESSAGE_STORE_WRITE_FAILED');
+  if (shown && shown.held) void L.formatHeldBack(shown.held);
+  void L.explainError('PRIMARY_MESSAGE_STORE_WRITE_FAILED', null, 'listen').next;
   const unlocked: wa.LinkUnlockResult = await L.runLinkUnlock({ client, confirm: async question => question.length > 0, print: line => void line });
   if (unlocked.status === 'broken') { const pid: number | null = unlocked.holder.pid; void pid; }
   const resumable: boolean | undefined = status.bootstrap?.resumable;

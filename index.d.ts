@@ -2402,9 +2402,10 @@ export interface LinkCommandsModule {
    * says its attempt can never continue, and `bootstrapPhase` where it stopped. `context` is `'unlock'` when the error
    * came from the unlock command itself (a takeover in progress is then told to wait and run it again), `'bootstrap'`
    * when it came from a bootstrap (a timeout, a cancel or a dropped connection is then answered with the resume), and
-   * `'status'` for the error a bootstrap recorded, as `/link-status` shows it.
+   * `'status'` for the error a bootstrap recorded, as `/link-status` shows it, and `'listen'` for an event in
+   * `wa listen`, which has no shell (it is told to restart wa, never a shell command).
    */
-  explainError(code: unknown, error?: { holder?: PrimaryLinkHolder | null; resumable?: boolean; bootstrapPhase?: string | null } | null, context?: 'unlock' | 'bootstrap' | 'status'): LinkExplanation;
+  explainError(code: unknown, error?: { holder?: PrimaryLinkHolder | null; resumable?: boolean; bootstrapPhase?: string | null } | null, context?: 'unlock' | 'bootstrap' | 'status' | 'listen'): LinkExplanation;
   explainBlocker(blocker: PrimaryLinkBlocker | { code?: string; detail?: object }): LinkExplanation;
   /**
    * An error caught from the link commands, as lines: what happened, what to do, the code. `context` as for
@@ -2426,6 +2427,14 @@ export interface LinkCommandsModule {
    * meantime makes `unlockPrimaryLink` throw PRIMARY_LINK_STORE_BUSY, which goes to the caller.
    */
   runLinkUnlock(options: { client: LinkUnlockClient; confirm?: (question: string) => boolean | Promise<boolean>; print?: (line: string) => void }): Promise<LinkUnlockResult>;
+  /**
+   * For events that can come once per message (`primary_message_store_error` on a full disk): the function returned
+   * answers whether a report of `code` is shown now, once per code each `windowMs` (default a minute). Shown, it
+   * gives how many were held back since the last one shown; held back, null.
+   */
+  createEventLimiter(options?: { windowMs?: number; now?: number | (() => number) }): (code: string) => { held: number } | null;
+  /** The line that says how many reports were held back: `  (2 more like this since the last one were not shown)`. */
+  formatHeldBack(held: number): string;
 }
 /** `whalibmob/lib/cli/` — the command line's logic, for a front end other than `cli.js` too. */
 export declare const Cli: {
