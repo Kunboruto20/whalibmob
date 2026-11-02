@@ -221,6 +221,66 @@ The CLI asks what to call it once, on a first run, and remembers the answer in
 `~/.whalibmob.json`. Each number gets its own folder inside — see
 [Saving & Restoring Sessions](sessions.md#saving--restoring-sessions).
 
+Options may come before the command as well as after it, and `--name=value` is the
+same as `--name value`: `wa --session /data/my-sessions connect 919634847671`.
+
+**A registered number keeps a record of its messages.** The CLI writes what the
+number sends and receives into the session folder, from registration on (for a
+number registered earlier, from the first connect with the record on), so that
+a companion linked later (WhatsApp Web, see
+[Companion Commands](cli-commands.md#companion-commands-approving-whatsapp-web)) can be handed
+it as chat history. Pass `--no-message-store` to keep none:
+
+```sh
+wa connect 919634847671 --no-message-store
+```
+
+Without a record there is nothing to hand over, and `/link-code` says so. The
+library does the opposite and keeps nothing unless asked
+([`messageStore`](linking.md#library-api-for-the-chat-history)).
+
+If the record's files are damaged, the store refuses to open
+(`PRIMARY_MESSAGE_STORE_LOG_CORRUPT` or `PRIMARY_MESSAGE_STORE_SNAPSHOT_CORRUPT`)
+and messaging goes on without it. `--reset-message-store` starts it again: the
+damaged files are kept, renamed to `<file>.corrupt-<time>`, and the record starts
+from now, counted as switched on then. It cannot be combined with
+`--no-message-store`.
+
+```sh
+wa connect 919634847671 --reset-message-store
+```
+
+One number's record is open in one program at a time. A second `wa` on the same
+session folder, here or in another process, is refused it
+(`PRIMARY_MESSAGE_STORE_BUSY`) and runs without it; the error names the holder
+(pid, host, since when). Close the other one, or wait until it has finished,
+then `/reconnect`.
+
+A `wa` that crashed where its end cannot be proven from here (it ran on another
+machine or in another container, its pid has since gone to another program, or
+it died before writing its name into the lock) leaves the record refused for
+good. `--unlock-message-store` is the way out: before the record opens, it shows
+who holds the lock and asks `[y/N]`; Enter is no, and only `y` breaks it. Answer
+`y` only when no other `wa` is using the number. A `wa` that was in fact still
+running stops keeping messages at its next write
+(`PRIMARY_MESSAGE_STORE_LOST`), and what it kept stays.
+
+```sh
+wa connect 919634847671 --unlock-message-store
+the message store of +919634847671 is locked by pid 4242 on old-box, since 2026-11-02 15:31
+  Break it only if no other wa is using this number: one that stopped, or ran on a machine or in a container that no longer runs it.
+  A wa that is in fact still running stops keeping messages at its next write; what it already kept stays in the store.
+break the lock held by pid 4242 on old-box?  [y/N] y
+broke the message store lock held by pid 4242 on old-box
+```
+
+It acts once, on the first number the run opens a record for: `wa connect`,
+the shell's `/connect` when `wa` was started with it, or a registration
+(`/reg confirm`, `wa registration --register` in a terminal). `wa listen` cannot
+ask: with the flag and a lock held, it names the holder and exits instead.
+Re-registering a number sets its earlier record aside under the same lock, so a
+record another `wa` holds is not moved: the warning names the holder.
+
 > [!IMPORTANT]
 > **If this is refused with `405`, do not re-register the number.** The account
 > is fine; the server declined the version the connect announced. Check for a

@@ -213,6 +213,23 @@ const Signal = Object.assign({},
     })
   });
 
+// lib/primary/ — what this account keeps while it is the primary device, so
+// it has a history to hand the companions it links, and the encoder that
+// hands it over.
+const Primary = {
+  MessageStore:  require('./lib/primary/MessageStore'),
+  HistoryExport: require('./lib/primary/HistoryExport'),
+  Readiness:     require('./lib/primary/Readiness')
+};
+
+// lib/cli/ — the logic behind the command line's link commands (choosing
+// among pairing requests, the readiness and coverage notices, the order of
+// approve then bootstrap, a message and a next step for every error code),
+// with no terminal in it so a front end other than cli.js can use it too.
+const Cli = {
+  LinkCommands: require('./lib/cli/linkCommands')
+};
+
 // App state — lib/appstate/. AppStateStore.js is spread because the flat
 // AppStateStore is its class; the other three are whole.
 const AppState = Object.assign({}, require('./lib/appstate/AppStateStore'), {
@@ -261,7 +278,7 @@ module.exports = {
   StoreBackend,
   FileBackend,
   MemoryBackend,
-  // One database instead of 834 files. Needs Node 22.5+ for its built-in
+  // One database instead of 844 files. Needs Node 22.5+ for its built-in
   // node:sqlite, or better-sqlite3 installed; neither is a dependency, and
   // FileBackend stays the default that needs nothing.
   SqliteBackend,
@@ -427,5 +444,7 @@ module.exports = {
   Argo,
   WAUSync,
   Signal,
-  AppState
+  AppState,
+  Primary,
+  Cli
 };

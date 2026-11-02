@@ -154,6 +154,23 @@ export interface WhalibmobClientOptions {
   maxRetryResends?: number;
   /** How long a first message waits for its trusted-contact token, in ms. Default `5000`. */
   tcTokenPresendTimeoutMs?: number;
+  /**
+   * Primary (mobile) sessions: keep a record of every message sent and
+   * received, so a companion this account links can be handed the chat
+   * history. Default off. `true` keeps the defaults (100 messages a chat,
+   * 20 000 in all); an object bounds them. Never used on a companion session.
+   * One process at a time holds a number's store (`<phone>.primary-messages.lock`);
+   * another gets `PRIMARY_MESSAGE_STORE_BUSY`, with `err.holder` naming it. A lock
+   * whose holder is gone but cannot be proven so is broken on purpose
+   * (`Primary.MessageStore.PrimaryMessageStore.breakLock`); a store whose lock was
+   * broken reports `PRIMARY_MESSAGE_STORE_LOST` once and is let go until the next
+   * login. `setAsideCorrupt: true` renames a
+   * store that cannot be read (`PRIMARY_MESSAGE_STORE_LOG_CORRUPT`,
+   * `PRIMARY_MESSAGE_STORE_SNAPSHOT_CORRUPT`) to `<file>.corrupt-<time>` and starts
+   * a new one, which captures from then on. Default `false`: the store stays off.
+   * See `getPrimaryMessageStore()` and the `primary_message_store_error` event.
+   */
+  messageStore?: boolean | { perChat?: number; maxMessages?: number; setAsideCorrupt?: boolean };
 }
 
 export interface ConnectWebOptions {
@@ -172,6 +189,54 @@ export interface ConnectWebOptions {
 export interface DisconnectOptions {
   /** Allow the reconnect loop to run afterwards. */
   reconnect?: boolean;
+}
+
+/** One message in the primary message store. `raw` is the encoded `Message`. */
+export interface PrimaryMessageRecord {
+  id: string;
+  seq: number;
+  fromMe: boolean;
+  /** Seconds. */
+  ts: number;
+  /** 0 error, 1 pending, 2 server ack, 3 delivered, 4 read, 5 played. */
+  status: number;
+  participant?: string;
+  pushName?: string;
+  /** Absent once the message is a tombstone. */
+  raw?: Buffer;
+  tombstone?: 'revoked' | 'expired' | 'view-once';
+  /** When it was last edited, in seconds. */
+  edited?: number;
+  /** The disappearing-messages timer that applied to it, in seconds. */
+  expiration?: number;
+}
+
+export interface PrimaryMessageChat {
+  id: string;
+  name?: string;
+  pnJid?: string;
+  lidJid?: string;
+  conversationTimestamp: number;
+  unreadCount: number;
+  ephemeral?: { seconds: number; setAt?: number };
+}
+
+/** What a primary has kept of its messages, and what it knows it missed. */
+export interface PrimaryMessageSnapshot {
+  seq: number;
+  capture: { since: number; origin: string; lc: number };
+  chats: PrimaryMessageChat[];
+  /** Keyed by chat id, oldest first. */
+  records: Record<string, PrimaryMessageRecord[]>;
+  /**
+   * Messages seen but not kept (`ids`), or a time window nothing was kept for
+   * (`from`/`to`, ms): `'store-disabled'` (logins the store was not open for, or
+   * a login counter that started over), `'write-failed'` (the disk refused writes).
+   */
+  losses: Array<{ reason: string; ids?: string[]; from?: number; to?: number }>;
+  retained: { evicted: number };
+  pushNames: Array<{ id: string; pushname: string }>;
+  counts: { chats: number; records: number };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -260,6 +325,11 @@ export interface DecodedContextInfo {
   quotedMessage?: DecodedMessage;
   /** The quoted message's raw protobuf bytes, for re-encoding it verbatim. */
   quotedMessageRaw?: Buffer;
+  /**
+   * The chat's disappearing-messages timer in force when this was sent, in seconds.
+   * Absent when the message had none: zero is left out rather than reported.
+   */
+  expiration?: number;
 }
 
 export interface DecodedBase {
@@ -323,6 +393,12 @@ export interface DeviceSentMeta {
   destinationJid?: Jid;
   /** Hash of the participant list the sending device used, when it set one. */
   phash?: string;
+  /**
+   * The message the envelope wrapped, as the bytes it came in. Whatever the
+   * decoder understood of it, a store that records what this account sent from
+   * another device can keep it verbatim.
+   */
+  messageRaw?: Buffer;
 }
 
 export interface DecodedText extends DecodedBase {
@@ -374,6 +450,18 @@ export interface DecodedGroupInvite extends DecodedBase {
 export interface DecodedProtocol extends DecodedBase {
   type: 'protocol';
   subtype: string;
+  /**
+   * The protocol message's type as the number it arrived as (`0` revoke, `3`
+   * ephemeral setting, `14` edit, …); `subtype` is only its name, and a type the
+   * decoder has no name for becomes a bare string of the number.
+   */
+  protocolType?: number;
+  /** The message a revoke or an edit acts on. Absent when the protocol message names none. */
+  key?: { remoteJid: Jid; fromMe: boolean; id: string; participant?: Jid };
+  /** For an ephemeral setting: how long messages now live, in seconds. `0` means they no longer disappear. */
+  ephemeralExpiration?: number;
+  /** For an edit: the new content, a `Message`, as the bytes it came in. */
+  editedMessageRaw?: Buffer;
 }
 
 export type DecodedMessage =
@@ -798,7 +886,14 @@ export interface MediaRetryResult {
 
 export interface WhalibmobEvents {
   primary_link_invitation: (event: PrimaryLinkInvitation) => void;
-  primary_link_progress: (event: { phase: 'awaiting_confirmation'; operationId: string }) => void;
+  /**
+   * `awaiting_confirmation`: the approval went out. `history_uploading`: a
+   * history too large to send inline starts going up as a blob of `bytes`,
+   * which can take minutes; the bootstrap says nothing else until it is done.
+   */
+  primary_link_progress: (event:
+    | { phase: 'awaiting_confirmation'; operationId: string }
+    | { phase: 'history_uploading'; operationId: string; bytes: number }) => void;
   primary_linked: (event: { operationId: string; deviceId: number; keyIndex: number }) => void;
   primary_link_error: (event: { code: string }) => void;
   connected: () => void;
@@ -855,6 +950,12 @@ export interface WhalibmobEvents {
 
   history_sync: (r: HistorySyncResult) => void;
   history_sync_error: (e: { err: Error; notification: any }) => void;
+  /**
+   * The primary message store could not open, or could not take a record.
+   * Messaging carries on; a store that did not open stays off until the next
+   * login. `code` is `PRIMARY_MESSAGE_STORE_*`.
+   */
+  primary_message_store_error: (e: { code: string; op: string; err: Error }) => void;
   media_retry: (n: MediaRetryNotification) => void;
 
   /** Companion mode: a pairing code was requested. */
@@ -901,7 +1002,15 @@ export interface PrimaryADVState {
 }
 /** Decode only public browser binding fields; reconcilePrimaryLink still verifies them. */
 export declare function parseWhatsAppWebPublicProof(input: string | unknown): PrimaryCompanionProof;
-export interface PrimaryLinkInvitation { id: string; expiresAt: number; }
+export interface PrimaryLinkInvitation {
+  id: string; expiresAt: number;
+  /**
+   * First 8 hex characters of sha256 over the companion's raw 32-byte noise key.
+   * Requests from one browser share it; a different companion has a different one.
+   * A fingerprint only, never authorization. null if the stored invitation has no usable noise key.
+   */
+  companion: string | null;
+}
 export interface PrimaryLinkResult {
   status: 'linked' | 'awaiting_confirmation'; operationId: string;
   deviceId?: number; keyIndex?: number;
@@ -911,12 +1020,170 @@ export interface PrimaryLinkCommonOptions {
   timeoutMs?: number; signal?: AbortSignal;
   getCompanionProof?: (context: { operationId: string }) => Promise<PrimaryCompanionProof>;
 }
+/**
+ * Who holds a primary link journal, as its lock file says. `legacy` is a lock in
+ * the older bare-pid format, or one that cannot be read: only `pid` (if any) and
+ * `at` (the file's mtime) are known. `err.holder` on PRIMARY_LINK_STORE_BUSY,
+ * which is always set: null only when no holder could be read at all.
+ */
+export interface PrimaryLinkHolder {
+  v: number; pid: number | null; host: string | null; bootId: string | null;
+  /** Linux only: the holder's start time, field 22 of /proc/<pid>/stat. */
+  procStart: string | null;
+  token: string | null; gen: number | null; at: number | null;
+  /** Linux only: the holder's pid namespace. */
+  pidNs: string | null;
+  legacy: boolean;
+  /**
+   * Only on `err.holder`, when what stood in the way was the takeover mutex
+   * (`<lock>.takeover`) rather than the lock: the record is then the mutex's
+   * writer, a recovery in progress or one that died mid-way (`legacy` if the
+   * mutex is empty or unreadable).
+   */
+  mutex?: true;
+}
 export interface PrimaryLinkOptions extends PrimaryLinkCommonOptions { invitationId: string; }
 export interface PrimaryCodeLinkOptions extends PrimaryLinkCommonOptions {
   /** Optional only when exactly one unexpired invitation is available. */
   invitationId?: string;
   /** 0 disables waiting; default 45000 ms, within the overall timeoutMs. */
   waitMs?: number;
+}
+/** The history a primary hands a new companion, in the shape of the primary message store's snapshot(). */
+export interface PrimaryHistorySnapshot {
+  /** The store's event sequence number this snapshot is as of; a delta sends what came after it. */
+  seq: number;
+  chats: Array<{ id: string; name?: string; pnJid?: string; lidJid?: string; conversationTimestamp?: number; unreadCount?: number; ephemeral?: { seconds: number; setAt?: number } }>;
+  records: Record<string, Array<{ id: string; seq: number; fromMe: boolean; ts: number; status?: number; participant?: string; pushName?: string; raw?: Buffer; tombstone?: string; edited?: number; expiration?: number }>>;
+  pushNames: Array<{ id: string; pushname: string }>;
+  capture?: object; losses?: object[]; retained?: object; counts?: { chats: number; records: number };
+}
+/** What an md-msg-hist upload stored: the encrypted blob the notification points to. */
+export interface PrimaryHistoryUpload {
+  directPath: string; mediaKey: Buffer; fileSha256: Buffer; fileEncSha256: Buffer; fileLength: number;
+}
+export interface PrimaryBootstrapOptions {
+  /** 'store' reads this client's primary message store (PRIMARY_MESSAGE_STORE_DISABLED without one). */
+  history: 'store' | (() => PrimaryHistorySnapshot | Promise<PrimaryHistorySnapshot>);
+  /** Used for a history above 64 KiB deflated and for the RECENT chunk that follows every history. Defaults to the md-msg-hist media upload. */
+  upload?: (bytes: Buffer) => Promise<PrimaryHistoryUpload>;
+  /** Continue a recorded attempt after its last accepted step, with the bytes it pinned. */
+  resume?: boolean;
+  /** With resume: send again, under the recorded message id, a step whose ACK never came. A refused step is never sent again. */
+  resendUncertain?: boolean;
+  /**
+   * Put what reached the store since the history was pinned into the RECENT chunk that follows it: only the chats with
+   * something new and the push names of those chats and senders. Experimental: Web reads a RECENT chunk as older
+   * messages, so it does not show newer ones from it; leave it off unless you are testing it.
+   */
+  delta?: boolean;
+  /** Retry a key share the server refused with 479, once, with the same key. */
+  recoverRejected?: boolean;
+  signal?: AbortSignal;
+  /** Time for the bootstrap, the history upload aside: 1000 to 90000 ms, default 90000 (PRIMARY_LINK_TIMEOUT). */
+  timeoutMs?: number;
+  /**
+   * Time for the history upload, which runs on a clock of its own: 1000 to 3600000 ms. Default: a minute, and a
+   * second more for each 16 KiB of the history, at most 20 minutes (PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT).
+   */
+  uploadTimeoutMs?: number;
+}
+export interface PrimaryBootstrapResult {
+  status: 'sent';
+  /** first: a new key and the push-name patch. relink: our existing key, its patch already on the server. */
+  mode: 'first' | 'relink';
+  operationId: string;
+  /**
+   * What went over, counted as exported (records the export leaves out are not counted). losses: how many loss
+   * records the snapshot held (a run of messages seen but not stored, or a time the store was not capturing);
+   * evicted: messages its limits dropped; captureOrigin: how the store's capture began. null where the history
+   * provider does not say. Non-zero losses or evictions mean the history is partial.
+   */
+  history: { chats: number; records: number; bytes: number; inline: boolean; losses: number | null; evicted: number | null; captureOrigin: string | null };
+  /** records counted as exported; null without a delta. */
+  delta: null | { records: number };
+}
+
+/**
+ * What would be sent from the primary store, and how it falls short. Counts, a range of timestamps and the store's
+ * own loss list: never message content, chat ids or names.
+ */
+export interface PrimaryHistoryCoverage {
+  /** The store is on. Always true here: with no store there is no history, and `history` is null. */
+  enabled: boolean;
+  capture: {
+    /** Milliseconds since the epoch the store began capturing. */
+    since: number | null;
+    /** `'registration'` for a store that has kept everything since the account was registered; `'enabled'` for one switched on later. */
+    origin: string | null;
+    /** The login count the store last saw. */
+    lc: number | null;
+  };
+  /** Chats the store holds. */
+  chats: number | null;
+  /** Records the store holds, tombstones included. */
+  records: number | null;
+  retained: {
+    /** Messages the store let go of to stay within its limits; null if it did not say. */
+    evicted: number | null;
+    /** The oldest and newest timestamp, in seconds, among the stored records; null when it holds none. */
+    from: number | null;
+    to: number | null;
+  };
+  /** As the store reports them: message ids seen and not kept (`ids`), or a window, in milliseconds, nothing was kept for (`from`/`to`). */
+  losses: Array<{ reason: string | null; ids?: string[]; from?: number; to?: number }>;
+}
+/** One reason a link would not complete, found before it is approved. The codes are stable. */
+export type PrimaryLinkBlocker =
+  | { code: 'PRIMARY_LINK_ACCOUNT_REQUIRED'; detail: { registered: boolean; phoneOk: boolean } }
+  | { code: 'PRIMARY_LINK_RECONCILIATION_REQUIRED'; detail: {
+      phase: string; startedAt: number | null; ageMs: number | null;
+      /** `retireAbsentPrimaryLink()` will retire this hold: an unfinished approval at least five minutes old. */
+      retirable: boolean } }
+  | { code: 'PRIMARY_BOOTSTRAP_EXISTING_COMPANIONS_UNSUPPORTED'; detail: { companions: number | null } }
+  | { code: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE'; detail: {
+      reasons: Array<'local_keys' | 'server_unknown' | 'server_foreign' | 'server_unverified' | 'local_state' | 'local_history' | 'local_unknown'>;
+      serverVersion: number | null } }
+  | { code: 'PRIMARY_BOOTSTRAP_NAME_REQUIRED'; detail: { maxLength: number } }
+  | { code: 'PRIMARY_MESSAGE_STORE_DISABLED'; detail: { reason: 'disabled' | 'unreadable'; code?: string } };
+/** `getPrimaryLinkStatus()`: the link journal's non-secret state, with a fresh device list. */
+export interface PrimaryLinkStatus {
+  hasADV: boolean;
+  /** A companion proof was reconciled (`committed`) and the device list still agrees. */
+  confirmed: boolean;
+  phase: string;
+  startedAt: number | null;
+  /** How the companion was approved; null before an approval, or for a journal that did not record it. */
+  method: 'code' | 'qr' | null;
+  /** When the approval went through (milliseconds since the epoch); null before that, or for an older journal. */
+  linkedAt: number | null;
+  expectedDeviceId: number | null;
+  /** The companion this link made, once a reconciled proof or the bootstrap (device list and identity key) has tied it down. */
+  deviceId: number | null;
+  bootstrapPhase: string | null;
+  bootstrap?: { phase: string; errorCode: string | null; iq: object | null; /** Whether a resume can go on from here: false once sent, or once a step was refused. */ resumable: boolean; remote?: object };
+  /** What the history handed over held, recorded when it was sent; null until then. */
+  delivered: { chats: number; records: number } | null;
+  devices: Array<{ deviceId: number; keyIndex: number }>;
+}
+/** What `getPrimaryLinkReadiness()` finds out before a link is approved. */
+export interface PrimaryLinkReadiness {
+  /** No blocker. Whether `needsConfirmation` is set is a separate question. */
+  ready: boolean;
+  /** What the bootstrap would run as: `first`, or `relink` over our own earlier state. Null when it cannot be told. */
+  mode: 'first' | 'relink' | null;
+  blockers: PrimaryLinkBlocker[];
+  /**
+   * The history that would be sent. Null when there is no store to send it from, and also null when an account
+   * blocker (`PRIMARY_LINK_ACCOUNT_REQUIRED`) stops evaluation before anything else is read.
+   */
+  history: PrimaryHistoryCoverage | null;
+  /**
+   * Ask before sending: true unless the store has captured since registration (`capture.origin === 'registration'`)
+   * with nothing it saw and could not keep and nothing it let go of. A store switched on later, an unknown origin or a
+   * snapshot that does not say all ask. False when there is no history to confirm (see `history`).
+   */
+  needsConfirmation: boolean;
 }
 
 export declare class WhalibmobClient extends EventEmitter {
@@ -958,13 +1225,68 @@ export declare class WhalibmobClient extends EventEmitter {
   reconcilePrimaryLink(proof: PrimaryCompanionProof, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PrimaryLinkResult>;
   listLinkedDevices(): Promise<Array<{ deviceId: number; keyIndex: number }>>;
   /** Read-only: fresh own-device list and non-secret durable linking progress. */
-  getPrimaryLinkStatus(): Promise<{ hasADV: boolean; confirmed: boolean; phase: string; startedAt: number | null; expectedDeviceId: number | null; bootstrapPhase: string | null; bootstrap?: { phase: string; errorCode: string | null; iq: object | null; remote?: object }; devices: Array<{ deviceId: number; keyIndex: number }> }>;
+  getPrimaryLinkStatus(): Promise<PrimaryLinkStatus>;
   /** Retire a >=5 minute pending transaction only after two exact baseline server lists. Never removes a device or reuses its reserved index. */
   retireAbsentPrimaryLink(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<{ status: 'abandoned'; operationId: string }>;
+  /**
+   * Whether this primary can finish a link, found out before one is approved. It sends two read-only IQs, the account's
+   * device list and a critical_block read with no patch, and reads the local key, app-state and history files and the
+   * message store's snapshot (which sweeps expired disappearing messages out of the store, as taking one always does).
+   * On first use it may create the link journal and its lock file, as any primary-link call does. It never approves,
+   * never sends a message or a patch, never makes a key and never updates link state. Throws when it cannot look (not a
+   * primary, not connected, another link operation running, the server not answering); a link it would refuse comes
+   * back as `blockers`.
+   */
+  getPrimaryLinkReadiness(options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PrimaryLinkReadiness>;
   /** Explicit first bootstrap only: requires a real empty application store and no existing sync keys/collections. Does not report Web ready. */
   bootstrapEmptyPrimaryCompanion(options: { getInitialHistory: () => Promise<{ source: 'owned_primary_store'; messageCount: 0; conversationCount: 0 }>; recoverRejected?: boolean; signal?: AbortSignal }): Promise<{ status: 'sent'; browserReady: false; operationId: string }>;
+  /**
+   * Key share, critical_block patch and INITIAL_BOOTSTRAP history for the companion just linked: inline up to
+   * 64 KiB deflated, an md-msg-hist blob above; then a RECENT chunk at 100% (chunk 1, always a blob), without which
+   * Web never counts the sync as complete. The history is pinned on disk before it is sent. Without resume an
+   * attempt is single (PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED); a step with no ACK stops with
+   * PRIMARY_BOOTSTRAP_KEY_SHARE_UNCERTAIN or PRIMARY_BOOTSTRAP_HISTORY_UNCERTAIN until resendUncertain. A resume also
+   * continues after a dropped connection left the link uncertain. Server state neither empty nor written by our own
+   * key at our version is PRIMARY_BOOTSTRAP_FOREIGN_STATE; a history the encoder refuses is
+   * PRIMARY_BOOTSTRAP_HISTORY_INVALID (the encoder's error as `cause`). Does not report Web ready.
+   */
+  bootstrapPrimaryCompanion(options: PrimaryBootstrapOptions): Promise<PrimaryBootstrapResult>;
   /** Initial import only; must match a fresh server list, cannot overwrite existing ADV. */
   seedPrimaryLinkState(state: PrimaryADVState): Promise<void>;
+  /**
+   * Break the primary link lock when PRIMARY_LINK_STORE_BUSY names a holder that
+   * cannot be proven dead from here (another host or container, a bare-pid lock).
+   * Breaking it is the caller's decision; a holder still running stops at its next
+   * write with PRIMARY_LINK_STORE_LOST.
+   *
+   * The takeover mutex (`<lock>.takeover`) is cleared too when it is left over:
+   * empty or unreadable, written by a process that is gone, by the process that
+   * now holds the lock, or more than a minute ago. So is one written on another
+   * host, in another container or pid namespace, since nothing here can check it:
+   * if that recovery is in fact still running, it may end with
+   * PRIMARY_LINK_STORE_BUSY, or LOST at its first write. Only a recovery running
+   * on this machine within the last minute keeps it, and then this throws
+   * PRIMARY_LINK_STORE_BUSY with `err.holder.mutex`.
+   *
+   * Concurrent recoveries can still race: in rare interleavings two of them each
+   * believe they hold the mutex. The worst case is that one owner fails with
+   * PRIMARY_LINK_STORE_LOST at its next write: at most one in-flight write of
+   * the displaced owner lands, and the file is never torn.
+   *
+   * `options.holder`, as `getPrimaryLinkLockHolder()` returned it: break that
+   * holder only. A lock that names another holder by then (or any lock, for
+   * `null`) is left alone, with PRIMARY_LINK_STORE_BUSY and `err.holder`.
+   *
+   * Throws PRIMARY_LINK_BUSY while this process holds the store. Returns the
+   * holder broken, or null if none.
+   */
+  unlockPrimaryLink(options?: { holder?: PrimaryLinkHolder | null }): { holder: PrimaryLinkHolder | null };
+  /**
+   * Who holds the link journal's lock, read without breaking anything: what
+   * `unlockPrimaryLink()` would break, to show before asking. `holder` is null
+   * when none is held. Throws PRIMARY_LINK_BUSY while this process holds the store.
+   */
+  getPrimaryLinkLockHolder(): { holder: PrimaryLinkHolder | null };
   disconnect(opts?: DisconnectOptions): void;
   /**
    * Unlink this device from the account, the way the Linked Devices screen on
@@ -1234,6 +1556,13 @@ export declare class WhalibmobClient extends EventEmitter {
   // ─── Stores on disk ──────────────────────────────────────────────────────
   getHistoryStore(): any;
   getMessagesStore(): any;
+  /**
+   * What this primary has kept of the messages it sent and received. `null`
+   * when the `messageStore` option is off, on a companion session, before the
+   * first login or after `disconnect()`, or when the store could not be opened
+   * or read. Never throws: a failure is said on `primary_message_store_error`.
+   */
+  getPrimaryMessageStore(): PrimaryMessageSnapshot | null;
   getPNForLID(lid: Jid): Jid | null;
   getLIDForPN(pn: Jid): Jid | null;
 
@@ -1387,8 +1716,20 @@ export declare const SessionPaths: {
   listSessions: typeof listSessions;
   migrateSession: typeof migrateSession;
   preKeyFilesFor: (baseDir: string, phone: string) => string[];
-  /** Every per-number file the library writes. */
+  /**
+   * Every per-number file the library writes, for the mobile half and the
+   * `.web.` companion half, including the primary-side message store and the
+   * link journal (`.primary-linking.json`). A link attempt's `.lock` is not
+   * listed: a session move never carries it.
+   */
   SESSION_SUFFIXES: string[];
+  /**
+   * The subset of `SESSION_SUFFIXES` bound to the number itself (the link
+   * journal, whose binding embeds the phone). A move to a new directory carries
+   * them; re-filing a session under another number
+   * (`adoptCanonicalNumber`) leaves them under the old name.
+   */
+  PHONE_BOUND_SUFFIXES: readonly string[];
   SHARED_FILES: string[];
 };
 
@@ -1398,7 +1739,8 @@ export declare const SessionPaths: {
 
 /**
  * A key under which a piece of session state is kept — one of the fixed names
- * (`'auth'`, `'signal'`, …) or `` `pre-key/${id}` `` for one one-time pre-key.
+ * (`'auth'`, `'signal'`, `'primary-messages'`, …) or `` `pre-key/${id}` `` for
+ * one one-time pre-key. `StoreBackend.KEYS` lists the fixed names.
  */
 export type StorageKey = string;
 
@@ -1474,7 +1816,7 @@ export interface SqliteSessionRow {
 }
 
 /**
- * The session in one database instead of 834 files.
+ * The session in one database instead of 844 files.
  *
  * Uses Node's built-in `node:sqlite` (22.5.0 and later) when it is there, and
  * `better-sqlite3` when it is not. Neither is a dependency of this package —
@@ -1735,7 +2077,12 @@ export declare const StoreMigrate: {
  * `client.downloadMedia()`. Everything it exports is typed.
  */
 export declare const MediaService: {
-  /** Upload path and HKDF info string per media type. */
+  /**
+   * Upload path and HKDF info string per media type. Besides the message media
+   * types it holds one that is not a message: `'md-msg-hist'`, the encrypted
+   * chat-history blob a primary uploads when it links a companion and the history
+   * is too large to send inline (over 64 KiB deflated).
+   */
   MEDIA_PATH: Record<string, { path: string; keyName: string }>;
   encryptMedia(plaintext: Buffer, mediaKey: Buffer, keyName: string): EncryptedMedia;
   decryptMedia(encryptedWithMac: Buffer, mediaKey: Buffer, keyName: string): Buffer;
@@ -1947,3 +2294,162 @@ export declare const PrimaryLinkCrypto: LibModule;
 export declare const PrimaryLinkQr: LibModule;
 export declare const PrimaryLinkStore: LibModule;
 export declare const PrimaryBootstrap: LibModule;
+/** `whalibmob/lib/primary/` — what a primary keeps for the companions it links. */
+export declare const Primary: {
+  MessageStore: LibModule;
+  HistoryExport: LibModule;
+  Readiness: LibModule;
+};
+
+/** One browser asking to link: its pairing requests collapsed to the newest. */
+export interface LinkInvitationGroup {
+  /** The browser's fingerprint (`PrimaryLinkInvitation.companion`); null when the request carries none. A label, not proof. */
+  companion: string | null;
+  newest: { id: string; expiresAt: number };
+  /** How many requests this browser sent. A request without a fingerprint is always a group of one. */
+  count: number;
+}
+/** `{ id }` is one request; `{ ambiguous }` is a choice the person has to make; `{ none }` is nothing to pick. */
+export type LinkInvitationChoice = { id: string } | { ambiguous: LinkInvitationGroup[] } | { none: true };
+/** What went wrong in one line, and the step to take in another. Plain English; the error code is unchanged. */
+export interface LinkExplanation { title: string; next: string; }
+/** The slice of a primary client the link commands use. `WhalibmobClient` satisfies it. */
+export interface LinkCommandsClient {
+  getPrimaryLinkReadiness(): Promise<PrimaryLinkReadiness>;
+  getPrimaryLinkInvitations(): PrimaryLinkInvitation[] | Promise<PrimaryLinkInvitation[]>;
+  approveCompanionCode(code: string, options: { invitationId: string }): Promise<PrimaryLinkResult>;
+  approveCompanionQr(payload: string, options?: PrimaryLinkCommonOptions): Promise<PrimaryLinkResult>;
+  bootstrapPrimaryCompanion(options: PrimaryBootstrapOptions): Promise<PrimaryBootstrapResult>;
+}
+/**
+ * `getPrimaryLinkStatus()` (a `PrimaryLinkStatus`), or as much of it as a caller has: how the companion was linked and
+ * when, which device the latest link made, and what history it was handed.
+ */
+export interface LinkJournalView {
+  phase?: string;
+  confirmed?: boolean;
+  startedAt?: number | null;
+  linkedAt?: number | null;
+  expectedDeviceId?: number | null;
+  bootstrapPhase?: string | null;
+  bootstrap?: { phase?: string; errorCode?: string | null; resumable?: boolean };
+  delivered?: { chats: number; records: number } | null;
+  devices?: Array<{ deviceId: number; keyIndex: number }>;
+  method?: string | null;
+  deviceId?: number | null;
+  keyIndex?: number;
+}
+/** What the link commands throw: the library's error, with the link's own context attached. */
+export interface LinkCommandError extends Error {
+  code?: string;
+  /** Every reason readiness refused, first one being `code`. */
+  blockers?: PrimaryLinkBlocker[];
+  readiness?: PrimaryLinkReadiness;
+  /** The approval went through and the bootstrap then failed: approving again is the wrong answer. */
+  afterApproval?: boolean;
+  invitationId?: string;
+  operationId?: string;
+  /** From a bootstrap that had started: whether a resume can go on from where it stopped. */
+  resumable?: boolean;
+}
+/** What `confirm` is asked about: the browser the request was chosen for (a QR names its own). */
+export interface LinkConfirmPrompt {
+  /** The question in words, naming the browser; how to answer it is the front end's to add. */
+  question: string;
+  invitationId?: string;
+  /** The browser's fingerprint; null when the request carries none. */
+  companion?: string | null;
+}
+export interface LinkRunOptions {
+  client: LinkCommandsClient;
+  /** Asked once, after the request is chosen, only when the history is known to be partial; no function is a no. */
+  confirm?: (readiness: PrimaryLinkReadiness, ask: LinkConfirmPrompt) => boolean | Promise<boolean>;
+  /** One line at a time. */
+  print?: (line: string) => void;
+}
+export type LinkCodeResult =
+  | { status: 'sent'; invitationId: string; approval: PrimaryLinkResult; bootstrap: PrimaryBootstrapResult }
+  | { status: 'choose'; groups: LinkInvitationGroup[] }
+  | { status: 'aborted' };
+export type LinkQrResult =
+  | { status: 'sent'; approval: PrimaryLinkResult; bootstrap: PrimaryBootstrapResult }
+  | { status: 'aborted' };
+/** The slice of a primary client `/link-unlock` uses. `WhalibmobClient` satisfies it. */
+export interface LinkUnlockClient {
+  getPrimaryLinkLockHolder(): { holder: PrimaryLinkHolder | null };
+  unlockPrimaryLink(options?: { holder?: PrimaryLinkHolder | null }): { holder: PrimaryLinkHolder | null };
+}
+export type LinkUnlockResult =
+  | { status: 'none' }
+  | { status: 'kept'; holder: PrimaryLinkHolder }
+  | { status: 'broken'; holder: PrimaryLinkHolder };
+/**
+ * `whalibmob/lib/cli/linkCommands` — the logic behind the CLI's link commands, with no terminal in it:
+ * readiness, the choice between pairing requests, an optional coverage confirmation, the approval, then the
+ * bootstrap with the stored history; the `/linked-devices` and `/link-status` views; a message and a next step
+ * for every error code.
+ */
+export interface LinkCommandsModule {
+  /**
+   * The commands the messages point to: `/link-code`, `/link-qr`, `/link-invitations`, `/link-status`,
+   * `/linked-devices`, `/link-retire`, `/link-confirm FILE|JSON`, `/link-bootstrap --resume` (also under `resend`, with
+   * `--resend-uncertain`) and `/link-unlock`, with the CLI's own `/connect`, `/disconnect`, `/reconnect`, `/reg` and `/name`.
+   */
+  COMMANDS: Readonly<Record<string, string>>;
+  /**
+   * Collapse duplicate requests from one browser to its newest, newest browser first. A request without a fingerprint is its
+   * own group. A request that has expired by `now` (default: the present, as a number or a function) is not counted.
+   */
+  groupInvitations(invitations: PrimaryLinkInvitation[], now?: number | (() => number)): LinkInvitationGroup[];
+  /**
+   * Never guesses between browsers. `selector` is a group number (`'1'`) or an id prefix of 6 or more hex characters.
+   * Requests that have expired by `now` (default: the present) are not offered.
+   */
+  chooseInvitation(invitations: PrimaryLinkInvitation[], selector?: string | number, now?: number | (() => number)): LinkInvitationChoice;
+  /** The groups still live at `now`, numbered from 1 as `chooseInvitation` numbers them, with the id to choose by. */
+  formatInvitations(groups: LinkInvitationGroup[], now?: number | (() => number)): string[];
+  /** One line for a request as it arrives (the `primary_link_invitation` event): `  link request   companion <c>   code window 3:00   id <first 8>`. */
+  formatInvitationNotice(invitation: PrimaryLinkInvitation, now?: number | (() => number)): string;
+  /**
+   * `error` is optional: a busy journal's `holder` makes the message say who has it; a bootstrap's `resumable` false
+   * says its attempt can never continue, and `bootstrapPhase` where it stopped. `context` is `'unlock'` when the error
+   * came from the unlock command itself (a takeover in progress is then told to wait and run it again), `'bootstrap'`
+   * when it came from a bootstrap (a timeout, a cancel or a dropped connection is then answered with the resume), and
+   * `'status'` for the error a bootstrap recorded, as `/link-status` shows it, and `'listen'` for an event in
+   * `wa listen`, which has no shell (it is told to restart wa, never a shell command).
+   */
+  explainError(code: unknown, error?: { holder?: PrimaryLinkHolder | null; resumable?: boolean; bootstrapPhase?: string | null } | null, context?: 'unlock' | 'bootstrap' | 'status' | 'listen'): LinkExplanation;
+  explainBlocker(blocker: PrimaryLinkBlocker | { code?: string; detail?: object }): LinkExplanation;
+  /**
+   * An error caught from the link commands, as lines: what happened, what to do, the code. `context` as for
+   * `explainError`; an error marked `afterApproval` is read as a bootstrap's.
+   */
+  describeError(error: unknown, context?: 'unlock' | 'bootstrap'): string[];
+  formatReadiness(readiness: PrimaryLinkReadiness): string[];
+  formatBootstrapResult(result: PrimaryBootstrapResult | undefined): string[];
+  formatLinkedDevices(options: {
+    phone?: string; devices?: Array<{ deviceId: number; keyIndex: number }>;
+    journal?: LinkJournalView | null; history?: { chats?: number; records?: number } | null;
+  }): string[];
+  formatLinkStatus(status: LinkJournalView | undefined): string[];
+  runLinkCode(options: LinkRunOptions & { code: string; selector?: string | number; now?: number | (() => number) }): Promise<LinkCodeResult>;
+  runLinkQr(options: LinkRunOptions & { payload: string; options?: PrimaryLinkCommonOptions }): Promise<LinkQrResult>;
+  /**
+   * `/link-unlock`: prints who holds the link journal's lock and what breaking it means, asks `confirm` (only `true`
+   * is a yes; no function is a no), and breaks that holder's lock and no other. A lock another program took in the
+   * meantime makes `unlockPrimaryLink` throw PRIMARY_LINK_STORE_BUSY, which goes to the caller.
+   */
+  runLinkUnlock(options: { client: LinkUnlockClient; confirm?: (question: string) => boolean | Promise<boolean>; print?: (line: string) => void }): Promise<LinkUnlockResult>;
+  /**
+   * For events that can come once per message (`primary_message_store_error` on a full disk): the function returned
+   * answers whether a report of `code` is shown now, once per code each `windowMs` (default a minute). Shown, it
+   * gives how many were held back since the last one shown; held back, null.
+   */
+  createEventLimiter(options?: { windowMs?: number; now?: number | (() => number) }): (code: string) => { held: number } | null;
+  /** The line that says how many reports were held back: `  (2 more like this since the last one were not shown)`. */
+  formatHeldBack(held: number): string;
+}
+/** `whalibmob/lib/cli/` — the command line's logic, for a front end other than `cli.js` too. */
+export declare const Cli: {
+  LinkCommands: LinkCommandsModule;
+};
