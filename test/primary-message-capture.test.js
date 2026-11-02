@@ -38,6 +38,9 @@ const decode = buf => Message().decode(buf);
 const field = (number, bytes) => Buffer.from(Writer.create().uint32((number << 3) | 2).bytes(bytes).finish());
 // FutureProofMessage { message = 1 }, which the fixture declares as bytes.
 const wrapped = inner => field(1, inner);
+const varintField = (number, value) => Buffer.from(Writer.create().uint32(number << 3).uint32(value).finish());
+// Whether any record bytes in the log hold `secret`, however they are encoded.
+const logHolds = (dir, secret) => logEvents(dir).some(e => typeof e.raw === 'string' && Buffer.from(e.raw, 'base64').includes(secret));
 const logFile = dir => path.join(dir, PHONE + '.primary-messages.log');
 const logText = dir => (fs.existsSync(logFile(dir)) ? fs.readFileSync(logFile(dir), 'utf8') : '');
 const logEvents = dir => logText(dir).split('\n').filter(Boolean).map(line => JSON.parse(line));
@@ -775,4 +778,97 @@ test('disconnect waits for the decrypt queue only briefly', async t => {
     assert.equal(f.client._messageStore, null);
     const reopened = PrimaryMessageStore.open({ dir: f.dir, phone: PHONE, lc: f.client._store.connectionLc });
     try { assert.deepEqual(reopened.snapshot().losses, [{ reason: 'received-not-stored', ids: ['Q2'] }]); } finally { reopened.close(); }
+});
+
+test('view-once is never kept, whatever wrapper or media flag it hides behind', async t => {
+    const f = fixture(t);
+    f.login();
+    const secret = Buffer.from('MEDIAKEY-SECRET');
+    // VideoMessage { URL = 1, mediaKey = 6 }, ImageMessage { URL = 1, mediaKey = 8 }
+    const video = Buffer.concat([field(1, Buffer.from('https://mmg/v')), field(6, secret)]);
+    const image = Buffer.concat([field(1, Buffer.from('https://mmg/i')), field(8, secret)]);
+    const viewOnceVideo = field(55, wrapped(field(66, video)));   // viewOnceMessageV2 { ptvMessage }
+    const hidden = {
+        // FutureProofMessage wrappers the decoder does not open: groupMentioned,
+        // botInvoke, associatedChild, botForwarded, spoiler.
+        W62: field(62, wrapped(viewOnceVideo)),
+        W67: field(67, wrapped(viewOnceVideo)),
+        W91: field(91, wrapped(viewOnceVideo)),
+        W104: field(104, wrapped(viewOnceVideo)),
+        W118: field(118, wrapped(viewOnceVideo)),
+        // Two of them, one inside the other.
+        W2: field(118, wrapped(field(62, wrapped(viewOnceVideo)))),
+        // No envelope at all, only the media's own flag: VideoMessage.viewOnce = 20
+        // on a video note, ImageMessage.viewOnce = 25 on an image the decoder
+        // knows and on an instant image it does not.
+        FPTV: field(66, Buffer.concat([video, varintField(20, 1)])),
+        FIMG: field(3, Buffer.concat([image, varintField(25, 1)])),
+        FINS: field(135, Buffer.concat([image, varintField(25, 1)])),
+        // Cut short: what cannot be read is treated as hiding one.
+        CUT: Buffer.concat([field(66, video), Buffer.from([0x92, 0x04, 0x7f, 0x0a])])
+    };
+    for (const [id, raw] of Object.entries(hidden)) await f.receive(dm(id, raw));
+    const byId = Object.fromEntries(records(f, PEER).map(r => [r.id, r]));
+    for (const id of Object.keys(hidden)) {
+        assert.ok(byId[id], id);
+        assert.equal(byId[id].tombstone, 'view-once', id);
+        assert.equal(byId[id].raw, undefined, id);
+    }
+    // An edit that would bring view-once content in is not applied.
+    const plain = encode({ conversation: 'duz metin' });
+    await f.receive(dm('ED2', plain));
+    await f.receive(dm('ED3', encode({ protocolMessage: { type: 14, key: { remoteJID: PEER, fromMe: false, ID: 'ED2' }, editedMessage: hidden.W62 } }), { edit: '1' }));
+    const edited = records(f, PEER).find(r => r.id === 'ED2');
+    assert.ok(edited.raw.equals(plain));
+    assert.equal(edited.edited, undefined);
+    assert.equal(logHolds(f.dir, secret), false);
+    // An ordinary image, flag unset or absent, is kept with its content.
+    const normal = field(3, image);
+    await f.receive(dm('IMG', normal));
+    await f.receive(dm('IMG0', field(3, Buffer.concat([image, varintField(25, 0)]))));
+    for (const id of ['IMG', 'IMG0']) {
+        const r = records(f, PEER).find(x => x.id === id);
+        assert.equal(r.tombstone, undefined, id);
+        assert.ok(r.raw.includes(secret), id);
+    }
+    assert.deepEqual(f.snapshot().losses, []);
+    assert.deepEqual(f.errors, []);
+});
+
+test('view-once a companion sent, or that this client sends, is never kept either', async t => {
+    const f = fixture(t);
+    f.login();
+    const secret = Buffer.from('MEDIAKEY-SECRET');
+    const video = Buffer.concat([field(1, Buffer.from('https://mmg/v')), field(6, secret)]);
+    const inner = field(118, wrapped(field(55, wrapped(field(66, video)))));
+    await f.receive(dm('DVO', encode({ deviceSentMessage: { destinationJID: OTHER, message: inner } }), { from: OWN_DEVICE }));
+    const [own] = records(f, OTHER);
+    assert.equal(own.tombstone, 'view-once');
+    assert.equal(own.raw, undefined);
+    const sender = f.useSender();
+    const { id } = await sender._sendMessage(PEER, 'OUTVO', field(9, Buffer.concat([video, varintField(20, 1)])), 'media', {});
+    const out = records(f, PEER).find(r => r.id === id);
+    assert.equal(out.tombstone, 'view-once');
+    assert.equal(out.raw, undefined);
+    assert.equal(logHolds(f.dir, secret), false);
+});
+
+test('add-ons that act on another message are not kept', async t => {
+    const f = fixture(t);
+    f.login();
+    // MessageKey { remoteJid = 1, id = 3 }
+    const key = field(1, Buffer.concat([field(1, Buffer.from(PEER)), field(3, Buffer.from('TARGET'))]));
+    const addOns = {
+        SCE: field(65, Buffer.concat([key, varintField(2, 1)])),         // scheduledCallEditMessage, CANCEL
+        DPR: field(23, key),                                              // declinePaymentRequestMessage
+        CPR: field(24, key),                                              // cancelPaymentRequestMessage
+        LSM: field(99, wrapped(field(12, varintField(1, 27)))),           // limitSharingMessage { protocolMessage }
+        ACP: field(133, wrapped(field(12, varintField(1, 27))))           // acp2SettingMessage { protocolMessage }
+    };
+    for (const [id, raw] of Object.entries(addOns)) await f.receive(dm(id, raw));
+    assert.equal(f.snapshot().counts.records, 0);
+    for (const id of Object.keys(addOns)) {
+        assert.deepEqual(logEvents(f.dir).filter(e => e.id === id).map(e => e.t), ['inflight', 'resolve'], id);
+    }
+    assert.deepEqual(f.snapshot().losses, []);
 });
