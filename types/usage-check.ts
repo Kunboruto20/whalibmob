@@ -215,9 +215,12 @@ async function checkPrimaryMessageStore(sessionDir: string, phone: string) {
   const defaults = new wa.WhalibmobClient({ sessionDir, messageStore: true });
   const bounded = new wa.WhalibmobClient({ sessionDir, messageStore: { perChat: 200, maxMessages: 50000 } });
   const perChatOnly = new wa.WhalibmobClient({ sessionDir, messageStore: { perChat: 50 } });
-  void bounded; void perChatOnly;
+  const reset = new wa.WhalibmobClient({ sessionDir, messageStore: { setAsideCorrupt: true } });
+  void bounded; void perChatOnly; void reset;
   // @ts-expect-error A bound is a number.
   void new wa.WhalibmobClient({ messageStore: { perChat: '100' } });
+  // @ts-expect-error setAsideCorrupt is a yes or a no.
+  void new wa.WhalibmobClient({ messageStore: { setAsideCorrupt: 'yes' } });
 
   defaults.on('primary_message_store_error', e => { const code: string = e.code; const op: string = e.op; void code; void op; });
   await defaults.init(phone);

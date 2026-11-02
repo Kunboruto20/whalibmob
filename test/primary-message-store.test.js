@@ -871,3 +871,429 @@ test('misuse fails with a PRIMARY_MESSAGE_STORE_ code', (t) => {
   fs.writeFileSync(snapFile(dir), '{"version":1,');
   fails(() => open(), 'PRIMARY_MESSAGE_STORE_SNAPSHOT_CORRUPT');
 });
+
+// ─── a disk that refuses a write ─────────────────────────────────────────────
+//
+// A message whose event never reached the log is gone, and the store must say
+// so: the window from the first refused write to the next one that lands is a
+// 'write-failed' loss, in the live snapshot at once and on disk from then on.
+
+const lockFile   = dir => path.join(dir, PHONE + '.primary-messages.lock');
+const markerFile = dir => path.join(dir, PHONE + '.primary-messages.write-failed');
+const LOG_FD_ERROR = (code, message) => Object.assign(new Error(code + ': ' + message), { code });
+
+// fs.writeSync / fs.ftruncateSync refusing the store's log for as long as
+// `when()` says so; everything else, and the log afterwards, is untouched.
+function refuse(t, store, { write = () => false, truncate = () => false, torn = false } = {}) {
+  const fd = store._fd;
+  const real = { writeSync: fs.writeSync, ftruncateSync: fs.ftruncateSync };
+  const seen = { writes: 0 };
+  let tearNext = torn;
+  fs.writeSync = function (f, buf, off, len, ...rest) {
+    if (f === fd) {
+      seen.writes++;
+      if (tearNext && Buffer.isBuffer(buf)) {
+        // Half the line lands, then the disk gives out on the rest.
+        tearNext = false;
+        return real.writeSync.call(fs, f, buf, off, Math.floor(len / 2));
+      }
+      if (write()) throw LOG_FD_ERROR('ENOSPC', 'no space left on device, write');
+    }
+    return real.writeSync.apply(fs, [f, buf, off, len, ...rest]);
+  };
+  fs.ftruncateSync = function (f, ...rest) {
+    if (f === fd && truncate()) throw LOG_FD_ERROR('EIO', 'i/o error, ftruncate');
+    return real.ftruncateSync.apply(fs, [f, ...rest]);
+  };
+  const restore = () => Object.assign(fs, real);
+  t.after(restore);
+  return { restore, seen };
+}
+
+test('a write the disk refuses is a write-failed window, live and once written', (t) => {
+  const { dir, clock, open } = setup(t);
+  const s = open();
+  incoming(s, 'A1', 1);
+  let failing = true;
+  const disk = refuse(t, s, { write: () => failing });
+  clock.ms = T + 1000;
+  // The message arrives and is never written: neither its inflight mark nor itself.
+  assert.throws(() => s.recordInflight({ id: 'B2', chat: CHAT, ts: 2 }), { code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED' });
+  clock.ms = T + 1400;
+  assert.throws(() => incoming(s, 'B2', 2), { code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED' });
+  // Before anything lands again, the live snapshot already says so, up to now.
+  clock.ms = T + 3000;
+  assert.deepEqual(s.snapshot({ sweep: false }).losses, [{ reason: 'write-failed', from: T + 1000, to: T + 3000 }]);
+  failing = false;
+  disk.restore();
+  clock.ms = T + 5000;
+  incoming(s, 'C3', 3);
+  assert.deepEqual(s.snapshot().losses, [{ reason: 'write-failed', from: T + 1000, to: T + 5000 }]);
+  assert.equal(fs.existsSync(markerFile(dir)), false, 'the marker goes once the window is written down');
+  s.close();
+  const snap = open().snapshot();
+  assert.deepEqual(snap.records[CHAT].map(r => r.id), ['A1', 'C3']);
+  assert.deepEqual(snap.losses, [{ reason: 'write-failed', from: T + 1000, to: T + 5000 }]);
+});
+
+test('a half-written line that cannot be cut off stops every write until a compaction, which reports the window', (t) => {
+  const { dir, clock, open } = setup(t);
+  const s = open();
+  incoming(s, 'A1', 1);
+  let failing = true;
+  const disk = refuse(t, s, { write: () => failing, truncate: () => failing, torn: true });
+  clock.ms = T + 2000;
+  assert.throws(() => incoming(s, 'B2', 2), { code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED' });
+  assert.ok(fs.readFileSync(logFile(dir), 'utf8').endsWith('\n') === false, 'half a line is left in the log');
+  failing = false;
+  disk.restore();
+  // The disk is back, but the torn line is still there: nothing is appended
+  // after it, or it would glue itself to the next event.
+  const writes = disk.seen.writes;
+  clock.ms = T + 3000;
+  assert.throws(() => incoming(s, 'C3', 3), e => e.code === 'PRIMARY_MESSAGE_STORE_WRITE_FAILED' && /could not be cut off/.test(e.message));
+  assert.equal(disk.seen.writes, writes, 'refused without touching the log');
+  // A compaction rewrites everything and cuts the log to nothing.
+  clock.ms = T + 4000;
+  s.compact();
+  assert.equal(fs.statSync(logFile(dir)).size, 0);
+  assert.deepEqual(s.snapshot().losses, [{ reason: 'write-failed', from: T + 2000, to: T + 4000 }]);
+  assert.equal(fs.existsSync(markerFile(dir)), false);
+  incoming(s, 'D4', 4);
+  s.close();
+  const snap = open().snapshot();
+  assert.deepEqual(snap.records[CHAT].map(r => r.id), ['A1', 'D4']);
+  assert.deepEqual(snap.losses, [{ reason: 'write-failed', from: T + 2000, to: T + 4000 }]);
+});
+
+test('a window still open at close is written by the close', (t) => {
+  const { clock, open } = setup(t);
+  const s = open();
+  incoming(s, 'A1', 1);
+  s.compact();
+  const disk = refuse(t, s, { write: () => true });
+  clock.ms = T + 1000;
+  assert.throws(() => incoming(s, 'B2', 2), { code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED' });
+  disk.restore();
+  clock.ms = T + 7000;
+  s.close();   // nothing else was written: the close is the first write that lands
+  assert.deepEqual(open().snapshot().losses, [{ reason: 'write-failed', from: T + 1000, to: T + 7000 }]);
+});
+
+// ─── one store, one process ──────────────────────────────────────────────────
+
+const STORE_MODULE = path.join(__dirname, '..', 'lib', 'primary', 'MessageStore.js');
+const { spawn, execFileSync } = require('node:child_process');
+
+// A process that opens the store, writes A1, and dies without closing it —
+// after a write the disk refused, with `fail`.
+const DIES = `
+const fs = require('node:fs');
+const { PrimaryMessageStore } = require(${JSON.stringify(STORE_MODULE)});
+const [dir, phone, at, mode] = process.argv.slice(1);
+const s = PrimaryMessageStore.open({ dir, phone, now: () => Number(at) });
+s.recordIncoming({ id: 'A1', chat: ${JSON.stringify(CHAT)}, ts: 1, raw: Buffer.from('a1'), info: { kind: 'content' } });
+if (mode === 'fail') {
+  const real = fs.writeSync;
+  fs.writeSync = function (fd, ...rest) {
+    if (fd === s._fd) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+    return real.call(fs, fd, ...rest);
+  };
+  try { s.recordIncoming({ id: 'B2', chat: ${JSON.stringify(CHAT)}, ts: 2, raw: Buffer.from('b2'), info: { kind: 'content' } }); }
+  catch (e) { if (e.code !== 'PRIMARY_MESSAGE_STORE_WRITE_FAILED') throw e; }
+}
+process.exit(0);
+`;
+
+// A process that opens the store, writes K1, says so, and holds it until told to close.
+const HOLDS = `
+const { PrimaryMessageStore } = require(${JSON.stringify(STORE_MODULE)});
+const [dir, phone] = process.argv.slice(1);
+const s = PrimaryMessageStore.open({ dir, phone });
+s.recordIncoming({ id: 'K1', chat: ${JSON.stringify(CHAT)}, ts: 5, raw: Buffer.from('k1'), info: { kind: 'content' } });
+process.stdout.write('ready\\n');
+process.stdin.once('data', () => { s.close(); process.exit(0); });
+`;
+
+function holder(t, dir) {
+  const child = spawn(process.execPath, ['-e', HOLDS, dir, PHONE], { stdio: ['pipe', 'pipe', 'inherit'] });
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  t.after(() => { child.kill(); return exited; });
+  const ready = new Promise((resolve, reject) => {
+    child.stdout.once('data', resolve);
+    child.once('exit', code => reject(new Error('the holder exited early, code ' + code)));
+  });
+  return { child, ready, release: () => { child.stdin.write('close\n'); return exited; } };
+}
+
+test('a second process gets BUSY with who holds the store, and the store is never corrupted', async (t) => {
+  const { dir, open } = setup(t);
+  open({ origin: 'registration' }).close();
+  const other = holder(t, dir);
+  await other.ready;
+  assert.throws(() => open(), e => e.code === 'PRIMARY_MESSAGE_STORE_BUSY' && e.holder && e.holder.pid === other.child.pid
+    && e.holder.host === os.hostname());
+  assert.ok(fs.existsSync(lockFile(dir)));
+  await other.release();
+  assert.equal(fs.existsSync(lockFile(dir)), false, 'released by its close');
+  const s = open();
+  assert.deepEqual(s.snapshot().records[CHAT].map(r => r.id), ['K1']);
+  assert.equal(s.capture.origin, 'registration');
+});
+
+test('the lock left by a process that died is taken over', (t) => {
+  const { dir, open } = setup(t);
+  execFileSync(process.execPath, ['-e', DIES, dir, PHONE, String(T)]);
+  const left = JSON.parse(fs.readFileSync(lockFile(dir), 'utf8'));
+  assert.equal(left.host, os.hostname());
+  assert.notEqual(left.pid, process.pid);
+  const s = open();
+  const now = JSON.parse(fs.readFileSync(lockFile(dir), 'utf8'));
+  assert.equal(now.pid, process.pid, 'the lock names this process now');
+  assert.deepEqual(s.snapshot().records[CHAT].map(r => r.id), ['A1']);
+  s.close();
+  assert.equal(fs.existsSync(lockFile(dir)), false);
+});
+
+test('a lock whose holder cannot be proven dead is never taken over, and nobody else\'s lock is removed', (t) => {
+  const { dir, open } = setup(t);
+  open().close();
+  // Another host's process: nothing here can tell whether it still runs.
+  const foreign = { v: 2, pid: 4242, host: 'elsewhere.example', bootId: 'b', procStart: null, token: 'f'.repeat(32), gen: 1, at: T, pidNs: null };
+  fs.writeFileSync(lockFile(dir), JSON.stringify(foreign), { mode: 0o600 });
+  assert.throws(() => open(), e => e.code === 'PRIMARY_MESSAGE_STORE_BUSY' && e.holder.host === 'elsewhere.example' && e.holder.pid === 4242);
+  assert.equal(fs.readFileSync(lockFile(dir), 'utf8'), JSON.stringify(foreign), 'left exactly as it was');
+  fs.unlinkSync(lockFile(dir));
+
+  // Ours, replaced under us by someone else's: our close leaves theirs be.
+  const s = open();
+  fs.unlinkSync(lockFile(dir));
+  fs.writeFileSync(lockFile(dir), JSON.stringify(foreign), { mode: 0o600 });
+  s.close();
+  assert.equal(fs.readFileSync(lockFile(dir), 'utf8'), JSON.stringify(foreign));
+  fs.unlinkSync(lockFile(dir));
+});
+
+test('the store lock belongs to a process and never moves with a session', () => {
+  const { SESSION_SUFFIXES } = require('../lib/SessionPaths');
+  assert.ok(!SESSION_SUFFIXES.includes('.primary-messages.lock'));
+  assert.ok(!SESSION_SUFFIXES.includes('.web.primary-messages.lock'));
+});
+
+test('a process that dies while writes fail still has its window reported at the next open', (t) => {
+  const { dir, clock, open } = setup(t);
+  execFileSync(process.execPath, ['-e', DIES, dir, PHONE, String(T + 1000), 'fail']);
+  assert.ok(fs.existsSync(markerFile(dir)), 'the failure is marked on disk');
+  clock.ms = T + 9000;
+  const s = open();
+  assert.deepEqual(s.snapshot().losses, [{ reason: 'write-failed', from: T + 1000, to: T + 9000 }]);
+  assert.equal(fs.existsSync(markerFile(dir)), false);
+  s.close();
+  assert.deepEqual(open().snapshot().losses, [{ reason: 'write-failed', from: T + 1000, to: T + 9000 }], 'reported once');
+});
+
+test('a write-failed marker already written down is not reported twice', (t) => {
+  const { dir, clock, open } = setup(t);
+  const s = open();
+  incoming(s, 'A1', 1);
+  const disk = refuse(t, s, { write: () => true });
+  clock.ms = T + 1000;
+  assert.throws(() => incoming(s, 'B2', 2), { code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED' });
+  disk.restore();
+  // Killed between writing the window and removing the marker: put it back.
+  const stat = fs.statSync(markerFile(dir));
+  clock.ms = T + 2000;
+  incoming(s, 'C3', 3);
+  s.close();
+  fs.writeFileSync(markerFile(dir), '');
+  fs.utimesSync(markerFile(dir), stat.atime, stat.mtime);
+  clock.ms = T + 5000;
+  assert.deepEqual(open().snapshot().losses, [{ reason: 'write-failed', from: T + 1000, to: T + 2000 }]);
+  assert.equal(fs.existsSync(markerFile(dir)), false);
+});
+
+test('a marker left from a window already written down is replaced by the next one, not mistaken for it', (t) => {
+  const { dir, clock, open } = setup(t);
+  const s = open();
+  incoming(s, 'A1', 1);
+  // An earlier window, written down, whose marker could not be removed then.
+  fs.writeFileSync(markerFile(dir), '');
+  fs.utimesSync(markerFile(dir), (T - 60000) / 1000, (T - 60000) / 1000);
+  const disk = refuse(t, s, { write: () => true });
+  clock.ms = T + 1000;
+  assert.throws(() => incoming(s, 'B2', 2), { code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED' });
+  disk.restore();
+  assert.equal(Math.floor(fs.statSync(markerFile(dir)).mtimeMs / 1000) * 1000, T + 1000);
+});
+
+test('a marker beside a store that has no capture yet says nothing about it', (t) => {
+  const { dir, open } = setup(t);
+  fs.writeFileSync(markerFile(dir), '');
+  const s = open({ origin: 'registration' });
+  assert.deepEqual(s.snapshot().losses, []);
+  assert.equal(fs.existsSync(markerFile(dir)), false);
+});
+
+// ─── a damaged store, set aside on request ──────────────────────────────────
+
+const ASIDE_STAMP = new Date(T).toISOString().replace(/[:.]/g, '-');
+
+test('setAsideCorrupt keeps a damaged log aside and starts a fresh capture that asks', (t) => {
+  const { dir, clock, open } = setup(t);
+  const s = open({ origin: 'registration' });
+  incoming(s, 'M1', 100);
+  incoming(s, 'M2', 110);
+  const image = crashImage(dir);
+  s.close();
+  const lines = image.log.toString('utf8').split('\n');
+  lines[0] = lines[0].slice(0, 20);
+  const damaged = Buffer.from(lines.join('\n'));
+  restore(dir, { log: damaged, snap: image.snap });
+
+  assert.throws(() => open({ setAsideCorrupt: false }), { code: 'PRIMARY_MESSAGE_STORE_LOG_CORRUPT' });
+  assert.equal(fs.existsSync(lockFile(dir)), false, 'a refused open leaves no lock behind');
+  const fresh = open({ setAsideCorrupt: true, origin: 'registration', lc: 3 });
+  const snap = fresh.snapshot();
+  assert.deepEqual(snap.capture, { since: T, origin: 'enabled', lc: 3 }, 'capture honestly starts now');
+  assert.deepEqual(snap.records, {});
+  assert.deepEqual(snap.losses, []);
+  assert.ok(fs.readFileSync(logFile(dir) + '.corrupt-' + ASIDE_STAMP).equals(damaged), 'the damaged log is kept as it was');
+  assert.ok(fs.readFileSync(snapFile(dir) + '.corrupt-' + ASIDE_STAMP).equals(image.snap));
+  assert.deepEqual(fresh.setAside, [logFile(dir) + '.corrupt-' + ASIDE_STAMP, snapFile(dir) + '.corrupt-' + ASIDE_STAMP].sort());
+  incoming(fresh, 'N1', 200);
+  fresh.close();
+  clock.ms = T + 1000;
+  const again = open({ setAsideCorrupt: true });
+  assert.deepEqual(again.snapshot().records[CHAT].map(r => r.id), ['N1']);
+  assert.equal(again.setAside, null, 'nothing to set aside on a healthy store');
+});
+
+test('setAsideCorrupt recovers a damaged snapshot too', (t) => {
+  const { dir, open } = setup(t);
+  const s = open();
+  incoming(s, 'M1', 100);
+  s.close();
+  fs.writeFileSync(snapFile(dir), '{"version":1,');
+  assert.throws(() => open(), { code: 'PRIMARY_MESSAGE_STORE_SNAPSHOT_CORRUPT' });
+  const fresh = open({ setAsideCorrupt: true });
+  assert.equal(fresh.capture.origin, 'enabled');
+  assert.equal(fs.readFileSync(snapFile(dir) + '.corrupt-' + ASIDE_STAMP, 'utf8'), '{"version":1,');
+  assert.ok(fs.existsSync(logFile(dir) + '.corrupt-' + ASIDE_STAMP));
+  assert.throws(() => open({ setAsideCorrupt: 'yes' }), { code: 'PRIMARY_MESSAGE_STORE_OPTIONS_INVALID' });
+});
+
+// ─── a counter that went back: registered again ─────────────────────────────
+
+test('a login counter that went back breaks continuity: a window, and no claim to the registration', (t) => {
+  const { clock, open } = setup(t);
+  const s = open({ origin: 'registration', lc: 5 });
+  s.noteLogin(6);
+  clock.ms = T + 1000;
+  incoming(s, 'M1', 100);
+  s.close();
+
+  // Registered again, by this library or anything else: the counter starts over.
+  clock.ms = T + 9000;
+  const again = open({ lc: 0 });
+  assert.deepEqual(again.snapshot().losses, [{ reason: 'store-disabled', from: T + 1000, to: T + 9000 }]);
+  assert.deepEqual(again.capture, { since: T, origin: 'enabled', lc: 0 });
+  again.noteLogin(1);
+  again.close();
+  const third = open({ lc: 1 });
+  assert.equal(third.snapshot().losses.length, 1, 'the same break is not reported twice');
+  assert.equal(third.capture.origin, 'enabled');
+  third.close();
+  // An open that does not know the counter says nothing about it.
+  assert.equal(open().snapshot().losses.length, 1);
+});
+
+test('a login counter that goes back while the store is open is a break too', (t) => {
+  const { clock, open } = setup(t);
+  const s = open({ origin: 'registration', lc: 5 });
+  clock.ms = T + 1000;
+  incoming(s, 'M1', 100);
+  clock.ms = T + 4000;
+  s.noteLogin(1);
+  assert.deepEqual(s.snapshot().losses, [{ reason: 'store-disabled', from: T + 1000, to: T + 4000 }]);
+  assert.deepEqual(s.capture, { since: T, origin: 'enabled', lc: 1 });
+  s.close();
+  const again = open();
+  assert.deepEqual(again.capture, { since: T, origin: 'enabled', lc: 1 });
+  assert.equal(again.snapshot().losses.length, 1);
+});
+
+// ─── compaction ──────────────────────────────────────────────────────────────
+
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test('the compaction threshold grows with the snapshot it has to rewrite', async (t) => {
+  const { dir, open } = setup(t);
+  const s = open({ perChat: 5000, maxMessages: 50000 });
+  const raw = Buffer.alloc(3000, 7);
+  for (let i = 0; i < 900; i++) incoming(s, 'B' + i, i, { raw });
+  s.compact();
+  const snapBytes = fs.statSync(snapFile(dir)).size;
+  assert.ok(snapBytes > 3 * 1024 * 1024, snapBytes + ' bytes');
+  // Past the 5 000 lines and the 1 MiB a small store compacts at, well short of the snapshot.
+  for (let i = 0; i < 6000; i++) s.recordInflight({ id: 'I' + i, chat: CHAT, ts: 1000 + i });
+  for (let i = 0; i < 400; i++) incoming(s, 'C' + i, 2000 + i, { raw });
+  const logBytes = fs.statSync(logFile(dir)).size;
+  assert.ok(logBytes > 1024 * 1024 && logBytes < snapBytes, logBytes + ' bytes');
+  await tick();
+  assert.equal(fs.statSync(logFile(dir)).size, logBytes, 'not compacted yet');
+  // Once the log has grown by about as much as the snapshot holds, it is.
+  for (let i = 400; i < 1100 && fs.statSync(logFile(dir)).size <= snapBytes; i++) incoming(s, 'C' + i, 2000 + i, { raw });
+  assert.ok(fs.statSync(logFile(dir)).size > snapBytes);
+  await tick();
+  assert.equal(fs.statSync(logFile(dir)).size, 0, 'compacted');
+});
+
+test('a revoke takes the revoked bytes off the disk on the next turn of the event loop', async (t) => {
+  const { dir, open } = setup(t);
+  const s = open();
+  const onDisk = secret => [logFile(dir), snapFile(dir)].filter(f => fs.readFileSync(f, 'utf8').includes(b64(secret)));
+  incoming(s, 'M1', 10, { raw: Buffer.from('first secret') });
+  s.compact();                                                     // in the snapshot
+  incoming(s, 'M2', 20, { raw: Buffer.from('second secret') });   // in the log
+  incoming(s, 'M3', 30, { raw: Buffer.from('kept message') });
+  protocol(s, 'P1', 11, { type: 0, key: { id: 'M1' } });
+  protocol(s, 'P2', 21, { type: 0, key: { id: 'M2' } });
+  assert.equal(onDisk('first secret').length, 1, 'still there before the deferred compaction');
+  assert.equal(onDisk('second secret').length, 1);
+  await tick();
+  assert.deepEqual(onDisk('first secret'), []);
+  assert.deepEqual(onDisk('second secret'), []);
+  assert.equal(onDisk('kept message').length, 1);
+  assert.equal(byId(s.snapshot(), 'M3').raw.toString(), 'kept message');
+});
+
+test('a revoke replayed at open, after a crash before its compaction, is compacted then', (t) => {
+  const { dir, open } = setup(t);
+  const s = open();
+  incoming(s, 'M1', 10, { raw: Buffer.from('first secret') });
+  protocol(s, 'P1', 11, { type: 0, key: { id: 'M1' } });
+  const image = crashImage(dir);   // before the deferred compaction ran
+  s.close();
+  restore(dir, image);
+  assert.ok(fs.readFileSync(logFile(dir), 'utf8').includes(b64('first secret')));
+  open();
+  assert.equal(fs.readFileSync(logFile(dir), 'utf8').includes(b64('first secret')), false);
+  assert.equal(fs.readFileSync(snapFile(dir), 'utf8').includes(b64('first secret')), false);
+});
+
+test('expired content is swept off the disk within the hour, with no reopen and no snapshot asked for', async (t) => {
+  const { dir, clock, open } = setup(t);
+  const ts = Math.floor(T / 1000);
+  const s = open();
+  incoming(s, 'E1', ts, { raw: Buffer.from('disappearing'), info: { kind: 'content', expiration: 60 } });
+  incoming(s, 'K1', ts, { raw: Buffer.from('staying') });
+  s.compact();
+  const onDisk = secret => [logFile(dir), snapFile(dir)].some(f => fs.readFileSync(f, 'utf8').includes(b64(secret)));
+  assert.ok(onDisk('disappearing'));
+  clock.ms = T + 3600 * 1000;   // long expired, and an hour since the last sweep
+  for (let i = 0; i < 60 && onDisk('disappearing'); i++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(onDisk('disappearing'), false);
+  assert.ok(onDisk('staying'));
+  s.close();
+  assert.equal(open().snapshot().records[CHAT].find(r => r.id === 'E1').tombstone, 'expired');
+});

@@ -159,9 +159,14 @@ export interface WhalibmobClientOptions {
    * received, so a companion this account links can be handed the chat
    * history. Default off. `true` keeps the defaults (100 messages a chat,
    * 20 000 in all); an object bounds them. Never used on a companion session.
+   * One process at a time holds a number's store (`<phone>.primary-messages.lock`);
+   * another gets `PRIMARY_MESSAGE_STORE_BUSY`. `setAsideCorrupt: true` renames a
+   * store that cannot be read (`PRIMARY_MESSAGE_STORE_LOG_CORRUPT`,
+   * `PRIMARY_MESSAGE_STORE_SNAPSHOT_CORRUPT`) to `<file>.corrupt-<time>` and starts
+   * a new one, which captures from then on. Default `false`: the store stays off.
    * See `getPrimaryMessageStore()` and the `primary_message_store_error` event.
    */
-  messageStore?: boolean | { perChat?: number; maxMessages?: number };
+  messageStore?: boolean | { perChat?: number; maxMessages?: number; setAsideCorrupt?: boolean };
 }
 
 export interface ConnectWebOptions {
@@ -219,7 +224,11 @@ export interface PrimaryMessageSnapshot {
   chats: PrimaryMessageChat[];
   /** Keyed by chat id, oldest first. */
   records: Record<string, PrimaryMessageRecord[]>;
-  /** Messages seen but not kept (`ids`), or a time window nothing was kept for (`from`/`to`). */
+  /**
+   * Messages seen but not kept (`ids`), or a time window nothing was kept for
+   * (`from`/`to`, ms): `'store-disabled'` (logins the store was not open for, or
+   * a login counter that started over), `'write-failed'` (the disk refused writes).
+   */
   losses: Array<{ reason: string; ids?: string[]; from?: number; to?: number }>;
   retained: { evicted: number };
   pushNames: Array<{ id: string; pushname: string }>;

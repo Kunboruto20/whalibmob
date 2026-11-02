@@ -1291,3 +1291,31 @@ test('only Message fields the schema leaves undefined are tried as wrappers', as
     assert.equal(records(f, PEER).find(x => x.id === 'U4').tombstone, 'view-once');
     assert.equal(logHolds(f.dir, secret), false);
 });
+
+// ─── a damaged store, set aside on request ──────────────────────────────────
+
+test('messageStore { setAsideCorrupt } sets a damaged store aside at login and captures from then', async t => {
+    const f = fixture(t, { messageStore: { setAsideCorrupt: true } });
+    const damaged = 'not an event\n{"seq":1}\n';
+    fs.writeFileSync(logFile(f.dir), damaged, { mode: 0o600 });
+    f.login();
+    assert.deepEqual(f.errors, []);
+    assert.ok(f.client._messageStore, 'the store is on');
+    const aside = storeFiles(f.dir).filter(name => /\.primary-messages\.log\.corrupt-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z$/.test(name));
+    assert.equal(aside.length, 1, storeFiles(f.dir).join(', '));
+    assert.equal(fs.readFileSync(path.join(f.dir, aside[0]), 'utf8'), damaged, 'kept as it was');
+    await f.receive(dm('NEW1', encode({ conversation: 'yeni baslangic' })));
+    const snap = f.snapshot();
+    assert.equal(snap.capture.origin, 'enabled');
+    assert.deepEqual(snap.records[PEER].map(r => r.id), ['NEW1']);
+    assert.deepEqual(f.errors, []);
+});
+
+test('the store is held by this client alone until it closes', async t => {
+    const f = fixture(t);
+    f.login();
+    const lock = path.join(f.dir, PHONE + '.primary-messages.lock');
+    assert.equal(JSON.parse(fs.readFileSync(lock, 'utf8')).pid, process.pid);
+    f.client.disconnect();
+    assert.equal(fs.existsSync(lock), false);
+});
