@@ -941,3 +941,353 @@ test('a reply whose way to the quote cannot be read is kept only as a stub', asy
     assert.equal(r.tombstone, 'view-once');
     assert.equal(r.raw, undefined);
 });
+
+// ─── The walk reads a message the way the schema lays it out ────────────────
+
+// A stream of bytes fixed by its seed (mulberry32), so a failing seed can be
+// replayed.
+function seeded(seed) {
+    let a = seed >>> 0;
+    const next = () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = Math.imul(a ^ (a >>> 15), a | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return (t ^ (t >>> 14)) >>> 0;
+    };
+    return { bytes: n => Buffer.from(Array.from({ length: n }, () => next() & 0xff)), int: n => next() % n };
+}
+const packedField = (number, values) => field(number, Buffer.concat(values.map(v => Buffer.from(Writer.create().uint32(v).finish()))));
+// The metadata official clients put beside practically every message:
+// MessageContextInfo { deviceListMetadata = 1, deviceListMetadataVersion = 2,
+// messageSecret = 3 }, its DeviceListMetadata { senderKeyHash = 1,
+// senderTimestamp = 2, senderKeyIndexes = 3 (packed), recipientKeyHash = 8,
+// recipientTimestamp = 9, recipientKeyIndexes = 10 (packed) }. A 1:1 message
+// names both sides; a group message only the sender.
+function deviceListContext(rng, recipient) {
+    const indexes = () => Array.from({ length: 1 + rng.int(4) }, () => rng.int(300));
+    const metadata = Buffer.concat([
+        field(1, rng.bytes(10)), varintField(2, T - rng.int(1e6)), packedField(3, indexes()),
+        ...(recipient ? [field(8, rng.bytes(10)), varintField(9, T - rng.int(1e6)), packedField(10, indexes())] : [])
+    ]);
+    return field(35, Buffer.concat([field(1, metadata), varintField(2, 2), field(3, rng.bytes(32))]));
+}
+
+test('real messages carrying device-list metadata are kept byte for byte', async t => {
+    // Room for every record: 160 in the 1:1 chat.
+    const f = fixture(t, { messageStore: { perChat: 1000 } });
+    f.login();
+    const ephemeral = (raw, rng) => Buffer.concat([field(40, wrapped(raw)), deviceListContext(rng, true)]);
+    const expected = [];
+    for (let seed = 1; seed <= 40; seed++) {
+        const rng = seeded(seed);
+        for (const wrap of [false, true]) {
+            const w = (raw, recipient) => (wrap ? ephemeral(raw, rng) : Buffer.concat([raw, deviceListContext(rng, recipient)]));
+            const tag = seed + (wrap ? 'e' : '');
+            // A 1:1 text.
+            const text = w(field(1, Buffer.from('merhaba ' + seed)), true);
+            await f.receive(dm('DT' + tag, text));
+            expected.push([PEER, 'DT' + tag, text]);
+            // A text a companion sent, as a device-sent message.
+            const own = w(field(1, Buffer.from('benden ' + seed)), true);
+            await f.receive(dm('DS' + tag, Buffer.concat([encode({ deviceSentMessage: { destinationJID: OTHER, message: own } }), deviceListContext(rng, true)]), { from: OWN_DEVICE }));
+            expected.push([OTHER, 'DS' + tag, own]);
+            // A group text, sender side only, with its sender-key indexes.
+            const group = w(field(1, Buffer.from('grup ' + seed)), false);
+            await f.receive(inGroup('DG' + tag, group));
+            expected.push([GROUP, 'DG' + tag, group]);
+            // A reply quoting an ordinary message.
+            const reply = w(field(6, Buffer.concat([field(1, Buffer.from('cevap')),
+                field(17, Buffer.concat([field(1, Buffer.from('QUOTED' + seed)), field(2, Buffer.from(PEER)), field(3, encode({ conversation: 'alinti' }))]))])), true);
+            await f.receive(dm('DR' + tag, reply));
+            expected.push([PEER, 'DR' + tag, reply]);
+        }
+    }
+    for (const [chat, id, raw] of expected) {
+        const r = records(f, chat).find(x => x.id === id);
+        assert.ok(r, id);
+        assert.equal(r.tombstone, undefined, id);
+        assert.ok(r.raw.equals(raw), id);
+    }
+    // Hand-picked: a recipientKeyHash that reads as an AudioMessage with its
+    // viewOnce = 21 set, and senderKeyIndexes that read as an image. The
+    // metadata is never read as a message.
+    const crafted = Buffer.concat([field(1, Buffer.from('merhaba')), field(35, field(1, Buffer.concat([
+        field(1, Buffer.from('0123456789')), packedField(3, [26, 4, 202, 1, 1]), field(8, varintField(21, 1))])))]);
+    await f.receive(dm('DC', crafted));
+    const r = records(f, PEER).find(x => x.id === 'DC');
+    assert.equal(r.tombstone, undefined);
+    assert.ok(r.raw.equals(crafted));
+    assert.deepEqual(f.errors, []);
+});
+
+test('groups are skipped as standard readers skip them, and cannot hide view-once', async t => {
+    const f = fixture(t);
+    f.login();
+    const secret = Buffer.from('MEDIAKEY-SECRET');
+    const image = Buffer.concat([field(1, Buffer.from('https://mmg/i')), field(8, secret)]);
+    const viewOnce = field(55, wrapped(field(3, image)));
+    // An empty group of field 2: start-group, end-group.
+    const group = Buffer.from([(2 << 3) | 3, (2 << 3) | 4]);
+    // A group of field 19, which the schema leaves undefined, holding a
+    // nested group and fields of every wire type.
+    const tag = (number, wire) => Buffer.from(Writer.create().uint32((number << 3) | wire).finish());
+    const nested = Buffer.concat([tag(19, 3), tag(6, 3), varintField(1, 7), tag(2, 1), Buffer.alloc(8, 1),
+        tag(3, 5), Buffer.alloc(4, 2), field(4, Buffer.from('x')), tag(6, 4), tag(19, 4)]);
+    const hidden = {
+        G62A: field(62, Buffer.concat([group, wrapped(viewOnce)])),
+        G62B: field(62, wrapped(Buffer.concat([group, viewOnce]))),
+        G62N: field(62, Buffer.concat([nested, wrapped(viewOnce)])),
+        // At the top, after the text the decoder reads first.
+        GTOP: Buffer.concat([field(1, Buffer.from('x')), group, viewOnce]),
+        // Malformed nesting is not a message: an unterminated group, an
+        // end-group of another number, an end-group alone.
+        GOPEN: Buffer.concat([field(1, Buffer.from('x')), Buffer.from([(2 << 3) | 3]), varintField(1, 1)]),
+        GCROSS: Buffer.concat([field(1, Buffer.from('x')), Buffer.from([(2 << 3) | 3, (3 << 3) | 4])]),
+        GEND: Buffer.concat([field(1, Buffer.from('x')), Buffer.from([(2 << 3) | 4])]),
+        // A group where the schema has imageMessage is not an image a reader
+        // agrees on: it does not read, and fails closed.
+        GWIRE: Buffer.concat([field(1, Buffer.from('x')), Buffer.from([(3 << 3) | 3]), field(8, secret), Buffer.from([(3 << 3) | 4])])
+    };
+    for (const [id, raw] of Object.entries(hidden)) await f.receive(dm(id, raw));
+    for (const id of Object.keys(hidden)) {
+        const r = records(f, PEER).find(x => x.id === id);
+        assert.ok(r, id);
+        assert.equal(r.tombstone, 'view-once', id);
+        assert.equal(r.raw, undefined, id);
+    }
+    // The decoder stops reading at a group that comes first, at the top or
+    // inside the ephemeral envelope it opens, and finds nothing a chat would
+    // show. Such a message is not kept at all, which is no leak either.
+    await f.receive(dm('G40A', field(40, Buffer.concat([nested, wrapped(viewOnce)]))));
+    await f.receive(dm('GLEAD', Buffer.concat([group, viewOnce])));
+    for (const id of ['G40A', 'GLEAD']) {
+        const r = records(f, PEER).find(x => x.id === id);
+        assert.ok(!r || (r.tombstone === 'view-once' && r.raw === undefined), id);
+    }
+    // A reply whose quote hides view-once behind a group loses the quote.
+    const reply = q => field(6, Buffer.concat([field(1, Buffer.from('cevap')), field(17, Buffer.concat([field(1, Buffer.from('QUOTED1')), ...(q ? [field(3, q)] : [])]))]));
+    await f.receive(dm('GQ', reply(field(62, Buffer.concat([group, wrapped(viewOnce)])))));
+    const gq = records(f, PEER).find(x => x.id === 'GQ');
+    assert.equal(gq.tombstone, undefined);
+    assert.ok(gq.raw.equals(reply(null)));
+    // An ordinary text carrying groups is kept as it came, groups and all.
+    const plain = Buffer.concat([field(1, Buffer.from('merhaba')), group, nested]);
+    await f.receive(dm('GOK', plain));
+    const ok = records(f, PEER).find(x => x.id === 'GOK');
+    assert.equal(ok.tombstone, undefined);
+    assert.ok(ok.raw.equals(plain));
+    assert.equal(logHolds(f.dir, secret), false);
+});
+
+test('view-once is found in every message the schema nests, not only at field 1', async t => {
+    const f = fixture(t);
+    f.login();
+    const secret = Buffer.from('MEDIAKEY-SECRET');
+    const image = Buffer.concat([field(1, Buffer.from('https://mmg/i')), field(8, secret)]);
+    const video = Buffer.concat([field(1, Buffer.from('https://mmg/v')), field(6, secret)]);
+    const viewOnce = field(55, wrapped(field(3, image)));
+    const stubbed = {
+        // sendPaymentMessage { noteMessage = 2 }
+        NSP: field(16, field(2, viewOnce)),
+        // requestPaymentMessage { currencyCodeIso4217 = 1, noteMessage = 4 }
+        NRP: field(22, Buffer.concat([field(1, Buffer.from('BRL')), field(4, viewOnce)])),
+        // interactiveMessage { header = 1 { imageMessage = 4 } }, ImageMessage.viewOnce = 25
+        HDR: field(45, field(1, field(4, Buffer.concat([image, varintField(25, 1)])))),
+        // templateMessage { hydratedTemplate = 4 { videoMessage = 4 } }, VideoMessage.viewOnce = 20
+        TPL: field(25, field(4, field(4, Buffer.concat([video, varintField(20, 1)])))),
+        // buttonsMessage { imageMessage = 3 }
+        BTN: field(42, field(3, Buffer.concat([image, varintField(25, 1)]))),
+        // imageMessage { interactiveAnnotations = 10 { embeddedContent = 5 {
+        // embeddedMessage = 1 { message = 2 } } } }
+        ANN: field(3, Buffer.concat([field(1, Buffer.from('https://mmg/a')), field(10, field(5, field(1, field(2, viewOnce))))])),
+        // commentMessage { message = 1 }
+        CMT: field(77, field(1, viewOnce))
+    };
+    for (const [id, raw] of Object.entries(stubbed)) await f.receive(dm(id, raw));
+    for (const id of Object.keys(stubbed)) {
+        const r = records(f, PEER).find(x => x.id === id);
+        assert.ok(r, id);
+        assert.equal(r.tombstone, 'view-once', id);
+        assert.equal(r.raw, undefined, id);
+    }
+    // Quotes that hide view-once one message further in go, and the reply stays.
+    const context = extra => Buffer.concat([field(1, Buffer.from('QUOTED1')), field(2, Buffer.from(PEER)), ...extra]);
+    const reply = extra => field(6, Buffer.concat([field(1, Buffer.from('cevap')), field(17, context(extra))]));
+    const stripped = {
+        // A quoted deviceSentMessage { destinationJID = 1, message = 2 }.
+        QDSM: field(3, field(31, Buffer.concat([field(1, Buffer.from(OTHER)), field(2, viewOnce)]))),
+        // A quoted protocolMessage { type = 2, editedMessage = 14 }.
+        QEDIT: field(3, field(12, Buffer.concat([varintField(2, 14), field(14, viewOnce)]))),
+        // ContextInfo.questionReplyQuotedMessage = 68 { serverQuestionID = 1,
+        // quotedQuestion = 2, quotedResponse = 3 }.
+        QRQ: field(68, Buffer.concat([varintField(1, 5), field(2, encode({ conversation: 'soru' })), field(3, viewOnce)])),
+        QRQ2: field(68, field(2, viewOnce)),
+        // View-once behind wrappers the quote holds: botInvoke 67, and
+        // groupMentioned 62 around spoiler 118.
+        QW67: field(3, field(67, wrapped(viewOnce))),
+        QW2: field(3, field(62, wrapped(field(118, wrapped(viewOnce))))),
+        // A quote that itself quotes view-once.
+        QQ: field(3, reply([field(3, viewOnce)])),
+        // A quoted video note flagged by its own VideoMessage.viewOnce = 20.
+        QFLAG: field(3, field(66, Buffer.concat([video, varintField(20, 1)])))
+    };
+    for (const [id, quote] of Object.entries(stripped)) await f.receive(dm(id, reply([quote])));
+    for (const id of Object.keys(stripped)) {
+        const r = records(f, PEER).find(x => x.id === id);
+        assert.ok(r, id);
+        assert.equal(r.tombstone, undefined, id);
+        assert.ok(r.raw.equals(reply([])), id);
+    }
+    // An edit whose new content is such a reply is applied, without the quote.
+    await f.receive(dm('ED1', encode({ conversation: 'ilk' })));
+    await f.receive(dm('ED2', encode({ protocolMessage: { type: 14, key: { remoteJID: PEER, fromMe: false, ID: 'ED1' }, editedMessage: reply([stripped.QDSM]) } }), { edit: '1' }));
+    const edited = records(f, PEER).find(x => x.id === 'ED1');
+    assert.equal(edited.tombstone, undefined);
+    assert.ok(edited.edited);
+    assert.ok(edited.raw.equals(reply([])));
+    assert.equal(logHolds(f.dir, secret), false);
+    // The same places, holding nothing view-once, are kept as they came, media
+    // keys and all.
+    const ownKey = Buffer.from('ORDINARY-KEY');
+    const ordinary = Buffer.concat([field(1, Buffer.from('https://mmg/o')), field(8, ownKey)]);
+    const kept = {
+        KSP: field(16, field(2, encode({ conversation: 'not' }))),
+        KHDR: field(45, field(1, field(4, ordinary))),
+        KQRQ: reply([field(68, Buffer.concat([varintField(1, 5), field(2, encode({ conversation: 'soru' })), field(3, field(3, ordinary))]))])
+    };
+    for (const [id, raw] of Object.entries(kept)) await f.receive(dm(id, raw));
+    for (const [id, raw] of Object.entries(kept)) {
+        const r = records(f, PEER).find(x => x.id === id);
+        assert.ok(r, id);
+        assert.equal(r.tombstone, undefined, id);
+        assert.ok(r.raw.equals(raw), id);
+    }
+    assert.ok(logHolds(f.dir, ownKey));
+});
+
+test('a quote split over copies a reader merges is judged whole and cut whole', async t => {
+    const f = fixture(t);
+    f.login();
+    const secret = Buffer.from('MEDIAKEY-SECRET');
+    const image = Buffer.concat([field(1, Buffer.from('https://mmg/i')), field(8, secret)]);
+    // The image with its key in one copy, its viewOnce = 25 in another.
+    const keyHalf = field(3, image);
+    const flagHalf = field(3, varintField(25, 1));
+    const text = field(1, Buffer.from('cevap'));
+    const head = field(1, Buffer.from('QUOTED1'));
+    const cases = [
+        // Two quotedMessage copies in one ContextInfo, either order.
+        ['SQ1', field(6, Buffer.concat([text, field(17, Buffer.concat([head, field(3, keyHalf), field(3, flagHalf)]))])),
+            field(6, Buffer.concat([text, field(17, head)]))],
+        ['SQ2', field(6, Buffer.concat([text, field(17, Buffer.concat([field(3, flagHalf), head, field(3, keyHalf)]))])),
+            field(6, Buffer.concat([text, field(17, head)]))],
+        // The two halves in two ContextInfo copies.
+        ['SQ3', field(6, Buffer.concat([text, field(17, Buffer.concat([head, field(3, keyHalf)])), field(17, field(3, flagHalf))])),
+            field(6, Buffer.concat([text, field(17, head), field(17, Buffer.alloc(0))]))],
+        // And in two extendedTextMessage copies, inside an ephemeral envelope.
+        ['SQ4', field(40, wrapped(Buffer.concat([field(6, Buffer.concat([text, field(17, field(3, keyHalf))])), field(6, field(17, field(3, flagHalf)))]))),
+            field(40, wrapped(Buffer.concat([field(6, Buffer.concat([text, field(17, Buffer.alloc(0))])), field(6, field(17, Buffer.alloc(0)))])))]
+    ];
+    for (const [id, raw] of cases) await f.receive(dm(id, raw));
+    for (const [id, , expected] of cases) {
+        const r = records(f, PEER).find(x => x.id === id);
+        assert.ok(r, id);
+        assert.equal(r.tombstone, undefined, id);
+        assert.ok(r.raw.equals(expected), id);
+    }
+    // Elements of a repeated field are not merged: of two contacts, only the
+    // one quoting view-once loses its quote. contactsArrayMessage {
+    // displayName = 1, contacts = 2 }, ContactMessage { displayName = 1,
+    // contextInfo = 17 }.
+    const contact = (name, q) => field(2, Buffer.concat([field(1, Buffer.from(name)), field(17, Buffer.concat([head, ...(q ? [field(3, q)] : [])]))]));
+    const quoteOk = encode({ conversation: 'alinti' });
+    const contacts = (a, b) => field(13, Buffer.concat([field(1, Buffer.from('2 kisi')), contact('Ana', a), contact('Bob', b)]));
+    await f.receive(dm('SQ5', contacts(field(55, wrapped(keyHalf)), quoteOk)));
+    const r5 = records(f, PEER).find(x => x.id === 'SQ5');
+    assert.equal(r5.tombstone, undefined);
+    assert.ok(r5.raw.equals(contacts(null, quoteOk)));
+    assert.equal(logHolds(f.dir, secret), false);
+});
+
+test('nesting is bounded at six message levels, a quote counting as one, the same for the cut and the walk', async t => {
+    const f = fixture(t);
+    f.login();
+    const secret = Buffer.from('MEDIAKEY-SECRET');
+    const image = Buffer.concat([field(1, Buffer.from('https://mmg/i')), field(8, secret)]);
+    const viewOnce = field(55, wrapped(field(3, image)));
+    const nest = (k, inner) => { for (let i = 0; i < k; i++) inner = field(62, wrapped(inner)); return inner; };
+    const text = field(1, Buffer.from('x'));
+    const reply = q => field(6, Buffer.concat([field(1, Buffer.from('cevap')), field(17, Buffer.concat([field(1, Buffer.from('QUOTED1')), ...(q ? [field(3, q)] : [])]))]));
+    // documentMessage { URL = 1, mediaKey = 7, contextInfo = 17 } inside a
+    // documentWithCaptionMessage, replying to another one, in a disappearing
+    // chat: five levels.
+    const doc = q => field(7, Buffer.concat([field(1, Buffer.from('https://mmg/d')), field(7, Buffer.from('DOCKEY')),
+        ...(q ? [field(17, Buffer.concat([field(1, Buffer.from('QUOTED2')), field(3, q)]))] : [])]));
+    const withCaption = d => field(53, wrapped(d));
+    const kept = {
+        DOC5: field(40, wrapped(withCaption(doc(withCaption(doc()))))),
+        DOC4: withCaption(doc(withCaption(doc()))),
+        // A text five wrappers down: level 6.
+        W5: nest(5, text),
+        // A reply quoting a text four wrappers down: the quote is level 2, the text 6.
+        Q4: reply(nest(4, text))
+    };
+    for (const [id, raw] of Object.entries(kept)) await f.receive(dm(id, raw));
+    for (const [id, raw] of Object.entries(kept)) {
+        const r = records(f, PEER).find(x => x.id === id);
+        assert.ok(r, id);
+        assert.equal(r.tombstone, undefined, id);
+        assert.ok(r.raw.equals(raw), id);
+    }
+    // Level 7 fails closed: a message there makes a stub; a quote that
+    // reaches it is cut.
+    await f.receive(dm('W6', nest(6, text)));
+    const w6 = records(f, PEER).find(x => x.id === 'W6');
+    assert.equal(w6.tombstone, 'view-once');
+    assert.equal(w6.raw, undefined);
+    const cut = {
+        Q5: [reply(nest(5, text)), reply(null)],
+        // The cut reaches a quote at level 6 and judges it there.
+        D4: [nest(4, reply(viewOnce)), nest(4, reply(null))],
+        // A reply at level 6 whose quote would be level 7.
+        D5: [nest(5, reply(encode({ conversation: 'alinti' }))), nest(5, reply(null))]
+    };
+    for (const [id, [raw]] of Object.entries(cut)) await f.receive(dm(id, raw));
+    for (const [id, [, expected]] of Object.entries(cut)) {
+        const r = records(f, PEER).find(x => x.id === id);
+        assert.ok(r, id);
+        assert.equal(r.tombstone, undefined, id);
+        assert.ok(r.raw.equals(expected), id);
+    }
+    assert.equal(logHolds(f.dir, secret), false);
+});
+
+test('only Message fields the schema leaves undefined are tried as wrappers', async t => {
+    const f = fixture(t);
+    f.login();
+    const secret = Buffer.from('MEDIAKEY-SECRET');
+    const image = Buffer.concat([field(1, Buffer.from('https://mmg/i')), field(8, secret)]);
+    const viewOnce = field(55, wrapped(field(3, image)));
+    // Field 200 is not in the schema: a newer wrapper, perhaps. Read as one,
+    // view-once inside it counts.
+    await f.receive(dm('U1', Buffer.concat([field(1, Buffer.from('x')), field(200, wrapped(viewOnce))])));
+    const u1 = records(f, PEER).find(x => x.id === 'U1');
+    assert.equal(u1.tombstone, 'view-once');
+    // An undefined field that does not read as a wrapper is no verdict at all.
+    const kept = {
+        U2: Buffer.concat([field(1, Buffer.from('x')), field(200, Buffer.from('duz bir metin, mesaj degil'))]),
+        // Field 1 reads as a Message whose imageMessage does not read.
+        U3: Buffer.concat([field(1, Buffer.from('x')), field(201, wrapped(field(3, Buffer.from([0x0a, 0x7f]))))])
+    };
+    for (const [id, raw] of Object.entries(kept)) await f.receive(dm(id, raw));
+    for (const [id, raw] of Object.entries(kept)) {
+        const r = records(f, PEER).find(x => x.id === id);
+        assert.ok(r, id);
+        assert.equal(r.tombstone, undefined, id);
+        assert.ok(r.raw.equals(raw), id);
+    }
+    // A schema-defined wrapper that does not read fails closed.
+    await f.receive(dm('U4', Buffer.concat([field(1, Buffer.from('x')), field(62, wrapped(field(3, Buffer.from([0x0a, 0x7f]))))])));
+    assert.equal(records(f, PEER).find(x => x.id === 'U4').tombstone, 'view-once');
+    assert.equal(logHolds(f.dir, secret), false);
+});
