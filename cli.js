@@ -778,7 +778,7 @@ const HELP = `
                                              send the chats, or continue a handover that stopped
     /link-confirm FILE|JSON                  confirm an approval with the companion's public proof
     /link-retire                             clear an approval whose companion never appeared
-    /link-unlock                             break a link-journal lock left by a program that is gone
+    /link-unlock                             show who holds the link-journal lock; break it on a y
 
     /help                                   show this help
     /quit  /exit                            disconnect and exit
@@ -1630,14 +1630,10 @@ async function linkCommand(cmd, p, line) {
       case '/link-unlock': {
         if (p.length > 1) return linkUsage('/link-unlock');
         // No connection needed: the lock is a file, and a session that cannot
-        // link because of it is still able to connect.
+        // link because of it is still able to connect. Who holds it is shown
+        // first, and it is broken only on a y; Enter is no.
         if (!_client) throw new Error('not connected — use /connect <phone>');
-        const { holder } = _client.unlockPrimaryLink() || {};
-        if (!holder) { out('no lock was held on the link journal; there was nothing to break'); return; }
-        const who = [Number.isFinite(holder.pid) ? 'pid ' + holder.pid : null, holder.host ? 'on ' + holder.host : null]
-          .filter(Boolean).join(' ');
-        out('broke the link journal lock' + (who ? ' held by ' + who : ''));
-        out('  next: retry the command that reported the journal busy');
+        await LinkCli.runLinkUnlock({ client: _client, confirm: (question) => askYesNo(question + '  [y/N] '), print: out });
         return;
       }
     }

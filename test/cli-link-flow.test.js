@@ -50,6 +50,7 @@ const AWAITING = {
   phase: 'awaiting_confirmation', confirmed: false, startedAt: STARTED - 60000, method: 'code', linkedAt: STARTED, expectedDeviceId: 3, deviceId: 3,
   bootstrapPhase: 'sent', bootstrap: { phase: 'sent', errorCode: null, iq: null, resumable: false }, delivered: { chats: 3, records: 42 }, devices: DEVICES, hasADV: false
 };
+const HOLDER = { v: 2, pid: 4242, host: 'old-box', bootId: 'boot', procStart: null, token: 'f00d', gen: 2, at: STARTED, pidNs: null, legacy: false };
 const COMMITTED = { ...AWAITING, phase: 'committed', confirmed: true, bootstrapPhase: null, bootstrap: undefined, delivered: null };
 
 // A companion's public proof, in the shape lib/WhatsAppWebProof.js accepts.
@@ -160,9 +161,10 @@ test('the owner\'s flow: connect, requests, choose, confirm, approve, hand over,
         { result: { ...SENT, mode: 'first' } }
       ],
       getPrimaryLinkStatus: [{ result: AWAITING }, { result: AWAITING }, { result: COMMITTED }],
+      getPrimaryLinkLockHolder: [{ result: { holder: HOLDER } }],
       unlockPrimaryLink: [
         { error: { code: 'PRIMARY_LINK_STORE_BUSY', holder: { pid: 4242, host: 'old-box', at: STARTED, mutex: true } } },
-        { result: { holder: { pid: 4242, host: 'old-box', at: STARTED } } }
+        { result: { holder: HOLDER } }
       ],
       retireAbsentPrimaryLink: [{ error: { code: 'PRIMARY_LINK_RETIRE_TOO_EARLY' } }],
       reconcilePrimaryLink: [{
@@ -255,12 +257,22 @@ test('the owner\'s flow: connect, requests, choose, confirm, approve, hand over,
     [{ history: 'store', resume: true, resendUncertain: true }]
   ]);
 
-  // /link-unlock: a takeover still running is told to wait and run it again; then the lock goes.
-  seen = await wa.type('/link-unlock');
+  // /link-unlock: who holds it, then the question; Enter is no, and nothing is broken.
+  seen = await wa.type('/link-unlock', ASKING);
+  assert.ok(has(seen, 'the link journal is locked by pid 4242 on old-box, since 2026-11-02 15:31'), seen);
+  assert.ok(seen.endsWith('break the lock held by pid 4242 on old-box?  [y/N] '), seen);
+  seen = await wa.type('');
+  assert.ok(has(seen, 'the lock was left as it is'), seen);
+  assert.equal(calls(dir, 'unlockPrimaryLink').length, 0);
+  // y: a takeover still running is told to wait and run it again; then the lock goes, the one that was shown.
+  await wa.type('/link-unlock', ASKING);
+  seen = await wa.type('y');
   assert.match(seen, /^error: A takeover of the link journal's lock is in progress \(pid 4242 on old-box, since 2026-11-02 15:31\), or died part-way\.$/m);
   assert.ok(has(seen, '  next: A recovery is still running on this machine: wait a minute, then run /link-unlock again.'), seen);
-  seen = await wa.type('/link-unlock');
+  await wa.type('/link-unlock', ASKING);
+  seen = await wa.type('yes');
   assert.ok(has(seen, 'broke the link journal lock held by pid 4242 on old-box'), seen);
+  assert.deepEqual(calls(dir, 'unlockPrimaryLink'), [[{ holder: HOLDER }], [{ holder: HOLDER }]]);
 
   // /link-retire, too early.
   seen = await wa.type('/link-retire');

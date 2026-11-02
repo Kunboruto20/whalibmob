@@ -624,6 +624,49 @@ test('unlockPrimaryLink breaks a lock no process here can prove dead', t => {
     assert.equal(PrimaryLinkStore.readHolder(file).token, linking.journal.token);
 });
 
+// /link-unlock shows who holds the lock and asks before breaking it (spec
+// 6.7). What it shows is read without breaking anything, and what it then
+// breaks is that holder and no other: one that took its place while the
+// operator was reading is not theirs to break.
+test('the holder can be read before an unlock, and the unlock breaks only the holder that was read', t => {
+    const { dir } = scratch(t);
+    const file = path.join(dir, '15550000123.primary-linking.json');
+    const client = primary(t, dir);
+    assert.deepEqual(client.getPrimaryLinkLockHolder(), { holder: null });
+    fs.writeFileSync(file + '.lock', '4242', { mode: 0o600 });
+    const { holder } = client.getPrimaryLinkLockHolder();
+    assert.equal(holder.pid, 4242);
+    assert.equal(holder.legacy, true);
+    assert.equal(fs.readFileSync(file + '.lock', 'utf8'), '4242', 'reading breaks nothing');
+
+    // Another holder in its place by the time the operator says yes: refused, and left as it is.
+    fs.rmSync(file + '.lock');
+    const dead = crashed(file);
+    // The child's journal is bound to a synthetic account; the client starts its own later.
+    fs.rmSync(file);
+    const busy = caught(() => client.unlockPrimaryLink({ holder }));
+    assert.equal(busy.code, 'PRIMARY_LINK_STORE_BUSY');
+    assert.equal(busy.holder.pid, dead.pid);
+    assert.equal(PrimaryLinkStore.readHolder(file).token, dead.token);
+    // The holder that was read is broken, and nothing else is needed.
+    const now = client.getPrimaryLinkLockHolder().holder;
+    assert.equal(client.unlockPrimaryLink({ holder: now }).holder.token, dead.token);
+    assert.equal(PrimaryLinkStore.readHolder(file), null);
+    // Read as none, then one appeared: not broken either.
+    fs.writeFileSync(file + '.lock', '4343', { mode: 0o600 });
+    assert.equal(caught(() => client.unlockPrimaryLink({ holder: null })).holder.pid, 4343);
+    // With nothing named, as before: whoever holds it.
+    assert.equal(client.unlockPrimaryLink().holder.pid, 4343);
+    // Gone by the time of the yes: nothing to break, nothing thrown.
+    assert.deepEqual(client.unlockPrimaryLink({ holder: now }), { holder: null });
+
+    // While this process holds the journal it is not offered at all.
+    client._primaryLinkingForSession();
+    assert.throws(() => client.getPrimaryLinkLockHolder(), { code: 'PRIMARY_LINK_BUSY' });
+    const other = primary(t, dir);
+    assert.throws(() => other.getPrimaryLinkLockHolder(), { code: 'PRIMARY_LINK_BUSY' });
+});
+
 // An empty or unreadable mutex says nothing about its writer, so no automatic
 // path may set it aside. The operator's unlock may, and the lock behind it too.
 test('an empty or unreadable leftover mutex gives way to unlockPrimaryLink', t => {

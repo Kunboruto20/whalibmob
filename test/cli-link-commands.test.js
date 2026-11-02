@@ -1116,6 +1116,68 @@ test('the invitation listing recommends the id, which does not move, alongside t
     assert.ok(text.includes(id('a').slice(0, 12)));
 });
 
+// ─── /link-unlock ───────────────────────────────────────────────────────────
+
+// Spec 6.7: it shows who holds the lock and asks before breaking it; the
+// answer that breaks nothing is the default.
+function locked(holder, over = {}) {
+    const calls = [];
+    const client = {
+        calls,
+        getPrimaryLinkLockHolder() { calls.push(['getPrimaryLinkLockHolder']); return { holder }; },
+        unlockPrimaryLink(options) {
+            calls.push(['unlockPrimaryLink', options]);
+            if (over.unlockError) throw over.unlockError;
+            return { holder: over.broken === undefined ? holder : over.broken };
+        },
+        printed: [],
+        print(line) { client.printed.push(line); }
+    };
+    return client;
+}
+const HOLDER = { v: 2, pid: 4242, host: 'old-box', bootId: 'b', procStart: null, token: 't', gen: 3, at: at(2026, 11, 2, 15, 31), pidNs: null, legacy: false };
+
+test('/link-unlock shows the holder and breaks the lock only on a yes', async () => {
+    // Asked, and the answer is no: nothing is broken.
+    for (const confirm of [async () => false, () => false, undefined, async () => undefined]) {
+        const client = locked(HOLDER), asked = [];
+        const ask = confirm && (question => { asked.push(question); return confirm(question); });
+        assert.deepEqual(await L.runLinkUnlock({ client, confirm: ask, print: client.print }), { status: 'kept', holder: HOLDER });
+        assert.deepEqual(client.calls.map(c => c[0]), ['getPrimaryLinkLockHolder']);
+        const text = client.printed.join('\n');
+        assert.match(text, /^the link journal is locked by pid 4242 on old-box, since 2026-11-02 15:31$/m);
+        assert.match(text, /still running/);
+        assert.match(text, /^the lock was left as it is$/m);
+        if (ask) assert.deepEqual(asked, ['break the lock held by pid 4242 on old-box?']);
+    }
+    // Yes: the holder that was shown, and only that one, is broken.
+    const yes = locked(HOLDER);
+    assert.deepEqual(await L.runLinkUnlock({ client: yes, confirm: async () => true, print: yes.print }), { status: 'broken', holder: HOLDER });
+    assert.deepEqual(yes.calls, [['getPrimaryLinkLockHolder'], ['unlockPrimaryLink', { holder: HOLDER }]]);
+    assert.match(yes.printed.join('\n'), /^broke the link journal lock held by pid 4242 on old-box$/m);
+    assert.match(yes.printed.join('\n'), /next: retry the command that reported the journal busy/);
+    // Nothing held: nothing asked.
+    const none = locked(null);
+    let asked = false;
+    assert.deepEqual(await L.runLinkUnlock({ client: none, confirm: async () => { asked = true; return true; }, print: none.print }), { status: 'none' });
+    assert.equal(asked, false);
+    assert.deepEqual(none.calls.map(c => c[0]), ['getPrimaryLinkLockHolder']);
+    assert.match(none.printed.join('\n'), /no lock is held on the link journal/);
+    // Gone by the time of the yes.
+    const gone = locked(HOLDER, { broken: null });
+    assert.deepEqual(await L.runLinkUnlock({ client: gone, confirm: async () => true, print: gone.print }), { status: 'none' });
+    // Another holder by then: the library's refusal goes to the caller, with that holder.
+    const busy = Object.assign(new Error('PRIMARY_LINK_STORE_BUSY'), { code: 'PRIMARY_LINK_STORE_BUSY', holder: { ...HOLDER, pid: 77, token: 'u' } });
+    await assert.rejects(L.runLinkUnlock({ client: locked(HOLDER, { unlockError: busy }), confirm: async () => true }), error => error === busy);
+    // An old-format lock says what it can, and nothing it cannot.
+    const legacy = locked({ v: 1, pid: 4242, host: null, bootId: null, procStart: null, token: null, gen: null, at: at(2026, 11, 2, 15, 31), pidNs: null, legacy: true });
+    await L.runLinkUnlock({ client: legacy, print: legacy.print });
+    assert.match(legacy.printed[0], /^the link journal is locked by pid 4242 \(an older lock format/);
+    const blank = locked({ v: 1, pid: null, host: null, bootId: null, procStart: null, token: null, gen: null, at: 0, pidNs: null, legacy: true });
+    await L.runLinkUnlock({ client: blank, print: blank.print });
+    assert.match(blank.printed[0], /cannot be read/);
+});
+
 test('a takeover in progress is told differently before and after an unlock', () => {
     const busy = { holder: { pid: 77, host: 'box', at: null, legacy: false, mutex: true } };
     const first = L.explainError('PRIMARY_LINK_STORE_BUSY', busy);

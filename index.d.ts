@@ -1257,12 +1257,23 @@ export declare class WhalibmobClient extends EventEmitter {
    *
    * Concurrent recoveries can still race: in rare interleavings two of them each
    * believe they hold the mutex. The worst case is that one owner fails with
-   * PRIMARY_LINK_STORE_LOST at its first write; the journal is never corrupted.
+   * PRIMARY_LINK_STORE_LOST at its next write: at most one in-flight write of
+   * the displaced owner lands, and the file is never torn.
+   *
+   * `options.holder`, as `getPrimaryLinkLockHolder()` returned it: break that
+   * holder only. A lock that names another holder by then (or any lock, for
+   * `null`) is left alone, with PRIMARY_LINK_STORE_BUSY and `err.holder`.
    *
    * Throws PRIMARY_LINK_BUSY while this process holds the store. Returns the
    * holder broken, or null if none.
    */
-  unlockPrimaryLink(): { holder: PrimaryLinkHolder | null };
+  unlockPrimaryLink(options?: { holder?: PrimaryLinkHolder | null }): { holder: PrimaryLinkHolder | null };
+  /**
+   * Who holds the link journal's lock, read without breaking anything: what
+   * `unlockPrimaryLink()` would break, to show before asking. `holder` is null
+   * when none is held. Throws PRIMARY_LINK_BUSY while this process holds the store.
+   */
+  getPrimaryLinkLockHolder(): { holder: PrimaryLinkHolder | null };
   disconnect(opts?: DisconnectOptions): void;
   /**
    * Unlink this device from the account, the way the Linked Devices screen on
@@ -2350,6 +2361,15 @@ export type LinkCodeResult =
 export type LinkQrResult =
   | { status: 'sent'; approval: PrimaryLinkResult; bootstrap: PrimaryBootstrapResult }
   | { status: 'aborted' };
+/** The slice of a primary client `/link-unlock` uses. `WhalibmobClient` satisfies it. */
+export interface LinkUnlockClient {
+  getPrimaryLinkLockHolder(): { holder: PrimaryLinkHolder | null };
+  unlockPrimaryLink(options?: { holder?: PrimaryLinkHolder | null }): { holder: PrimaryLinkHolder | null };
+}
+export type LinkUnlockResult =
+  | { status: 'none' }
+  | { status: 'kept'; holder: PrimaryLinkHolder }
+  | { status: 'broken'; holder: PrimaryLinkHolder };
 /**
  * `whalibmob/lib/cli/linkCommands` — the logic behind the CLI's link commands, with no terminal in it:
  * readiness, the choice between pairing requests, an optional coverage confirmation, the approval, then the
@@ -2400,6 +2420,12 @@ export interface LinkCommandsModule {
   formatLinkStatus(status: LinkJournalView | undefined): string[];
   runLinkCode(options: LinkRunOptions & { code: string; selector?: string | number; now?: number | (() => number) }): Promise<LinkCodeResult>;
   runLinkQr(options: LinkRunOptions & { payload: string; options?: PrimaryLinkCommonOptions }): Promise<LinkQrResult>;
+  /**
+   * `/link-unlock`: prints who holds the link journal's lock and what breaking it means, asks `confirm` (only `true`
+   * is a yes; no function is a no), and breaks that holder's lock and no other. A lock another program took in the
+   * meantime makes `unlockPrimaryLink` throw PRIMARY_LINK_STORE_BUSY, which goes to the caller.
+   */
+  runLinkUnlock(options: { client: LinkUnlockClient; confirm?: (question: string) => boolean | Promise<boolean>; print?: (line: string) => void }): Promise<LinkUnlockResult>;
 }
 /** `whalibmob/lib/cli/` — the command line's logic, for a front end other than `cli.js` too. */
 export declare const Cli: {

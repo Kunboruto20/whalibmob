@@ -90,7 +90,8 @@ function install(file) {
     async getPrimaryLinkStatus() { return answer(this, 'getPrimaryLinkStatus', []); }
     async retireAbsentPrimaryLink(options) { return answer(this, 'retireAbsentPrimaryLink', [options]); }
     async reconcilePrimaryLink(proof, options) { return answer(this, 'reconcilePrimaryLink', [proof, options]); }
-    unlockPrimaryLink() { return answer(this, 'unlockPrimaryLink', []); }
+    getPrimaryLinkLockHolder() { return answer(this, 'getPrimaryLinkLockHolder', []); }
+    unlockPrimaryLink(options) { return answer(this, 'unlockPrimaryLink', [options]); }
   }
 
   lib.WhalibmobClient = FakeClient;

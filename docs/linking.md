@@ -669,7 +669,17 @@ The link journal (`<phone>.primary-linking.json`) is guarded by a lock file besi
     (PRIMARY_LINK_STORE_BUSY)
   ```
 
-- **`/link-unlock` breaks the lock, and only when you run it.** Check first that the holder is really gone: a holder that is in fact still running finds its lock gone at its next write and stops there (`PRIMARY_LINK_STORE_LOST`). It reports who held it (`broke the link journal lock held by pid 4242 on old-box`) or that none was held. It refuses while this very program holds the journal (`PRIMARY_LINK_BUSY`), and a recovery that is still running on this machine is told to wait a minute and unlock again.
+- **`/link-unlock` shows the holder and breaks the lock only when you say yes.** Check that the holder is really gone: a holder that is in fact still running finds its lock gone at its next write and stops there (`PRIMARY_LINK_STORE_LOST`), with the journal intact. Enter, or anything but `y` or `yes`, leaves the lock as it is. What is broken is the holder you were shown: if another program has taken the lock by the time you answer, nothing is broken and that one is reported instead. It refuses while this very program holds the journal (`PRIMARY_LINK_BUSY`), and a recovery that is still running on this machine is told to wait a minute and unlock again.
+
+  ```
+  wa +447949738354> /link-unlock
+  the link journal is locked by pid 4242 on old-box, since 2026-11-02 15:31
+    Break it only if that program is gone: stopped, or on a machine or in a container that no longer runs it.
+    A program that is in fact still running stops at its next write to the journal, which is left intact.
+  break the lock held by pid 4242 on old-box?  [y/N] y
+  broke the link journal lock held by pid 4242 on old-box
+    next: retry the command that reported the journal busy
+  ```
 
 ### Library API for the Chat History
 
@@ -709,7 +719,8 @@ const sent = await client.bootstrapPrimaryCompanion({ history: 'store' })
 | `getPrimaryMessageStore()` | The store's snapshot, or `null`. Never throws; a failure is said on `primary_message_store_error`. |
 | `getPrimaryLinkReadiness({ timeoutMs, signal })` | Whether a link can be finished, found out before anything is approved. Each blocker has a stable `code` and a `detail`. |
 | `bootstrapPrimaryCompanion({ history, upload, resume, resendUncertain, delta, timeoutMs, uploadTimeoutMs })` | The key share, the app-state patch and the history. `history: 'store'` reads this client's store; a function returning a snapshot sends a history of your own. `upload` is used only above 64 KiB deflated and defaults to the `md-msg-hist` media upload. `resume` and `resendUncertain` are as above. `delta` is experimental and not verified on real Web. `timeoutMs` (1 000 to 90 000, default 90 000) is the time for everything but the upload (`PRIMARY_LINK_TIMEOUT`); the upload runs on a clock of its own, `uploadTimeoutMs` (1 000 to 3 600 000), by default a minute plus a second for each 16 KiB, at most 20 minutes (`PRIMARY_BOOTSTRAP_UPLOAD_TIMEOUT`). An error from a bootstrap that had started carries `resumable`: whether `resume: true` can go on from where it stopped; `getPrimaryLinkStatus().bootstrap.resumable` says the same. |
-| `unlockPrimaryLink()` | Breaks the link journal lock, as `/link-unlock` does. Returns `{ holder }` (`null` when none was held) and throws `PRIMARY_LINK_BUSY` while this process holds the journal. |
+| `getPrimaryLinkLockHolder()` | Who holds the link journal lock, read without breaking it: `{ holder }`, `null` when none is held. Throws `PRIMARY_LINK_BUSY` while this process holds the journal. |
+| `unlockPrimaryLink({ holder })` | Breaks the link journal lock, as `/link-unlock` does after its yes. With `holder` (as `getPrimaryLinkLockHolder()` returned it), only that holder: a lock that names another one by then is left alone, with `PRIMARY_LINK_STORE_BUSY` and `err.holder`. Returns `{ holder }` (`null` when none was held) and throws `PRIMARY_LINK_BUSY` while this process holds the journal. |
 | `getPrimaryLinkInvitations()` | Each pending request carries `companion`, the browser's short fingerprint (`null` when the request has none). A label, never authorisation. |
 
 A store started by `init()` counts as switched on at that moment (`origin: 'enabled'`). To have the store count as kept "since registration", as the CLI does, open it once at registration time:

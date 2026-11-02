@@ -204,6 +204,8 @@ async function checkLinkCommands(client: wa.WhalibmobClient, readiness: wa.Prima
   const delivered: number | undefined = status.delivered?.records;
   void how; void when; void device; void delivered;
   L.formatLinkedDevices({ phone: '447949738354', devices: status.devices, journal: status });
+  const unlocked: wa.LinkUnlockResult = await L.runLinkUnlock({ client, confirm: async question => question.length > 0, print: line => void line });
+  if (unlocked.status === 'broken') { const pid: number | null = unlocked.holder.pid; void pid; }
   const resumable: boolean | undefined = status.bootstrap?.resumable;
   const onStatus: wa.LinkExplanation = L.explainError(status.bootstrap?.errorCode, { resumable, bootstrapPhase: status.bootstrapPhase }, 'status');
   void onStatus;
@@ -305,6 +307,12 @@ function checkPrimaryUnlock(client: wa.WhalibmobClient) {
   const legacy: boolean = holder.legacy;
   const mutex: true | undefined = holder.mutex;
   void pid; void host; void since; void legacy; void mutex;
+  // Shown first, then broken only if it is still the one that was shown.
+  const shown = client.getPrimaryLinkLockHolder().holder;
+  client.unlockPrimaryLink({ holder: shown });
+  client.unlockPrimaryLink({ holder: null });
+  // @ts-expect-error The holder is the object getPrimaryLinkLockHolder() returned, not a pid.
+  client.unlockPrimaryLink({ holder: 4242 });
 }
 void checkPrimaryUnlock;
 
