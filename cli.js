@@ -532,9 +532,10 @@ function printCodeNextSteps(store, phone, confirmCmd) {
 // one must not be picked up again by a later connect with the store on.
 //
 // Nothing here may cost the registration: a failure is a warning.
-function startMessageStoreAtRegistration(store, phone) {
+async function startMessageStoreAtRegistration(store, phone) {
   const dir = sessionDirFor(_sessDir, phone);
   const who = String(store.phoneNumber || phone);
+  if (_messageStoreUnlock) await unlockMessageStore(dir, who, askYesNo);
   let setAside = false;
   try {
     setEarlierStoreAside(dir, who);
@@ -553,6 +554,28 @@ function startMessageStoreAtRegistration(store, phone) {
       out('  the registration itself is fine, but the earlier store could not be set aside. Move');
       out('  ' + path.join(dir, who + '.primary-messages.*') + ' out of the session folder before connecting.');
     }
+  }
+}
+
+// --unlock-message-store, for the number whose store is about to open in
+// `dir`: who holds its lock, and the lock broken on a yes (LinkCli's
+// runMessageStoreUnlock). `ask(question)` is the y/N, or null where nothing can
+// be asked. Used once a run. A failure is said and the run goes on: the store
+// then reports BUSY, with who holds it, when it opens.
+async function unlockMessageStore(dir, phone, ask) {
+  _messageStoreUnlock = false;
+  const { PrimaryMessageStore } = require('./lib/primary/MessageStore');
+  try {
+    return await LinkCli.runMessageStoreUnlock({
+      phone,
+      readHolder: () => PrimaryMessageStore.readHolder({ dir, phone }),
+      breakLock:  (holder) => PrimaryMessageStore.breakLock({ dir, phone, holder }),
+      confirm: ask ? (question) => ask(question + '  [y/N] ') : null,
+      print: out
+    });
+  } catch (e) {
+    failLink(e, 'unlock');
+    return { status: 'failed' };
   }
 }
 
@@ -619,6 +642,10 @@ let _messageStoreOn = true;
 let _messageStoreReset = false;
 // What the clients are given as their messageStore option.
 const messageStoreOption = () => (!_messageStoreOn ? false : _messageStoreReset ? { setAsideCorrupt: true } : true);
+// --unlock-message-store: before this run first opens a number's message
+// store (a connect of a registered number, or a registration), show who holds
+// its lock and break it on a y. Once a run; wa listen cannot ask, and refuses.
+let _messageStoreUnlock = false;
 // Link commands still running, and whether one of them is waiting on a y/N.
 // An event that arrives meanwhile prints among the command's lines rather than
 // redrawing the prompt in the middle of them.
@@ -793,9 +820,10 @@ const HELP = `
 // ─── incoming event display ───────────────────────────────────────────────────
 
 // A failure reported by an event rather than by a command: what went wrong and
-// the step to take, in linkCommands' words, with the code to report.
-function failEvent(what, code, detail, context) {
-  const { title, next } = LinkCli.explainError(code, null, context);
+// the step to take, in linkCommands' words, with the code to report. `error`,
+// when the event carries one, can say more (a busy store names its holder).
+function failEvent(what, code, detail, context, error) {
+  const { title, next } = LinkCli.explainError(code, error || null, context);
   fail(what + ': ' + title + '  (' + code + (detail ? ', ' + detail : '') + ')');
   out('  next: ' + next);
 }
@@ -807,7 +835,7 @@ const storeErrors = LinkCli.createEventLimiter();
 
 function storeErrorEvent(e, held, context) {
   const event = e || {};
-  failEvent('message store', event.code, event.op, context);
+  failEvent('message store', event.code, event.op, context, event.err);
   if (held) out(LinkCli.formatHeldBack(held));
 }
 
@@ -1333,6 +1361,9 @@ async function doConnect(phone) {
          'stored in the session. Unset it to use the session\'s own.');
   }
 
+  // Before the client, so before the store it opens at login.
+  if (_messageStoreUnlock) await unlockMessageStore(sessionDirFor(_sessDir, phone), phone, askYesNo);
+
   const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: messageStoreOption() });
   attachEvents(client);
 
@@ -1495,9 +1526,15 @@ function requirePrimary() {
 
 // y/N through the shell's own reader: a second reader on the same stdin would
 // split the answer with it. Anything but y or yes is no, and so is having no
-// way to ask.
+// way to ask. Before the shell is open (wa registration --register) a terminal
+// is asked through a reader of its own, as the startup questions are; a pipe
+// is not, since a reader closed on one keeps lines meant for the shell.
 function askYesNo(question) {
   return new Promise((resolve) => {
+    if (!_rl && process.stdin.isTTY) {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      return rl.question(question, (answer) => { rl.close(); resolve(/^y(es)?$/i.test(String(answer).trim())); });
+    }
     if (!_rl || _linkAsking) return resolve(false);
     _linkAsking = true;
     _rl.question(question, (answer) => {
@@ -2819,7 +2856,7 @@ async function handleLine(line) {
             const savedPhone = String(finalStore.phoneNumber || ph);
             const savedFile  = storeFileFor(_sessDir, savedPhone);
             saveStore(finalStore, savedFile);
-            startMessageStoreAtRegistration(finalStore, savedPhone);
+            await startMessageStoreAtRegistration(finalStore, savedPhone);
             if (r.canonicalPhoneNumber) {
               out('note: WhatsApp knows this account as +' + r.canonicalPhoneNumber +
                   ', not +' + r.typedPhoneNumber);
@@ -2917,7 +2954,7 @@ async function handleLine(line) {
             finalStore.registered = true; finalStore.codePending = false;
             const savedPhone = String(finalStore.phoneNumber || ph);
             saveStore(finalStore, storeFileFor(_sessDir, savedPhone));
-            startMessageStoreAtRegistration(finalStore, savedPhone);
+            await startMessageStoreAtRegistration(finalStore, savedPhone);
             out('registered via push  session saved');
             out('now run: /connect ' + savedPhone);
           } else {
@@ -3118,7 +3155,7 @@ async function handleLine(line) {
 // so `wa connect --no-message-store <phone>` keeps the phone as the phone.
 // Every other option takes the argument after it as its value, unless that is
 // itself an option.
-const SWITCHES = new Set(['no-message-store', 'reset-message-store', 'sms', 'pair', 'business', 'all', 'download']);
+const SWITCHES = new Set(['no-message-store', 'reset-message-store', 'unlock-message-store', 'sms', 'pair', 'business', 'all', 'download']);
 // What `--switch=value` may say.
 const SWITCH_VALUES = { 'true': true, 'yes': true, 'on': true, '1': true,
                         'false': false, 'no': false, 'off': false, '0': false };
@@ -3196,6 +3233,8 @@ options:  before or after the command; --session <dir> and --session=<dir> are t
                     one, from registration on, to hand a companion it links as history
   --reset-message-store  when the message store's files are damaged, keep them (renamed
                     <file>.corrupt-<time>) and start the store again; history starts from now
+  --unlock-message-store  before the message store opens, show who holds its lock and
+                    break it on a y — for a wa that is gone (wa listen cannot ask, and refuses)
   --out <file>      where apk-material writes  (default: <session dir>/android-apk-material.json)
   --sms             connect by registering this number over SMS
   --pair            connect by linking to an existing account (8-digit code)
@@ -3295,6 +3334,7 @@ async function main() {
   }
   _messageStoreOn = !flags['no-message-store'];
   _messageStoreReset = !!flags['reset-message-store'];
+  _messageStoreUnlock = !!flags['unlock-message-store'];
   if (_messageStoreReset && !_messageStoreOn) {
     fail('--reset-message-store starts the message store again, and --no-message-store keeps none: use one of them');
     process.exit(1);
@@ -3645,7 +3685,7 @@ async function main() {
           sessionDirFor(_sessDir, savedPhone, { create: true });
           const savedFile  = storeFileFor(_sessDir, savedPhone);
           saveStore(finalStore, savedFile);
-          startMessageStoreAtRegistration(finalStore, savedPhone);
+          await startMessageStoreAtRegistration(finalStore, savedPhone);
           if (r.canonicalPhoneNumber) {
             out('note: WhatsApp knows this account as +' + r.canonicalPhoneNumber +
                 ', not +' + r.typedPhoneNumber);
@@ -3707,6 +3747,12 @@ async function main() {
   if (cmd === 'listen') {
     const phone = normalizePhone(sub || pos[0] || flags.phone || '');
     if (!phone) { fail('phone number required'); process.exit(1); }
+
+    // No one to ask here: a lock that is held is named, and left as it is.
+    if (_messageStoreUnlock) {
+      const unlock = await unlockMessageStore(sessionDirFor(_sessDir, phone), phone, null);
+      if (unlock.status === 'refused') process.exit(1);
+    }
 
     const client = new WhalibmobClient({ sessionDir: _sessDir, messageStore: messageStoreOption() });
 

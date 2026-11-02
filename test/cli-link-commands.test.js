@@ -346,6 +346,76 @@ test('a busy store may be held by another process, and the way out says so', () 
     assert.match(next, /close the other wa using this session, or wait/i);
 });
 
+test('a busy store names who holds it and points at --unlock-message-store; a takeover in progress is told apart', () => {
+    const holder = { pid: 4242, host: 'box', at: at(2026, 11, 2, 15, 0), legacy: false };
+    const shell = L.explainError('PRIMARY_MESSAGE_STORE_BUSY', { holder });
+    assert.equal(shell.title, 'Another process (pid 4242 on box, since 2026-11-02 15:00) has this number\'s message store open.');
+    assert.match(shell.next, /^Close that wa; if no other wa is using this number .*restart wa with --unlock-message-store to break the lock\.$/);
+
+    const listen = L.explainError('PRIMARY_MESSAGE_STORE_BUSY', { holder }, 'listen');
+    assert.equal(listen.title, shell.title);
+    assert.ok(!/(^|\s)\/[a-z]/.test(listen.next), listen.next);
+    assert.match(listen.next, /wa connect <phone> --unlock-message-store/);
+
+    // During a handover the store is freed first, and then the handover goes on.
+    assert.match(L.explainError('PRIMARY_MESSAGE_STORE_BUSY', { holder }, 'bootstrap').next, /--unlock-message-store.* Then continue the handover with \/link-bootstrap --resume\.$/);
+
+    const mutex = L.explainError('PRIMARY_MESSAGE_STORE_BUSY', { holder: { ...holder, mutex: true } });
+    assert.match(mutex.title, /takeover of the message store's lock is in progress \(pid 4242 on box/);
+    assert.match(mutex.next, /^Wait a minute/);
+    assert.match(mutex.next, /--unlock-message-store/);
+    assert.ok(!/(^|\s)\/[a-z]/.test(L.explainError('PRIMARY_MESSAGE_STORE_BUSY', { holder: { ...holder, mutex: true } }, 'listen').next));
+
+    // Whatever the holder says or leaves out, it is never a crash.
+    for (const odd of [{ legacy: true, pid: null, at: null }, null, {}]) {
+        const e = L.explainError('PRIMARY_MESSAGE_STORE_BUSY', { holder: odd });
+        assert.equal(typeof e.title, 'string');
+    }
+    assert.match(L.explainError('PRIMARY_MESSAGE_STORE_BUSY', { holder: { legacy: true, pid: null, at: null } }).title, /cannot be read/);
+    // No holder: the words it always had.
+    assert.deepEqual(L.explainError('PRIMARY_MESSAGE_STORE_BUSY', { holder: null }), L.explainError('PRIMARY_MESSAGE_STORE_BUSY'));
+});
+
+test('runMessageStoreUnlock shows the holder, breaks it only on a yes, and refuses where it cannot ask', async () => {
+    const holder = { v: 2, pid: 4242, host: 'box', at: at(2026, 11, 2, 15, 0), legacy: false };
+    const run = async ({ held = holder, answer, breaks = held } = {}) => {
+        const printed = [], broke = [];
+        const result = await L.runMessageStoreUnlock({
+            phone: '447911123456', readHolder: () => held, breakLock: h => { broke.push(h); return { holder: breaks }; },
+            confirm: answer === undefined ? null : async q => { printed.push('? ' + q); return answer; }, print: l => printed.push(l)
+        });
+        return { result, printed, broke };
+    };
+    let r = await run({ held: null, answer: true });
+    assert.deepEqual(r.result, { status: 'none' });
+    assert.deepEqual(r.printed, ['the message store of +447911123456 is not locked; there is nothing to break']);
+
+    r = await run({ answer: false });
+    assert.deepEqual(r.result, { status: 'kept', holder });
+    assert.equal(r.printed[0], 'the message store of +447911123456 is locked by pid 4242 on box, since 2026-11-02 15:00');
+    assert.ok(r.printed.includes('? break the lock held by pid 4242 on box?'), r.printed.join('\n'));
+    assert.equal(r.printed[r.printed.length - 1], 'the lock was left as it is');
+    assert.deepEqual(r.broke, []);
+
+    r = await run({ answer: true });
+    assert.deepEqual(r.result, { status: 'broken', holder });
+    assert.deepEqual(r.broke, [holder], 'the holder that was shown');
+    assert.equal(r.printed[r.printed.length - 1], 'broke the message store lock held by pid 4242 on box');
+
+    r = await run({ answer: true, breaks: null });
+    assert.deepEqual(r.result, { status: 'none' });
+    assert.equal(r.printed[r.printed.length - 1], 'the lock was gone by then; there was nothing to break');
+
+    r = await run();
+    assert.deepEqual(r.result, { status: 'refused', holder });
+    assert.deepEqual(r.broke, []);
+    assert.match(r.printed[r.printed.length - 1], /^wa listen cannot ask, so the lock was left as it is\./);
+
+    // An older lock says so.
+    r = await run({ held: { v: 1, pid: 77, host: null, at: 5, legacy: true }, answer: false });
+    assert.equal(r.printed[0], 'the message store of +447911123456 is locked by pid 77 (an older lock format, which cannot be proven stale)');
+});
+
 test('a store that could not write to disk is pointed at the disk, then at /reconnect, as an event and as a blocker', () => {
     const event = L.explainError('PRIMARY_MESSAGE_STORE_WRITE_FAILED');
     const blocker = L.explainBlocker({ code: 'PRIMARY_MESSAGE_STORE_DISABLED', detail: { reason: 'unreadable', code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED' } });

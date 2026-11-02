@@ -449,6 +449,95 @@ test('--reset-message-store starts a damaged store again, and needs the store on
   assert.equal(calls(dir, 'constructor').length, 1, 'nothing connected');
 });
 
+// ─── a message store lock nobody can prove gone ──────────────────────────────
+//
+// A lock left by a wa that crashed where its death cannot be proven from here
+// (another host, a pid handed to another process) keeps the store BUSY until
+// it is broken on purpose: --unlock-message-store shows who holds it and asks.
+
+const STORE_HOLDER = { v: 2, pid: 4242, host: 'elsewhere.example', bootId: 'boot', procStart: null, token: 'f00d'.repeat(8), gen: 1, at: STARTED, pidNs: null };
+const storeLock = dir => path.join(dir, 'sessions', PHONE, PHONE + '.primary-messages.lock');
+const lockStore = dir => fs.writeFileSync(storeLock(dir), JSON.stringify(STORE_HOLDER), { mode: 0o600 });
+
+test('--unlock-message-store shows who holds the store, asks, and breaks the lock only on a yes', async (t) => {
+  const dir = home(t);
+  sessions(dir, ['mobile']);
+  lockStore(dir);
+  const shown = 'the message store of +' + PHONE + ' is locked by pid 4242 on elsewhere.example, since 2026-11-02 15:31';
+
+  // Enter is no: the lock stays, and the connect goes on.
+  let wa = shell(t, dir, ['connect', PHONE, '--unlock-message-store', '--session', './sessions'], {});
+  let seen = await wa.until(ASKING);
+  assert.ok(has(seen, shown), seen);
+  assert.ok(seen.endsWith('break the lock held by pid 4242 on elsewhere.example?  [y/N] '), seen);
+  assert.equal(calls(dir, 'constructor').length, 0, 'asked before the client, and so the store, is opened');
+  seen = await wa.type('');
+  assert.ok(has(seen, 'the lock was left as it is'), seen);
+  assert.ok(has(seen, 'connected as +' + PHONE), seen);
+  assert.equal(fs.readFileSync(storeLock(dir), 'utf8'), JSON.stringify(STORE_HOLDER), 'left exactly as it was');
+  await wa.quit();
+
+  // y: broken, released for the store this connect opens.
+  wa = shell(t, dir, ['connect', PHONE, '--unlock-message-store', '--session', './sessions'], {});
+  await wa.until(ASKING);
+  seen = await wa.type('y');
+  assert.ok(has(seen, 'broke the message store lock held by pid 4242 on elsewhere.example'), seen);
+  assert.ok(has(seen, 'connected as +' + PHONE), seen);
+  assert.equal(fs.existsSync(storeLock(dir)), false);
+  await wa.quit();
+
+  // Nothing held: said, and nothing asked.
+  wa = shell(t, dir, ['connect', PHONE, '--unlock-message-store', '--session', './sessions'], {});
+  seen = await wa.until(AT_PROMPT);
+  assert.ok(has(seen, 'the message store of +' + PHONE + ' is not locked; there is nothing to break'), seen);
+  assert.ok(!seen.includes('[y/N]'), seen);
+  await wa.quit();
+});
+
+test('wa listen --unlock-message-store cannot ask: it names the holder and refuses', (t) => {
+  const dir = home(t);
+  sessions(dir, ['mobile']);
+  lockStore(dir);
+  const r = spawnSync(process.execPath, ['-r', FAKE, CLI, 'listen', PHONE, '--unlock-message-store', '--session', './sessions'], {
+    cwd: dir, env: env(dir, {}), input: 'y\n', encoding: 'utf8', timeout: 20000
+  });
+  assert.equal(r.status, 1, r.stdout);
+  assert.ok(has(r.stdout, 'the message store of +' + PHONE + ' is locked by pid 4242 on elsewhere.example, since 2026-11-02 15:31'), r.stdout);
+  assert.ok(has(r.stdout, 'wa listen cannot ask, so the lock was left as it is. If no other wa is using this number, break it with wa connect '
+    + PHONE + ' --unlock-message-store (it asks first), then start wa listen again.'), r.stdout);
+  assert.ok(!r.stdout.includes('[y/N]'), r.stdout);
+  assert.equal(fs.readFileSync(storeLock(dir), 'utf8'), JSON.stringify(STORE_HOLDER));
+  assert.equal(calls(dir, 'constructor').length, 0, 'nothing connected');
+});
+
+// The store reports BUSY with who holds it (err.holder): the text names them,
+// and points at the flag for when no other wa is running.
+test('a busy store names its holder, and the way out is --unlock-message-store', async (t) => {
+  const dir = home(t);
+  sessions(dir, ['mobile']);
+  const busy = ['primary_message_store_error', { code: 'PRIMARY_MESSAGE_STORE_BUSY', op: 'open',
+    err: { code: 'PRIMARY_MESSAGE_STORE_BUSY', holder: { ...STORE_HOLDER, legacy: false } } }];
+  const title = 'error: message store: Another process (pid 4242 on elsewhere.example, since 2026-11-02 15:31) has this number\'s message store open.  (PRIMARY_MESSAGE_STORE_BUSY, open)';
+  const wa = shell(t, dir, ['connect', PHONE, '--session', './sessions'], { onConnect: [busy] });
+  const start = await wa.until(new RegExp(ESC('--unlock-message-store to break the lock.') + '\\n' + ESC(PROMPT) + '$'));
+  const events = printedLines(start);
+  assert.ok(events.includes(title), start);
+  assert.equal(events[events.indexOf(title) + 1], '  next: Close that wa; if no other wa is using this number (it stopped, or ran on another machine or in another container), restart wa with --unlock-message-store to break the lock.', start);
+  await wa.quit();
+
+  const child = spawn(process.execPath, ['-r', FAKE, CLI, 'listen', PHONE, '--session', './sessions'], { cwd: dir, env: env(dir, { onConnect: [busy] }), stdio: 'pipe' });
+  t.after(() => { if (child.exitCode === null) child.kill(); });
+  let text = '';
+  child.stdout.setEncoding('utf8');
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('no busy store in the output:\n' + text)), 15000);
+    child.stdout.on('data', d => { text += d; if (/PRIMARY_MESSAGE_STORE_BUSY[\s\S]*next: .*\n/.test(text)) { clearTimeout(timer); resolve(); } });
+  });
+  child.kill();
+  assert.ok(has(text, title), text);
+  assert.ok(has(text, '  next: Close that wa; if no other wa is using this number, break the lock with wa connect <phone> --unlock-message-store (it asks first), then start wa listen again.'), text);
+});
+
 // ─── the message store starts at registration ────────────────────────────────
 
 function register(dir, args, input, scenario) {
