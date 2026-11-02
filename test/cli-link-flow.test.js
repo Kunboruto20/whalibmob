@@ -639,6 +639,51 @@ test('re-registering a number moves its earlier store aside and starts again fro
   } finally { store.close(); }
 });
 
+// The earlier store is set aside under its lock, so never from under a wa
+// that has it open: held, it is named and left exactly where it is.
+test('re-registering while another wa holds the store names it and renames nothing', (t) => {
+  const dir = home(t);
+  const before = earlierStore(dir);
+  lockStore(dir);
+  const r = register(dir, ['registration', '--register', PHONE, '--code', '123456', '--session', './sessions'], '/quit\n');
+  assert.equal(r.status, 0, r.stdout);
+  assert.ok(r.stdout.includes('registered  session saved to'), r.stdout);
+  const lines = r.stdout.split('\n');
+  assert.ok(lines.includes('warning: the message store did not start: Another process (pid 4242 on elsewhere.example, since 2026-11-02 15:31)'
+    + ' has this number\'s message store open. (PRIMARY_MESSAGE_STORE_BUSY)'), r.stdout);
+  assert.ok(lines.includes('  the registration itself is fine, but the earlier store was not set aside, as another wa holds it.'), r.stdout);
+  const at = path.join(dir, 'sessions', PHONE, PHONE + '.primary-messages');
+  assert.ok(lines.includes('  stop that wa, then move ' + at + '.log and ' + at + '.json out of the session folder before connecting;'), r.stdout);
+  assert.deepEqual(storeFiles(dir, PHONE).filter(f => !f.endsWith('.lock')).sort(), before, 'nothing renamed');
+  assert.equal(fs.readFileSync(storeLock(dir), 'utf8'), JSON.stringify(STORE_HOLDER), 'the lock left exactly as it was');
+});
+
+test('/reg confirm in a shell started with --unlock-message-store breaks a stale lock on a y, then sets the earlier store aside', async (t) => {
+  const dir = home(t);
+  const before = earlierStore(dir);
+  lockStore(dir);
+  // A window of refused writes the earlier store never wrote down goes aside with it.
+  const marker = path.join(dir, 'sessions', PHONE, PHONE + '.primary-messages.write-failed');
+  fs.writeFileSync(marker, '', { mode: 0o600 });
+  const wa = shell(t, dir, ['--unlock-message-store', '--session', './sessions'], { verify: { status: 'ok' } });
+  await wa.until(/type \/help for commands\nwa> $/);
+  let seen = await wa.type('/reg confirm ' + PHONE + ' 123456', ASKING);
+  assert.ok(has(seen, 'the message store of +' + PHONE + ' is locked by pid 4242 on elsewhere.example, since 2026-11-02 15:31'), seen);
+  seen = await wa.type('y', /\nwa> $/);
+  assert.ok(has(seen, 'broke the message store lock held by pid 4242 on elsewhere.example'), seen);
+  assert.ok(seen.includes('registered  session saved to'), seen);
+  assert.doesNotMatch(seen, /warning/, seen);
+  await wa.quit();
+
+  const files = storeFiles(dir, PHONE);
+  const aside = files.filter(f => ASIDE.test(f));
+  assert.deepEqual(aside.map(f => f.replace(/\.before-.*$/, '')).sort(), before, files.join('\n'));
+  const stamp = aside[0].replace(/^.*\.before-/, '');
+  assert.ok(files.includes(PHONE + '.primary-messages.write-failed.before-' + stamp), files.join('\n'));
+  assert.ok(!files.includes(PHONE + '.primary-messages.write-failed'), files.join('\n'));
+  assert.equal(origin(dir, PHONE), 'registration');
+});
+
 test('re-registering with --no-message-store still sets the earlier store aside, and starts none', (t) => {
   const dir = home(t);
   const before = earlierStore(dir);

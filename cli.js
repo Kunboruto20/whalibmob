@@ -531,25 +531,34 @@ function printCodeNextSteps(store, phone, confirmCmd) {
 // That happens under --no-message-store too, which then starts none: the old
 // one must not be picked up again by a later connect with the store on.
 //
+// It is renamed under the store's own lock, as a store holds it from open to
+// close: a wa that has it open right now (or a lock no one can prove gone) is
+// BUSY, and then nothing is renamed and the holder is named.
+//
 // Nothing here may cost the registration: a failure is a warning.
 async function startMessageStoreAtRegistration(store, phone) {
   const dir = sessionDirFor(_sessDir, phone);
   const who = String(store.phoneNumber || phone);
   if (_messageStoreUnlock) await unlockMessageStore(dir, who, askYesNo);
+  const { PrimaryMessageStore } = require('./lib/primary/MessageStore');
   let setAside = false;
   try {
-    setEarlierStoreAside(dir, who);
+    if (earlierStoreFiles(dir, who).length) PrimaryMessageStore.withLock({ dir, phone: who }, () => setEarlierStoreAside(dir, who));
     setAside = true;
     if (!_messageStoreOn) return;
-    const { PrimaryMessageStore } = require('./lib/primary/MessageStore');
     PrimaryMessageStore.open({ dir, phone: who, origin: 'registration', lc: store.connectionLc || 0 }).close();
   } catch (e) {
     const code = e && typeof e.code === 'string' && e.code.startsWith('PRIMARY_') ? e.code : null;
     warn('the message store did not start: ' +
-         (code ? LinkCli.explainError(code).title + ' (' + code + ')' : (e && e.message) || String(e)));
+         (code ? LinkCli.explainError(code, e).title + ' (' + code + ')' : (e && e.message) || String(e)));
+    const base = path.join(dir, who + '.primary-messages');
     if (setAside) {
       out('  the registration itself is fine. The store starts at the first connect instead, and a');
       out('  companion linked later is told it holds only the messages kept from then on.');
+    } else if (code === 'PRIMARY_MESSAGE_STORE_BUSY') {
+      out('  the registration itself is fine, but the earlier store was not set aside, as another wa holds it.');
+      out('  stop that wa, then move ' + base + '.log and ' + base + '.json out of the session folder before connecting;');
+      out('  if no wa is running any more, move them all the same and connect with --unlock-message-store.');
     } else {
       out('  the registration itself is fine, but the earlier store could not be set aside. Move');
       out('  ' + path.join(dir, who + '.primary-messages.*') + ' out of the session folder before connecting.');
@@ -579,11 +588,20 @@ async function unlockMessageStore(dir, phone, ask) {
   }
 }
 
+const fileThere = file => { try { fs.lstatSync(file); return true; } catch (_) { return false; } };
+
+// An earlier store's journal and snapshot, those that are there.
+function earlierStoreFiles(dir, who) {
+  return [who + '.primary-messages.log', who + '.primary-messages.json'].map(name => path.join(dir, name)).filter(fileThere);
+}
+
+// Run under the store's lock. A write-failed marker the earlier store left
+// (a window of refused writes it never wrote down) is its own and goes aside
+// with it, under the same stamp.
 function setEarlierStoreAside(dir, who) {
-  const present = [who + '.primary-messages.log', who + '.primary-messages.json']
-    .map(name => path.join(dir, name))
-    .filter(file => { try { fs.lstatSync(file); return true; } catch (_) { return false; } });
-  if (!present.length) return;
+  const files = earlierStoreFiles(dir, who);
+  if (!files.length) return;
+  const present = files.concat([path.join(dir, who + '.primary-messages.write-failed')].filter(fileThere));
   // When it was set aside, without the colons some filesystems refuse.
   const suffix = '.before-' + new Date().toISOString().replace(/[:.]/g, '-');
   const moved = [];
