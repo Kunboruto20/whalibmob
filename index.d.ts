@@ -1394,6 +1394,13 @@ export declare const SessionPaths: {
    * listed: a session move never carries it.
    */
   SESSION_SUFFIXES: string[];
+  /**
+   * The subset of `SESSION_SUFFIXES` bound to the number itself (the link
+   * journal, whose binding embeds the phone). A move to a new directory carries
+   * them; re-filing a session under another number
+   * (`adoptCanonicalNumber`) leaves them under the old name.
+   */
+  PHONE_BOUND_SUFFIXES: readonly string[];
   SHARED_FILES: string[];
 };
 

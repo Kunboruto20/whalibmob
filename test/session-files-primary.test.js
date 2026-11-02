@@ -111,7 +111,13 @@ test('the backend keys map to those same suffixes', () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('re-filing a session under its canonical number renames the primary files, not the lock', async () => {
+// The link journal is bound to the number it was written for: its body embeds a
+// digest of the phone and the identity key, and the store refuses a file whose
+// digest differs. A move to a new directory keeps the number, so it carries the
+// journal; re-filing the session under another number must not rename it.
+const LINK_JOURNAL_SUFFIX = '.primary-linking.json';
+
+test('re-filing a session under its canonical number renames the message files, leaves the link journal and lock', async () => {
   // adoptCanonicalNumber walks the same list as a move, but renames in place.
   const { WhalibmobClient } = require('../lib/Client');
   const { createNewStore, saveStore } = require('../lib/Store');
@@ -131,15 +137,82 @@ test('re-filing a session under its canonical number renames the primary files, 
     const r = await client.adoptCanonicalNumber(canonical);
     assert.equal(r.renamed, true);
 
+    // The directory was renamed with the number, so "the old name" is the old
+    // number's file name inside the new directory.
     const to = path.join(base, canonical);
-    for (const suffix of PRIMARY_SUFFIXES) {
+
+    for (const suffix of PRIMARY_SUFFIXES.filter(x => x !== LINK_JOURNAL_SUFFIX)) {
       assert.equal(
         fs.readFileSync(path.join(to, canonical + suffix), 'utf8'), 'body of ' + suffix,
         suffix + ' must follow the number'
       );
       assert.equal(fs.existsSync(path.join(to, PHONE + suffix)), false, suffix + ' must not keep the old name');
     }
-    assert.equal(fs.existsSync(path.join(to, canonical + LINK_LOCK_SUFFIX)), false,
-      'the lock is never renamed to the new number');
+
+    for (const suffix of [LINK_JOURNAL_SUFFIX, LINK_LOCK_SUFFIX]) {
+      assert.equal(
+        fs.readFileSync(path.join(to, PHONE + suffix), 'utf8'), 'body of ' + suffix,
+        suffix + ' stays under the old number, untouched'
+      );
+      assert.equal(fs.existsSync(path.join(to, canonical + suffix)), false,
+        suffix + ' must not appear under the canonical number');
+    }
+    assert.ok(!r.files.includes(LINK_JOURNAL_SUFFIX), 'the journal is not reported as renamed');
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test('a link journal left under the old number does not block linking for the canonical one', async () => {
+  const { WhalibmobClient } = require('../lib/Client');
+  const { PrimaryLinking } = require('../lib/PrimaryLinking');
+  const { createNewStore, saveStore } = require('../lib/Store');
+
+  const base = tmpBase();
+  try {
+    const canonical = PHONE + '0';
+    const dir = path.join(base, PHONE);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const store = createNewStore(PHONE);
+    store.registered = true;
+    saveStore(store, path.join(dir, PHONE + '.json'));
+
+    const client = Object.create(WhalibmobClient.prototype);
+    Object.assign(client, {
+      _store: store, _sessionDir: dir, _baseDir: base, _connected: false, _mode: 'mobile'
+    });
+
+    // A journal written for the number as it was.
+    const before = new PrimaryLinking(client);
+    before.journal.close();
+    assert.ok(fs.existsSync(path.join(dir, PHONE + LINK_JOURNAL_SUFFIX)));
+
+    await client.adoptCanonicalNumber(canonical);
+
+    // The journal's binding names the old number, so a journal carried across
+    // under the new name would be rejected. Left behind, it is simply not seen.
+    let after;
+    assert.doesNotThrow(() => { after = new PrimaryLinking(client); });
+    try {
+      assert.equal(
+        after.journal.filename,
+        path.join(base, canonical, canonical + LINK_JOURNAL_SUFFIX)
+      );
+      assert.ok(fs.existsSync(after.journal.filename), 'a fresh journal is created for the canonical number');
+    } finally { after.journal.close(); }
+    assert.ok(fs.existsSync(path.join(base, canonical, PHONE + LINK_JOURNAL_SUFFIX)),
+      'the old number journal is left where it was');
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test('every phone-bound suffix is a real session suffix', () => {
+  // The exclusion is a subset of the one list, not a second list: a suffix
+  // that is excluded but not listed would be a typo that excludes nothing.
+  assert.ok(Array.isArray(SessionPaths.PHONE_BOUND_SUFFIXES));
+  for (const suffix of SessionPaths.PHONE_BOUND_SUFFIXES) {
+    assert.ok(SessionPaths.SESSION_SUFFIXES.includes(suffix), suffix + ' is not in SESSION_SUFFIXES');
+  }
+  assert.ok(SessionPaths.PHONE_BOUND_SUFFIXES.includes(LINK_JOURNAL_SUFFIX));
+  assert.ok(SessionPaths.PHONE_BOUND_SUFFIXES.includes('.web' + LINK_JOURNAL_SUFFIX));
+  for (const suffix of PRIMARY_SUFFIXES.filter(x => x !== LINK_JOURNAL_SUFFIX)) {
+    assert.ok(!SessionPaths.PHONE_BOUND_SUFFIXES.includes(suffix), suffix + ' is not phone-bound');
+  }
 });
