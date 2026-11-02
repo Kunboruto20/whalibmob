@@ -96,6 +96,59 @@ npm install -g whalibmob
 ```
 
 
+## Approving a Companion Device
+
+A number registered with whalibmob is the account's **primary device**, and from the CLI it can approve **WhatsApp Web** in the phone's place: Web is linked as a companion and is handed the chat history this program has kept for the number. That is not the whole history the account has ever had; what it covers is spelled out below. Keep the shell open until the chats have loaded.
+
+```sh
+wa connect 447949738354 --session ~/whalibmob_auth
+```
+
+1. On WhatsApp Web choose **Link with phone number** and enter the same phone number. Web shows an 8-character code, good for about three minutes. The shell announces the request:
+   ```
+   wa +447949738354>   link request   companion c0ffee01   code window 2:50   id a1a1a1a1
+   ```
+2. Type the code into the shell (the dash, a space between the halves and the letter case do not matter):
+   ```
+   wa +447949738354> /link-code ABCD-EFGH
+   ```
+3. If more than one browser is asking, nothing is approved. The shell lists them; repeat the command with the number or the id of yours, for example `/link-code ABCD-EFGH 2`.
+4. If the history is known to be partial, the shell says what is and is not in it, and asks `[y/N]` before approving. Enter means no, and nothing is approved.
+
+When it works, the shell ends with:
+
+```
+approval sent. The binding to the browser stays unconfirmed unless you confirm it with /link-confirm FILE|JSON (needs the companion's public proof JSON).
+sending the stored history to the companion...
+history handed to the companion: 12 chats, 340 messages, 20.0 KB (sent inline), first link
+capture period: since registration: the store has been on since this number was registered
+The history is handed over; whether Web has finished showing it cannot be seen from here. If Web stays on "Loading chats", run /link-status.
+```
+
+`/linked-devices` then shows the companion (the numbers are an example):
+
+```
+wa +447949738354> /linked-devices
+linked devices  +447949738354
+  #0   this phone (primary)
+  #12  companion   key index 3   linked 2026-11-02 15:31 by code   binding unconfirmed   history delivered (12 chats, 340 msgs)
+```
+
+**What the history covers.** Only what this program stored for the number since its store began: since registration for a number registered here with the CLI, or since the store was first switched on for any other (`--no-message-store` switches it off). The store keeps the newest 100 messages of each chat and 20 000 in all, oldest first out. What it knows it lost (messages it could not decrypt or save, stretches when it was not running or could not write to disk) is reported, and the shell asks before approving unless the store has kept everything since registration and dropped nothing.
+
+**What is never transferred.** The content of revoked, expired and view-once messages (a revoked message goes over as a deleted-message marker, the other two not at all), and reactions and poll votes, which are not stored, so they do not appear on the new device. Status posts and channels are not kept. A message of a type the library does not decode is kept as it was received and handed over unchanged, for Web to read.
+
+**Limits.**
+- A second companion while one is still linked is not supported: the shell refuses up front. Log the first one out of Web (Menu → Log out) first.
+- The binding stays **unconfirmed** unless a companion's public proof JSON is reconciled with `/link-confirm FILE|JSON`. Standard WhatsApp Web is not known to offer such a proof, so with an ordinary browser expect it to stay unconfirmed; the device list from WhatsApp is what shows the companion is there.
+
+**Linking again.** Log out on Web (Menu → Log out); wait until `/linked-devices` no longer lists it; run `/link-retire` (it works once the approval is 5 minutes old, and clears the hold an unconfirmed approval leaves behind); then `/link-code` again. Web is handed the history again, with the same app-state key.
+
+**When it stops part-way.** `/link-bootstrap --resume` continues a handover after its last accepted step, and never sends blindly: a step whose reply never came is sent once more only with `--resend-uncertain`. `/link-unlock` shows who holds the lock on the link journal and breaks it only when you answer `y`: a lock left by a dead process on the same machine is recovered without it, and any other holder is reported as busy, with who holds it, until you have checked it is gone and unlocked.
+
+The whole walk-through, every command and the library API (`messageStore`, `getPrimaryMessageStore()`, `getPrimaryLinkReadiness()`, `bootstrapPrimaryCompanion()`, `unlockPrimaryLink()`) are in [Approving a Companion Device](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#approving-a-companion-device-primary-role); the commands alone are in [the CLI reference](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli.md#companion-commands-approving-whatsapp-web).
+
+
 ## Documentation
 
 The full guide is split by topic so every page loads fast and reads cleanly. Pick a section below.
