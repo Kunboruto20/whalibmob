@@ -1476,7 +1476,8 @@ export declare class WhalibmobClient extends EventEmitter {
   /**
    * What this primary has kept of the messages it sent and received. `null`
    * when the `messageStore` option is off, on a companion session, before the
-   * first login or after `disconnect()`, or when the store could not be opened.
+   * first login or after `disconnect()`, or when the store could not be opened
+   * or read. Never throws: a failure is said on `primary_message_store_error`.
    */
   getPrimaryMessageStore(): PrimaryMessageSnapshot | null;
   getPNForLID(lid: Jid): Jid | null;

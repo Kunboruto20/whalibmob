@@ -661,6 +661,34 @@ test('getPrimaryLinkReadiness reports a store it cannot read as a store that is 
     assert.deepEqual(only(await f.client.getPrimaryLinkReadiness(), 'PRIMARY_MESSAGE_STORE_DISABLED').detail, { reason: 'unreadable', code: 'PRIMARY_MESSAGE_STORE_FAILED' });
 });
 
+// getPrimaryMessageStore() forgives a store that cannot write down what has
+// expired, and hands out what it holds. The bootstrap does not: its snapshot
+// is the sweeping one, and that throws. Readiness asks the way the bootstrap
+// does, so it never calls ready a store the bootstrap then cannot read.
+const sweepFails = () => ({ snapshot: ({ sweep = true } = {}) => {
+    if (sweep) throw C.failure('PRIMARY_MESSAGE_STORE_WRITE_FAILED');
+    return kept();
+} });
+
+test('getPrimaryLinkReadiness blocks on a store the bootstrap cannot read, while getPrimaryMessageStore still forgives it', async t => {
+    const f = await fixture(t);
+    const said = [];
+    f.client.on('primary_message_store_error', e => said.push(e.code));
+    f.client._messageStore = sweepFails();
+    // The forgiving read is still forgiving, and still says why.
+    assert.equal(f.client.getPrimaryMessageStore().counts.records, kept().counts.records);
+    assert.deepEqual(said, ['PRIMARY_MESSAGE_STORE_WRITE_FAILED']);
+    const verdict = await f.client.getPrimaryLinkReadiness();
+    assert.equal(verdict.ready, false);
+    assert.equal(verdict.history, null);
+    assert.deepEqual(only(verdict, 'PRIMARY_MESSAGE_STORE_DISABLED').detail, { reason: 'unreadable', code: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED' });
+
+    // A store that cannot hand out anything at all: null, never a throw.
+    f.client._messageStore = { snapshot: () => { throw C.failure('PRIMARY_MESSAGE_STORE_CLOSED'); } };
+    assert.equal(f.client.getPrimaryMessageStore(), null);
+    assert.deepEqual(only(await f.client.getPrimaryLinkReadiness(), 'PRIMARY_MESSAGE_STORE_DISABLED').detail, { reason: 'unreadable', code: 'PRIMARY_MESSAGE_STORE_CLOSED' });
+});
+
 test('getPrimaryLinkReadiness asks about a store that only began capturing when it was enabled', async t => {
     const f = await fixture(t);
     f.client._messageStore = PrimaryMessageStore.open({ dir: f.dir, phone: PHONE, origin: 'enabled', lc: 1 });
@@ -799,7 +827,11 @@ const AGREEMENT = {
     'app state that is not empty': { arrange: f => f.client._appState.set('regular', { version: 3, hash: Buffer.alloc(128), indexValueMap: {} }), refused: 'PRIMARY_BOOTSTRAP_EXISTING_STATE', blocker: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE' },
     'a history file already on disk': { arrange: f => fs.writeFileSync(path.join(f.dir, PHONE + '.history.json'), '{}'), refused: 'PRIMARY_BOOTSTRAP_EXISTING_HISTORY', blocker: 'PRIMARY_BOOTSTRAP_FOREIGN_STATE' },
     'a push name that is not one': { arrange: f => { f.client._store.name = 'User'; }, refused: 'PRIMARY_BOOTSTRAP_NAME_REQUIRED', blocker: 'PRIMARY_BOOTSTRAP_NAME_REQUIRED' },
-    'no message store': { arrange: f => { f.client._messageStore = null; }, refused: 'PRIMARY_MESSAGE_STORE_DISABLED', blocker: 'PRIMARY_MESSAGE_STORE_DISABLED' }
+    'no message store': { arrange: f => { f.client._messageStore = null; }, refused: 'PRIMARY_MESSAGE_STORE_DISABLED', blocker: 'PRIMARY_MESSAGE_STORE_DISABLED' },
+    'a store that cannot be read': { arrange: f => { f.client._messageStore = { snapshot: () => { throw C.failure('PRIMARY_MESSAGE_STORE_CLOSED'); } }; },
+        refused: 'PRIMARY_MESSAGE_STORE_CLOSED', blocker: 'PRIMARY_MESSAGE_STORE_DISABLED' },
+    'a store that cannot write down what has expired': { arrange: f => { f.client._messageStore = sweepFails(); },
+        refused: 'PRIMARY_MESSAGE_STORE_WRITE_FAILED', blocker: 'PRIMARY_MESSAGE_STORE_DISABLED' }
 };
 for (const [name, rel] of Object.entries(UNVERIFIABLE))
     AGREEMENT['a re-link over a server state: ' + name] = { arrange: f => { const ours = previousLink(f); f.server.patches = rel(ours); f.server.version = f.server.patches.length; },

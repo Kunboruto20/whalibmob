@@ -140,6 +140,22 @@ test('explainError covers every error code the library can throw', () => {
     assert.deepEqual(bare, [], 'codes with no message of their own');
 });
 
+// The bootstrap reads the store and encodes it before anything goes out; when
+// the encoder refuses (PRIMARY_HISTORY_EXPORT_*), that comes out of it as one
+// code, with the encoder's error as its cause.
+test('a history the encoder refused is told as such, and pointed at a command this CLI has', () => {
+    const e = L.explainError('PRIMARY_BOOTSTRAP_HISTORY_INVALID');
+    assert.notEqual(e.title, L.explainError('PRIMARY_LINK_SOMETHING_NEW').title);
+    assert.match(e.title, /history could not be encoded/);
+    assert.ok(Object.values(L.COMMANDS).some(command => e.next.includes(command)), e.next);
+    assert.match(e.next, /\/link-bootstrap --resume/);
+    assert.match(e.next, /report the code shown/);
+    for (const text of [e.title, e.next]) {
+        assert.ok(text.length > 20 && text.length < 260, text);
+        assert.ok(!/PRIMARY_[A-Z]+_[A-Z_]+/.test(text), text);
+    }
+});
+
 // The stores build their codes from a prefix and a short name, so the scan above
 // cannot see them. They are read here the way they are written.
 function composed(file, prefix) {
