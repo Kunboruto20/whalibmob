@@ -16,6 +16,10 @@ const { PrimaryMessageStore, STATUS } = require('../lib/primary/MessageStore');
 const PHONE = '40712345678';
 const CHAT  = '40799999999@s.whatsapp.net';
 const OTHER = '40788888888@s.whatsapp.net';
+const LID   = '99999@lid';                    // the same person as CHAT, by lid
+const GROUP = '120363000000000000@g.us';
+const V     = '40711111111@s.whatsapp.net';   // two group members
+const W     = '40722222222@s.whatsapp.net';
 const T     = 1790000000000;
 const CODE  = /^PRIMARY_MESSAGE_STORE_[A-Z0-9_]+$/;
 
@@ -47,9 +51,13 @@ function incoming(store, id, ts, extra = {}) {
 function outgoing(store, id, ts, extra = {}) {
   store.recordOutgoing({ id, chat: CHAT, ts, raw: Buffer.from('out-' + id), info: { kind: 'content' }, ...extra });
 }
-function protocol(store, id, ts, proto, chat = CHAT) {
-  store.recordIncoming({ id, chat, fromMe: false, ts, info: { kind: 'protocol', protocol: proto } });
+// A protocol message as it arrived: in `chat`, from `fromMe`/`participant`.
+function protocol(store, id, ts, proto, { chat = CHAT, fromMe = false, participant } = {}) {
+  store.recordIncoming({ id, chat, fromMe, participant, ts, info: { kind: 'protocol', protocol: proto } });
 }
+const inGroup = (store, id, ts, participant, raw) => store.recordIncoming({ id, chat: GROUP, fromMe: false, participant, ts,
+  raw: Buffer.from(raw || 'raw-' + id), info: { kind: 'content' } });
+const b64 = s => Buffer.from(s).toString('base64');
 
 // What a kill -9 leaves behind: both files exactly as they are on disk now.
 const crashImage = dir => ({ log: fs.readFileSync(logFile(dir)), snap: fs.readFileSync(snapFile(dir)) });
@@ -143,20 +151,97 @@ test('a revoke that arrives before its target still keeps the content out', (t) 
   const s = open();
   protocol(s, 'P1', 110, { type: 0, key: { remoteJid: CHAT, id: 'M7' } });
   incoming(s, 'M7', 100);
-  // A revoke addressed under the other jid of the same chat still finds it.
+  // The other jid of the same conversation counts once setChatMeta has tied
+  // the two together: a revoke arriving under the lid finds the phone-number copy,
+  s.setChatMeta(CHAT, { pnJid: CHAT, lidJid: LID });
   incoming(s, 'M8', 120);
-  protocol(s, 'P2', 130, { type: 0, key: { remoteJid: '99999@lid', id: 'M8' } });
-  // And when the message was kept under both jids, no copy keeps its content.
+  protocol(s, 'P2', 130, { type: 0, key: { id: 'M8' } }, { chat: LID });
+  // a message kept under both jids loses its content in both,
   incoming(s, 'M9', 140);
-  incoming(s, 'M9', 140, { chat: '99999@lid' });
-  protocol(s, 'P3', 150, { type: 0, key: { remoteJid: CHAT, id: 'M9' } });
+  incoming(s, 'M9', 140, { chat: LID });
+  protocol(s, 'P3', 150, { type: 0, key: { id: 'M9' } });
+  // and a revoke that came first under one jid catches the target under the other.
+  protocol(s, 'P4', 160, { type: 0, key: { id: 'M10' } }, { chat: LID });
+  incoming(s, 'M10', 155);
   s.close();
 
   const snap = open().snapshot();
-  for (const [id, chat] of [['M7', CHAT], ['M8', CHAT], ['M9', CHAT], ['M9', '99999@lid']]) {
+  for (const [id, chat] of [['M7', CHAT], ['M8', CHAT], ['M9', CHAT], ['M9', LID], ['M10', CHAT]]) {
     assert.equal(byId(snap, id, chat).tombstone, 'revoked', id + ' in ' + chat);
     assert.equal('raw' in byId(snap, id, chat), false, id + ' in ' + chat);
   }
+});
+
+// key.remoteJid is the sender's view of the chat and is never trusted to pick
+// it: an edit or revoke reaches only the chat it arrived in.
+test('a forged cross-chat edit is ignored', (t) => {
+  const { open } = setup(t);
+  const s = open();
+  inGroup(s, 'M1', 100, V, 'original');
+  let n = 0;
+  for (const remoteJid of [OTHER, GROUP, undefined]) {
+    protocol(s, 'P' + n++, 110, { type: 14, key: { remoteJid, id: 'M1' }, editedRaw: Buffer.from('forged') }, { chat: OTHER });
+    s.recordIncoming({ id: 'P' + n++, chat: OTHER, ts: 111, raw: Buffer.from('forged'), info: { kind: 'content', editOf: 'M1' } });
+  }
+  const r = byId(s.snapshot(), 'M1', GROUP);
+  assert.ok(r.raw.equals(Buffer.from('original')));
+  assert.equal('edited' in r, false);
+});
+
+test('a forged cross-chat revoke is ignored', (t) => {
+  const { open } = setup(t);
+  const s = open();
+  inGroup(s, 'M1', 100, V, 'original');
+  for (const remoteJid of [OTHER, GROUP, undefined]) protocol(s, 'P1', 110, { type: 0, key: { remoteJid, id: 'M1' } }, { chat: OTHER });
+  let r = byId(s.snapshot(), 'M1', GROUP);
+  assert.ok(r.raw.equals(Buffer.from('original')));
+  assert.equal('tombstone' in r, false);
+  // Nor does the forged revoke wait for the id: the group copy delivered again keeps its content.
+  s.drop(GROUP, 'M1');
+  inGroup(s, 'M1', 100, V, 'original');
+  s.close();
+  r = byId(open().snapshot(), 'M1', GROUP);
+  assert.ok(r.raw.equals(Buffer.from('original')));
+});
+
+test('a group admin revoke is accepted', (t) => {
+  const { open } = setup(t);
+  const s = open();
+  inGroup(s, 'M1', 100, V, 'by v');
+  s.recordOutgoing({ id: 'O1', chat: GROUP, ts: 101, raw: Buffer.from('by us'), info: { kind: 'content' } });
+  protocol(s, 'P1', 110, { type: 0, key: { id: 'M1' } }, { chat: GROUP, participant: W });
+  protocol(s, 'P2', 111, { type: 0, key: { id: 'O1' } }, { chat: GROUP, participant: W });
+  const snap = s.snapshot();
+  for (const id of ['M1', 'O1']) {
+    assert.equal(byId(snap, id, GROUP).tombstone, 'revoked', id);
+    assert.equal('raw' in byId(snap, id, GROUP), false, id);
+  }
+});
+
+test('a non-matching sender edit is ignored', (t) => {
+  const { open } = setup(t);
+  const s = open();
+  inGroup(s, 'M1', 100, V, 'by v');
+  protocol(s, 'P1', 110, { type: 14, key: { id: 'M1' }, editedRaw: Buffer.from('by w') }, { chat: GROUP, participant: W });
+  protocol(s, 'P2', 111, { type: 14, key: { id: 'M1' }, editedRaw: Buffer.from('by us') }, { chat: GROUP, fromMe: true });
+  assert.ok(byId(s.snapshot(), 'M1', GROUP).raw.equals(Buffer.from('by v')));
+  protocol(s, 'P3', 112, { type: 14, key: { id: 'M1' }, editedRaw: Buffer.from('v again') }, { chat: GROUP, participant: V });
+  assert.ok(byId(s.snapshot(), 'M1', GROUP).raw.equals(Buffer.from('v again')), 'its author may edit it');
+
+  // In a 1:1 chat the peer can neither edit nor revoke what we sent.
+  outgoing(s, 'O1', 120);
+  protocol(s, 'P4', 130, { type: 14, key: { id: 'O1' }, editedRaw: Buffer.from('peer') });
+  protocol(s, 'P5', 131, { type: 0, key: { id: 'O1' } });
+  const r = byId(s.snapshot(), 'O1');
+  assert.ok(r.raw.equals(Buffer.from('out-O1')));
+  assert.equal('tombstone' in r, false);
+  // and we can revoke it, from this device or another of ours.
+  protocol(s, 'P6', 132, { type: 0, key: { id: 'O1' } }, { fromMe: true });
+  assert.equal(byId(s.snapshot(), 'O1').tombstone, 'revoked');
+  // A peer's revoke waiting for an id does not catch our message with that id.
+  protocol(s, 'P7', 140, { type: 0, key: { id: 'O9' } });
+  outgoing(s, 'O9', 141);
+  assert.equal('tombstone' in byId(s.snapshot(), 'O9'), false);
 });
 
 test('edit replaces raw and sets edited', (t) => {
@@ -214,6 +299,8 @@ test('expired records are tombstoned at snapshot time', (t) => {
   incoming(s, 'E1', ts);
   // A per-message expiration wins over the chat setting.
   incoming(s, 'E2', ts, { info: { kind: 'content', expiration: 3600 } });
+  // The same id in a chat that does not disappear is a different record.
+  incoming(s, 'E1', ts, { chat: OTHER });
 
   let snap = s.snapshot({ now: ts * 1000 + 59000 });
   assert.ok(byId(snap, 'E1').raw, 'not yet');
@@ -221,9 +308,43 @@ test('expired records are tombstoned at snapshot time', (t) => {
   assert.equal(byId(snap, 'E1').tombstone, 'expired');
   assert.equal('raw' in byId(snap, 'E1'), false);
   assert.ok(byId(snap, 'E2').raw, 'an hour has not passed for E2');
-  assert.deepEqual(snap.chats[0].ephemeral, { seconds: 60, setAt: 50 });
+  assert.ok(byId(snap, 'E1', OTHER).raw, 'expiry stays in its own chat');
+  assert.deepEqual(snap.chats.find(c => c.id === CHAT).ephemeral, { seconds: 60, setAt: 50 });
   s.close();
   assert.equal('raw' in byId(open().snapshot({ now: ts * 1000 }), 'E1'), false, 'expiry is written down, not recomputed');
+});
+
+// The history sent to Web carries each disappearing message's timer, so Web
+// expires it when the phone would.
+test('a record carries the disappearing timer that applied to it', (t) => {
+  const { open } = setup(t);
+  const ts = Math.floor(T / 1000);
+  const s = open();
+  s.setChatMeta(CHAT, { ephemeral: { seconds: 86400, setAt: ts } });
+  incoming(s, 'E1', ts);                                                           // the chat's setting
+  incoming(s, 'E2', ts, { info: { kind: 'content', expiration: 604800 } });        // its own wins
+  s.recordIncoming({ id: 'N1', chat: OTHER, ts, raw: Buffer.from('n1'), info: { kind: 'content' } });
+  for (const snap of [s.snapshot(), (s.close(), open().snapshot())]) {
+    assert.equal(byId(snap, 'E1').expiration, 86400);
+    assert.equal(byId(snap, 'E2').expiration, 604800);
+    assert.equal('expiration' in byId(snap, 'N1', OTHER), false, 'a normal record has none');
+  }
+});
+
+test('expired records are swept on open', (t) => {
+  const { dir, open, clock } = setup(t);
+  const ts = Math.floor(T / 1000);
+  const s = open();
+  s.setChatMeta(CHAT, { ephemeral: { seconds: 60, setAt: ts } });
+  incoming(s, 'E1', ts, { raw: Buffer.from('disappearing') });
+  s.close();
+  assert.ok(fs.readFileSync(snapFile(dir), 'utf8').includes(b64('disappearing')), 'not due when the store closed');
+
+  // Nothing asks for a snapshot; opening after the deadline is enough.
+  clock.ms = T + 61000;
+  open();
+  assert.equal(fs.readFileSync(snapFile(dir), 'utf8').includes(b64('disappearing')), false);
+  assert.equal(fs.readFileSync(logFile(dir), 'utf8').includes(b64('disappearing')), false);
 });
 
 test('leftover inflight not stored becomes a precise loss on reopen', (t) => {
@@ -274,6 +395,21 @@ test('decrypt failure becomes an undecryptable loss', (t) => {
   restore(dir, image);
 
   assert.deepEqual(open().snapshot().losses, [{ reason: 'undecryptable', ids: ['M5', 'M6'] }]);
+});
+
+test('a decrypt failure is a loss in the live snapshot, withdrawn if a retry decrypts it', (t) => {
+  const { open } = setup(t);
+  const s = open();
+  s.recordInflight({ id: 'M5', chat: CHAT, ts: 100 });
+  s.recordDecryptFailure({ id: 'M5' });
+  assert.deepEqual(s.snapshot().losses, [{ reason: 'undecryptable', ids: ['M5'] }], 'no reopen needed to see it');
+  incoming(s, 'M5', 100);
+  assert.deepEqual(s.snapshot().losses, []);
+  incoming(s, 'M6', 110);
+  s.recordDecryptFailure({ id: 'M6' });   // a redelivery that failed of something already kept
+  assert.deepEqual(s.snapshot().losses, []);
+  s.close();
+  assert.deepEqual(open().snapshot().losses, []);
 });
 
 test('a loss is withdrawn when the message arrives after all', (t) => {
@@ -392,6 +528,40 @@ test('outgoing intent is PENDING and status only rises', (t) => {
   assert.deepEqual(STATUS, { ERROR: 0, PENDING: 1, SERVER_ACK: 2, DELIVERY_ACK: 3, READ: 4, PLAYED: 5 });
 });
 
+test('a rejected send can become ERROR, and nothing past PENDING falls to it', (t) => {
+  const { open } = setup(t);
+  const s = open();
+  outgoing(s, 'O1', 100);
+  s.setStatus(CHAT, ['O1'], STATUS.ERROR);
+  assert.equal(byId(s.snapshot(), 'O1').status, STATUS.ERROR, 'PENDING → ERROR');
+  outgoing(s, 'O2', 110);
+  s.setStatus(CHAT, ['O2'], STATUS.DELIVERY_ACK);
+  s.setStatus(CHAT, ['O2'], STATUS.ERROR);
+  assert.equal(byId(s.snapshot(), 'O2').status, STATUS.DELIVERY_ACK, 'DELIVERY_ACK stays');
+  s.close();
+  const again = open();
+  assert.equal(byId(again.snapshot(), 'O1').status, STATUS.ERROR);
+  again.setStatus(CHAT, ['O1'], STATUS.SERVER_ACK);   // a real ack after all
+  assert.equal(byId(again.snapshot(), 'O1').status, STATUS.SERVER_ACK, 'ERROR → SERVER_ACK');
+});
+
+test('a second open of the same store is refused while the first is open', (t) => {
+  const { dir, open } = setup(t);
+  const a = open();
+  incoming(a, 'M1', 100);
+  // Two stores over one pair of files would each compact its own memory over
+  // the other's, and one of them would silently lose.
+  assert.throws(() => open(), { code: 'PRIMARY_MESSAGE_STORE_BUSY' });
+  assert.throws(() => open({ dir: path.join(dir, '.') }), { code: 'PRIMARY_MESSAGE_STORE_BUSY' }, 'the same dir by another spelling');
+  const other = open({ phone: '40700000000' });   // another account in the same dir is fine
+  incoming(other, 'X1', 100);
+  a.close();
+  const b = open();
+  incoming(b, 'M2', 110);
+  b.close();
+  assert.deepEqual(open().snapshot().records[CHAT].map(r => r.id), ['M1', 'M2']);
+});
+
 test('supersedes rekeys instead of duplicating', (t) => {
   const { open } = setup(t);
   const s = open();
@@ -409,6 +579,32 @@ test('supersedes rekeys instead of duplicating', (t) => {
   s.close();
   records = open().snapshot().records[CHAT];
   assert.deepEqual(records.map(r => [r.id, r.status]), [['B2', STATUS.DELIVERY_ACK]]);
+});
+
+test('a revoked message that left memory stays revoked when delivered again', (t) => {
+  const { dir, open } = setup(t);
+  const s = open({ perChat: 2 });
+  incoming(s, 'M1', 10, { raw: Buffer.from('revoked-secret') });
+  protocol(s, 'P1', 11, { type: 0, key: { id: 'M1' } });
+  incoming(s, 'M2', 20);
+  incoming(s, 'M3', 30);
+  assert.equal(byId(s.snapshot(), 'M1'), undefined, 'evicted');
+  s.drop(CHAT, 'M2');                                         // a slot is free again
+  incoming(s, 'M1', 10, { raw: Buffer.from('revoked-secret') });   // and the server delivers it again
+  // The same through drop rather than eviction.
+  incoming(s, 'M4', 40, { chat: OTHER, raw: Buffer.from('revoked-secret') });
+  protocol(s, 'P2', 41, { type: 0, key: { id: 'M4' } }, { chat: OTHER });
+  s.drop(OTHER, 'M4');
+  incoming(s, 'M4', 40, { chat: OTHER, raw: Buffer.from('revoked-secret') });
+  s.close();
+
+  const snap = open({ perChat: 2 }).snapshot();
+  for (const [id, chat] of [['M1', CHAT], ['M4', OTHER]]) {
+    const r = byId(snap, id, chat);
+    assert.equal(r.tombstone, 'revoked', id);
+    assert.equal('raw' in r, false, id);
+  }
+  assert.equal(fs.readFileSync(snapFile(dir), 'utf8').includes(b64('revoked-secret')), false);
 });
 
 test('retention keeps the newest perChat and counts evictions', (t) => {
@@ -522,6 +718,7 @@ test('misuse fails with a PRIMARY_MESSAGE_STORE_ code', (t) => {
   fails(() => s.recordIncoming({ id: 'M1', chat: CHAT, ts: 1, raw: Buffer.from('x'), info: { kind: 'other' } }));
   fails(() => s.recordOutgoing({ id: '', chat: CHAT, ts: 1, raw: Buffer.from('x'), info: { kind: 'content' } }));
   fails(() => s.setChatMeta(CHAT, { ephemeral: { seconds: -1 } }));
+  fails(() => incoming(s, 'M1', 1, { info: { kind: 'content', expiration: 1.5 } }), 'PRIMARY_MESSAGE_STORE_INPUT_INVALID');
   // A revoke whose type is not the number it should be is refused, not
   // quietly ignored with the content left in place.
   fails(() => protocol(s, 'P9', 1, { type: 'REVOKE', key: { id: 'M1' } }), 'PRIMARY_MESSAGE_STORE_INPUT_INVALID');
