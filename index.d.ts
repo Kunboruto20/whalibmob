@@ -1387,7 +1387,12 @@ export declare const SessionPaths: {
   listSessions: typeof listSessions;
   migrateSession: typeof migrateSession;
   preKeyFilesFor: (baseDir: string, phone: string) => string[];
-  /** Every per-number file the library writes. */
+  /**
+   * Every per-number file the library writes, for the mobile half and the
+   * `.web.` companion half, including the primary-side message store and the
+   * link journal (`.primary-linking.json`). A link attempt's `.lock` is not
+   * listed: a session move never carries it.
+   */
   SESSION_SUFFIXES: string[];
   SHARED_FILES: string[];
 };
@@ -1398,7 +1403,8 @@ export declare const SessionPaths: {
 
 /**
  * A key under which a piece of session state is kept — one of the fixed names
- * (`'auth'`, `'signal'`, …) or `` `pre-key/${id}` `` for one one-time pre-key.
+ * (`'auth'`, `'signal'`, `'primary-messages'`, …) or `` `pre-key/${id}` `` for
+ * one one-time pre-key. `StoreBackend.KEYS` lists the fixed names.
  */
 export type StorageKey = string;
 
