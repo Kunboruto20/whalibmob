@@ -759,6 +759,49 @@ test('the outbox belongs to its link transaction and is removed once it can no l
     assert.equal(fs.existsSync(outboxFile(h)), false);
 });
 
+// A read that fails says nothing about whose the outbox is. Deleting it then
+// would leave an attempt that can never be finished.
+test('an outbox that cannot be read at the start is kept, and the attempt finishes from it', async t => {
+    const f = await bootstrapFixture(t), snap = chatSnapshot(2);
+    failPhaseOnce(f, 'history_sending');
+    await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap }), { code: 'PRIMARY_LINK_STORE_WRITE_FAILED' });
+    const file = outboxFile(f), pinned = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const code of ['EIO', 'EACCES']) {
+        // The next read of the outbox by name fails as a flaky disk would.
+        const read = fs.readFileSync;
+        let failed = 0;
+        fs.readFileSync = function (target, ...rest) {
+            if (target === file && !failed++) throw Object.assign(new Error(code + ': i/o error'), { code });
+            return read.call(this, target, ...rest);
+        };
+        try {
+            // Not resumed: refused as already attempted, and nothing else changes.
+            await assert.rejects(f.client.bootstrapPrimaryCompanion({ history: async () => snap }), { code: 'PRIMARY_BOOTSTRAP_ALREADY_ATTEMPTED' });
+        } finally { fs.readFileSync = read; }
+        assert.equal(failed, 1, code);
+        assert.ok(fs.existsSync(file), code + ': the outbox is still there');
+    }
+    const read = fs.readFileSync;
+    let failed = 0;
+    fs.readFileSync = function (target, ...rest) {
+        if (target === file && !failed++) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' });
+        return read.call(this, target, ...rest);
+    };
+    let result;
+    try { result = await f.client.bootstrapPrimaryCompanion({ history: async () => chatSnapshot(5), resume: true }); }
+    finally { fs.readFileSync = read; }
+    assert.equal(failed, 1);
+    assert.equal(result.status, 'sent');
+    assert.equal(sha(notificationOf(messages(f)[1]).initialHistBootstrapInlinePayload), pinned.sha256);
+    assert.equal(fs.existsSync(file), false);
+
+    // One that was read and names another transaction still goes.
+    const g = await bootstrapFixture(t);
+    fs.writeFileSync(outboxFile(g), JSON.stringify({ ...pinned, txId: crypto.randomUUID() }), { mode: 0o600 });
+    await g.client.bootstrapPrimaryCompanion({ history: async () => snap });
+    assert.equal(fs.existsSync(outboxFile(g)), false);
+});
+
 test('losses, evictions and the capture origin are reported with the history', async t => {
     const f = await bootstrapFixture(t);
     const snap = { ...chatSnapshot(2), losses: [{ reason: 'undecryptable', ids: ['L1', 'L2'] }, { reason: 'store-disabled', from: 1, to: 2 }],
