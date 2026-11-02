@@ -525,3 +525,242 @@ test('a real store snapshot goes through the encoder', (t) => {
   assert.deepEqual(sync.phoneNumberToLidMappings, [{ pnJID: ANA, lidJID: '99999@lid' }]);
   assert.deepEqual(sync.pushnames, [{ ID: ANA, pushname: 'Ana' }, { ID: BOB, pushname: 'Ana' }]);
 });
+
+// ─── one contact, two jids ──────────────────────────────────────────────────
+//
+// A contact first seen by lid and later by phone number (or the other way
+// round) can be two chats in the store, tied by setChatMeta on both sides. The
+// official phone shows one chat for them, so Web must get one conversation:
+// under the phone number, with both jids, and every message once.
+
+const ANA_LID = '99999@lid';
+
+test('a contact seen by number and by lid goes over as one conversation, its records merged in time order', () => {
+  const snap = snapshot({
+    seq: 9,
+    chats: [
+      { id: ANA_LID, pnJid: ANA, lidJid: ANA_LID, name: 'Ana (lid)', conversationTimestamp: T + 50, unreadCount: 2, ephemeral: { seconds: 86400, setAt: T + 40 } },
+      { id: BOB, conversationTimestamp: T + 40, unreadCount: 1 },
+      { id: ANA, pnJid: ANA, lidJid: ANA_LID, name: 'Ana', conversationTimestamp: T + 30, unreadCount: 3, ephemeral: { seconds: 604800, setAt: T + 10 } }
+    ],
+    records: {
+      [ANA_LID]: [rec('L1', 5, T + 20), rec('L2', 6, T + 50)],
+      [BOB]: [rec('B1', 4, T + 40)],
+      [ANA]: [rec('A1', 1, T + 10, { fromMe: true }), rec('A2', 2, T + 20), rec('A3', 3, T + 30)]
+    }
+  });
+  const sync = decodeSync(buildHistorySync(snap));
+
+  // One conversation, where the first of its chats stood, under the number.
+  assert.deepEqual(sync.conversations.map(c => c.ID), [ANA, BOB]);
+  const [ana, bob] = sync.conversations;
+  // In time order; within the same second, the chats in snapshot order.
+  assert.deepEqual(ids(ana), ['A1', 'L1', 'A2', 'A3', 'L2']);
+  assert.deepEqual(ana.messages.map(m => m.msgOrderID), [1, 2, 3, 4, 5]);
+  assert.deepEqual(ana.messages.map(m => m.message.key.remoteJID), [ANA, ANA, ANA, ANA, ANA]);
+  assert.equal(ana.messages[0].message.key.fromMe, true);
+  assert.equal(ana.pnJID, ANA);
+  assert.equal(ana.lidJID, ANA_LID);
+  assert.equal(ana.conversationTimestamp, T + 50, 'the latest of the two');
+  assert.equal(ana.unreadCount, 5, 'both chats unread, added');
+  assert.equal(ana.name, 'Ana', 'the name of the chat under the number');
+  // The timer set last is the one in force.
+  assert.equal(ana.ephemeralExpiration, 86400);
+  assert.equal(ana.ephemeralSettingTimestamp, T + 40);
+  // Bob is as he was, and the mapping still goes over once.
+  assert.deepEqual(ids(bob), ['B1']);
+  assert.equal(bob.unreadCount, 1);
+  assert.deepEqual(sync.phoneNumberToLidMappings, [{ pnJID: ANA, lidJID: ANA_LID }]);
+  assert.deepEqual(exportedCounts(snap), { chats: 2, records: 6 });
+});
+
+test('either side naming the other is a tie, and the number is the conversation even without its own chat', () => {
+  // The lid chat began before the pairing was known and was never told; the number's chat names it.
+  const byNumber = decodeSync(buildHistorySync(snapshot({
+    chats: [
+      { id: ANA, pnJid: ANA, lidJid: ANA_LID, conversationTimestamp: T + 2, unreadCount: 0 },
+      { id: ANA_LID, conversationTimestamp: T + 1, unreadCount: 1 }
+    ],
+    records: { [ANA]: [rec('A1', 2, T + 2)], [ANA_LID]: [rec('L1', 1, T + 1)] }
+  })));
+  assert.deepEqual(byNumber.conversations.map(c => [c.ID, c.pnJID, c.lidJID, ids(c)]), [[ANA, ANA, ANA_LID, ['L1', 'A1']]]);
+  assert.equal(byNumber.conversations[0].unreadCount, 1);
+
+  // Only the lid chat knows the number, and the number's chat knows nothing.
+  const byLid = decodeSync(buildHistorySync(snapshot({
+    chats: [
+      { id: ANA_LID, pnJid: ANA, conversationTimestamp: T + 2, unreadCount: 0 },
+      { id: ANA, conversationTimestamp: T + 1, unreadCount: 0 }
+    ],
+    records: { [ANA_LID]: [rec('L1', 2, T + 2)], [ANA]: [rec('A1', 1, T + 1)] }
+  })));
+  assert.deepEqual(byLid.conversations.map(c => [c.ID, c.pnJID, c.lidJID, ids(c)]), [[ANA, ANA, ANA_LID, ['A1', 'L1']]]);
+
+  // Two lid chats that both name the number, and no chat under it: one conversation, under the number.
+  const lids = decodeSync(buildHistorySync(snapshot({
+    chats: [
+      { id: ANA_LID, pnJid: ANA, lidJid: ANA_LID, conversationTimestamp: T + 2, unreadCount: 0 },
+      { id: '66666@lid', pnJid: ANA, lidJid: '66666@lid', conversationTimestamp: T + 1, unreadCount: 0 }
+    ],
+    records: { [ANA_LID]: [rec('L1', 2, T + 2)], '66666@lid': [rec('K1', 1, T + 1)] }
+  })));
+  assert.deepEqual(lids.conversations.map(c => [c.ID, c.pnJID, c.lidJID, ids(c)]), [[ANA, ANA, ANA_LID, ['K1', 'L1']]]);
+});
+
+test('a message kept under both jids goes over once, and a tombstone under either wins', () => {
+  const snap = snapshot({
+    seq: 12,
+    chats: [
+      { id: ANA, pnJid: ANA, lidJid: ANA_LID, conversationTimestamp: T + 5, unreadCount: 0 },
+      { id: ANA_LID, pnJid: ANA, lidJid: ANA_LID, conversationTimestamp: T + 4, unreadCount: 0 }
+    ],
+    records: {
+      [ANA]: [
+        rec('M1', 1, T + 1),
+        rec('M2', 2, T + 2, { raw: Buffer.from('M2 as first stored') }),
+        rec('M3', 3, T + 3, { tombstone: 'revoked', raw: undefined }),
+        rec('M4', 4, T + 4, { tombstone: 'expired', raw: undefined }),
+        rec('M5', 5, T + 5)
+      ],
+      [ANA_LID]: [
+        // Revoked here, after the copy under the number was stored.
+        rec('M1', 6, T + 1, { tombstone: 'revoked', raw: undefined }),
+        // Two copies with content: the one the store changed last.
+        rec('M2', 7, T + 2, { raw: Buffer.from('M2 as edited') }),
+        // Content here, changed later than the revoke under the number: the revoke still wins.
+        rec('M3', 8, T + 3),
+        // Expired under the number: it does not come back from here.
+        rec('M4', 9, T + 4)
+      ]
+    }
+  });
+  const sync = decodeSync(buildHistorySync(snap));
+  assert.equal(sync.conversations.length, 1);
+  const [ana] = sync.conversations;
+  assert.deepEqual(ids(ana), ['M1', 'M2', 'M3', 'M5']);
+  assert.deepEqual(ana.messages.map(m => m.msgOrderID), [1, 2, 3, 4]);
+  const [m1, m2, m3, m5] = ana.messages.map(m => m.message);
+  for (const stub of [m1, m3]) {
+    assert.equal(stub.messageStubType, 1, stub.key.ID);
+    assert.ok(!('message' in stub), stub.key.ID);
+  }
+  assert.equal(Buffer.from(m2.message).toString(), 'M2 as edited');
+  assert.ok(!('messageStubType' in m5));
+  assert.deepEqual(exportedCounts(snap), { chats: 1, records: 4 });
+});
+
+test('chats that are not tied, groups, and chats of two different numbers go over as they were', () => {
+  const OLD = '40711111111@s.whatsapp.net', NEW = '40722222222@s.whatsapp.net';
+  const snap = snapshot({
+    chats: [
+      // A lid nobody has tied to a number.
+      { id: '88888@lid', lidJid: '88888@lid', conversationTimestamp: T + 9, unreadCount: 1 },
+      // A lid that names a number with no chat of its own: alone, under its lid.
+      { id: '77777@lid', pnJid: BOB, lidJid: '77777@lid', conversationTimestamp: T + 8, unreadCount: 0 },
+      // A group is never a person, whatever its metadata says.
+      { id: GROUP, pnJid: ANA, lidJid: ANA_LID, name: 'Family', conversationTimestamp: T + 7, unreadCount: 2 },
+      { id: ANA, conversationTimestamp: T + 6, unreadCount: 0 },
+      // A number change: the lid now belongs to the new number, and the old number's chat stays its own.
+      { id: OLD, pnJid: OLD, lidJid: '55555@lid', conversationTimestamp: T + 5, unreadCount: 0 },
+      { id: '55555@lid', pnJid: NEW, lidJid: '55555@lid', conversationTimestamp: T + 4, unreadCount: 0 },
+      { id: NEW, pnJid: NEW, lidJid: '55555@lid', conversationTimestamp: T + 3, unreadCount: 0 }
+    ],
+    records: {
+      // Not in time order: an untied chat is not re-sorted.
+      '88888@lid': [rec('X2', 2, T + 2), rec('X1', 1, T + 1)],
+      '77777@lid': [rec('Y1', 3, T + 3)],
+      [GROUP]: [rec('G1', 4, T + 4, { participant: ANA_LID })],
+      [ANA]: [rec('A1', 5, T + 5)],
+      [OLD]: [rec('O1', 6, T + 1)],
+      '55555@lid': [rec('N1', 7, T + 2)],
+      [NEW]: [rec('N2', 8, T + 3)]
+    }
+  });
+  const sync = decodeSync(buildHistorySync(snap));
+  assert.deepEqual(sync.conversations.map(c => [c.ID, ids(c)]), [
+    ['88888@lid', ['X2', 'X1']],
+    ['77777@lid', ['Y1']],
+    [GROUP, ['G1']],
+    [ANA, ['A1']],
+    [OLD, ['O1']],
+    [NEW, ['N1', 'N2']]
+  ]);
+  const [lone, named, group, ana, old, now] = sync.conversations;
+  assert.equal(lone.lidJID, '88888@lid');
+  assert.equal(named.pnJID, BOB);
+  assert.equal(named.lidJID, '77777@lid');
+  assert.equal(group.name, 'Family');
+  assert.equal(group.unreadCount, 2);
+  assert.equal(group.messages[0].message.key.remoteJID, GROUP);
+  assert.ok(!('pnJID' in ana) && !('lidJID' in ana));
+  assert.equal(old.lidJID, '55555@lid');
+  assert.deepEqual([now.pnJID, now.lidJID], [NEW, '55555@lid']);
+});
+
+test('recordsAfter and the export give the merged result for a delta', () => {
+  const snap = snapshot({
+    seq: 9,
+    chats: [
+      { id: ANA, pnJid: ANA, lidJid: ANA_LID, name: 'Ana', conversationTimestamp: T + 4, unreadCount: 1 },
+      { id: BOB, conversationTimestamp: T + 3, unreadCount: 0 },
+      { id: ANA_LID, pnJid: ANA, lidJid: ANA_LID, conversationTimestamp: T + 2, unreadCount: 2 }
+    ],
+    records: {
+      [ANA]: [
+        rec('A1', 1, T + 1),
+        // Changed after the cutoff, but revoked under the lid before it: Web already has the stub.
+        rec('A2', 7, T + 2)
+      ],
+      [BOB]: [rec('B1', 2, T + 3)],
+      [ANA_LID]: [
+        rec('A2', 3, T + 2, { tombstone: 'revoked', raw: undefined }),
+        rec('L1', 6, T + 4)
+      ]
+    },
+    pushNames: [{ id: ANA, pushname: 'Ana' }, { id: ANA_LID, pushname: 'Ana' }, { id: BOB, pushname: 'Bob' }]
+  });
+  // The full history has A2 as the stub.
+  const full = decodeSync(buildHistorySync(snap));
+  assert.deepEqual(full.conversations.map(c => [c.ID, ids(c)]), [[ANA, ['A1', 'A2', 'L1']], [BOB, ['B1']]]);
+  assert.equal(full.conversations[0].messages[1].message.messageStubType, 1);
+
+  const after = recordsAfter(snap, { seq: 4 });
+  // Only the lid chat has something new, and the number's chat comes with it, so the two still go over as one.
+  assert.deepEqual(after.chats.map(c => c.id), [ANA, ANA_LID]);
+  assert.deepEqual(after.records[ANA].map(r => r.id), []);
+  assert.deepEqual(after.records[ANA_LID].map(r => r.id), ['L1']);
+  assert.deepEqual(after.pushNames.map(p => p.id), [ANA, ANA_LID]);
+  assert.deepEqual(exportedCounts(after), { chats: 1, records: 1 });
+  const delta = decodeSync(buildHistorySync(after));
+  assert.deepEqual(delta.conversations.map(c => [c.ID, c.pnJID, c.lidJID, ids(c)]), [[ANA, ANA, ANA_LID, ['L1']]]);
+  assert.equal(delta.conversations[0].messages[0].msgOrderID, 1);
+  assert.equal(delta.conversations[0].messages[0].message.key.remoteJID, ANA);
+  // The same totals as the full history: one conversation, both chats' unread.
+  assert.equal(delta.conversations[0].unreadCount, 3);
+  assert.equal(delta.conversations[0].conversationTimestamp, T + 4);
+  assert.equal(delta.conversations[0].name, 'Ana');
+
+  // A revoke after the cutoff under either jid goes over as the stub.
+  const revoked = recordsAfter({ ...snap, records: { ...snap.records, [ANA_LID]: [rec('A2', 8, T + 2, { tombstone: 'revoked', raw: undefined })] } }, { seq: 4 });
+  const stub = decodeSync(buildHistorySync(revoked)).conversations;
+  assert.deepEqual(stub.map(c => [c.ID, ids(c)]), [[ANA, ['A2']]]);
+  assert.equal(stub[0].messages[0].message.messageStubType, 1);
+});
+
+test('a real store with a contact under both jids exports one conversation', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whalib-phe-'));
+  const store = PrimaryMessageStore.open({ dir, phone: '40712345678', now: () => (T + 1000) * 1000 });
+  t.after(() => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const content = (id, chat, ts) => store.recordIncoming({ id, chat, fromMe: false, ts, raw: textMessage('text ' + id), info: { kind: 'content' } });
+  // Before the pairing was known the chat was the lid; after, the number. Both sides carry the tie.
+  content('LT1', ANA_LID, T + 10);
+  content('LT2', ANA, T + 20);
+  store.setChatMeta(ANA, { pnJid: ANA, lidJid: ANA_LID });
+  store.setChatMeta(ANA_LID, { pnJid: ANA, lidJid: ANA_LID });
+  content('B1', BOB, T + 15);
+
+  const sync = decodeSync(buildHistorySync(store.snapshot()));
+  assert.deepEqual(sync.conversations.map(c => [c.ID, ids(c)]), [[ANA, ['LT1', 'LT2']], [BOB, ['B1']]]);
+  assert.deepEqual([sync.conversations[0].pnJID, sync.conversations[0].lidJID], [ANA, ANA_LID]);
+  assert.ok(Buffer.from(sync.conversations[0].messages[0].message.message).equals(textMessage('text LT1')));
+});
