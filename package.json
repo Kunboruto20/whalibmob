@@ -15,6 +15,7 @@
     "lib/**/*.js",
     "tools/**/*.js",
     "README.md",
+    "docs/**/*.md",
     "llms.txt",
     "LICENSE",
     ".env.example"
