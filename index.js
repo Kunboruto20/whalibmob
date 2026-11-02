@@ -278,7 +278,7 @@ module.exports = {
   StoreBackend,
   FileBackend,
   MemoryBackend,
-  // One database instead of 834 files. Needs Node 22.5+ for its built-in
+  // One database instead of 844 files. Needs Node 22.5+ for its built-in
   // node:sqlite, or better-sqlite3 installed; neither is a dependency, and
   // FileBackend stays the default that needs nothing.
   SqliteBackend,

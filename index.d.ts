@@ -160,7 +160,11 @@ export interface WhalibmobClientOptions {
    * history. Default off. `true` keeps the defaults (100 messages a chat,
    * 20 000 in all); an object bounds them. Never used on a companion session.
    * One process at a time holds a number's store (`<phone>.primary-messages.lock`);
-   * another gets `PRIMARY_MESSAGE_STORE_BUSY`. `setAsideCorrupt: true` renames a
+   * another gets `PRIMARY_MESSAGE_STORE_BUSY`, with `err.holder` naming it. A lock
+   * whose holder is gone but cannot be proven so is broken on purpose
+   * (`Primary.MessageStore.PrimaryMessageStore.breakLock`); a store whose lock was
+   * broken reports `PRIMARY_MESSAGE_STORE_LOST` once and is let go until the next
+   * login. `setAsideCorrupt: true` renames a
    * store that cannot be read (`PRIMARY_MESSAGE_STORE_LOG_CORRUPT`,
    * `PRIMARY_MESSAGE_STORE_SNAPSHOT_CORRUPT`) to `<file>.corrupt-<time>` and starts
    * a new one, which captures from then on. Default `false`: the store stays off.
@@ -1810,7 +1814,7 @@ export interface SqliteSessionRow {
 }
 
 /**
- * The session in one database instead of 834 files.
+ * The session in one database instead of 844 files.
  *
  * Uses Node's built-in `node:sqlite` (22.5.0 and later) when it is there, and
  * `better-sqlite3` when it is not. Neither is a dependency of this package —

@@ -288,7 +288,7 @@ npm install -g whalibmob
     - [De Onde Vem a Pasta](#de-onde-vem-a-pasta)
     - [Descobrindo os Caminhos por Conta Própria](#descobrindo-os-caminhos-por-conta-própria)
     - [Onde uma Sessão Fica Guardada](#onde-uma-sessão-fica-guardada)
-    - [Um Banco em Vez de 842 Arquivos](#um-banco-em-vez-de-842-arquivos)
+    - [Um Banco em Vez de 844 Arquivos](#um-banco-em-vez-de-844-arquivos)
     - [Movendo uma Sessão Entre Backends](#movendo-uma-sessão-entre-backends)
   - [Utilitários do Signal Store](#utilitários-do-signal-store)
     - [makeCacheableSignalKeyStore](#makecacheablesignalkeystore)
@@ -3311,7 +3311,8 @@ As chaves são nomes lógicos e não nomes de arquivo — `auth`, `signal`,
 `sender-key`, `tc-token`, `device-cache`, `lid-mapping`,
 `lid-reverse-mapping`, `history`, `messages`, `app-state`, `app-state-keys`,
 as do primário `primary-messages-log`, `primary-messages`,
-`primary-history-outbox` e `primary-linking`, e `` `pre-key/${id}` `` para cada
+`primary-messages-write-failed`, `primary-history-outbox` e `primary-linking`,
+e `` `pre-key/${id}` `` para cada
 uma das 812 pré-chaves de uso único. Os arquivos de trava não têm chave:
 pertencem a um processo em execução, não à sessão.
 
@@ -3368,11 +3369,12 @@ de meio arquivo.
 > sessão — e ligá-los ao cliente é o próximo passo. Nada aqui muda como uma
 > sessão é criada ou conectada hoje.
 
-### Um Banco em Vez de 842 Arquivos
+### Um Banco em Vez de 844 Arquivos
 
-O estado de um número são 30 arquivos nomeados (15 para cada metade do número,
-entre eles o armazenamento de mensagens, a caixa de saída do histórico e o
-diário de vínculo do primário) mais um arquivo para cada uma das suas 812
+O estado de um número são 32 arquivos nomeados (16 para cada metade do número,
+entre eles o armazenamento de mensagens, o seu marcador de falha de gravação, a
+caixa de saída do histórico e o diário de vínculo do primário) mais um arquivo
+para cada uma das suas 812
 pré-chaves de uso único, e os dois arquivos de trava enquanto um programa os
 segura. Num notebook ninguém percebe. Num celular sob Termux, num contêiner com
 orçamento pequeno de inodes, ou com cinquenta números numa pasta, são mais de
