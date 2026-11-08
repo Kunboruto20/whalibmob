@@ -173,9 +173,11 @@ test('parseCompanionQr rejects malformed input', () => {
 });
 
 test('allocateCompanionDeviceIndex starts at 1 and advances', () => {
-  assert.deepEqual(allocateCompanionDeviceIndex([]), { keyIndex: 1, validIndexes: [] });
-  assert.deepEqual(allocateCompanionDeviceIndex([1]), { keyIndex: 2, validIndexes: [1] });
-  assert.deepEqual(allocateCompanionDeviceIndex([1, 3]), { keyIndex: 4, validIndexes: [1, 3] });
+  // validIndexes must include the new companion's own index, otherwise official
+  // clients drop the device and never encrypt to it.
+  assert.deepEqual(allocateCompanionDeviceIndex([]), { keyIndex: 1, validIndexes: [1] });
+  assert.deepEqual(allocateCompanionDeviceIndex([1]), { keyIndex: 2, validIndexes: [1, 2] });
+  assert.deepEqual(allocateCompanionDeviceIndex([1, 3]), { keyIndex: 4, validIndexes: [1, 3, 4] });
 });
 
 test('shared adv_secret HKDF label matches companion path', () => {
