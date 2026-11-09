@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>whalibmob UI</title>
+<style>
+  :root{--bg:#0b141a;--panel:#111b21;--panel2:#202c33;--accent:#00a884;--txt:#e9edef;--dim:#8696a0;--in:#005c4b;--out:#202c33}
+  *{box-sizing:border-box;font-family:system-ui,Segoe UI,Roboto,sans-serif}
+  body{margin:0;height:100vh;display:flex;background:var(--bg);color:var(--txt)}
+  #side{width:320px;min-width:280px;background:var(--panel);border-right:1px solid #222d34;display:flex;flex-direction:column}
+  #main{flex:1;display:flex;flex-direction:column;background:#0b141a}
+  .hdr{padding:12px 14px;background:var(--panel2);display:flex;align-items:center;gap:8px;font-weight:600}
+  .hdr small{color:var(--dim);font-weight:400}
+  select,input,button,textarea{font-size:14px}
+  select,input,textarea{background:var(--panel2);color:var(--txt);border:1px solid #2a3942;border-radius:8px;padding:8px}
+  button{background:var(--accent);color:#06251d;border:0;border-radius:8px;padding:8px 12px;font-weight:600;cursor:pointer}
+  button.ghost{background:#2a3942;color:var(--txt)}
+  .row{display:flex;gap:6px;padding:8px 10px}
+  .row>*{flex:1}
+  #chats{flex:1;overflow:auto}
+  .chat{padding:11px 14px;border-bottom:1px solid #1a242b;cursor:pointer;display:flex;justify-content:space-between}
+  .chat:hover,.chat.active{background:var(--panel2)}
+  .chat .num{font-weight:600}.chat .prev{color:var(--dim);font-size:12px;max-width:180px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  #msgs{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:6px;background:#0b141a}
+  .m{max-width:72%;padding:7px 10px;border-radius:8px;font-size:14px;line-height:1.35;word-wrap:break-word}
+  .m.in{background:var(--out);align-self:flex-start}
+  .m.out{background:var(--in);align-self:flex-end}
+  .m .t{display:block;color:var(--dim);font-size:10px;margin-top:3px;text-align:right}
+  #compose{display:flex;gap:8px;padding:10px;background:var(--panel2)}
+  #compose textarea{flex:1;resize:none;height:42px}
+  .empty{color:var(--dim);margin:auto;text-align:center;padding:20px}
+  .pill{font-size:11px;color:var(--dim)}
+  .dot{width:8px;height:8px;border-radius:50%;background:#f15c6d;display:inline-block;margin-right:6px}
+  .dot.on{background:var(--accent)}
+  label.up{display:block;padding:8px 10px}
+  input[type=file]{width:100%}
+</style>
+</head>
+<body>
+  <div id="side">
+    <div class="hdr">whalibmob <small id="base"></small></div>
+
+    <div class="row">
+      <select id="numsel"><option value="">— alege număr —</option></select>
+      <button id="connectBtn" style="flex:0 0 auto">Connect</button>
+    </div>
+    <div class="pill" style="padding:0 12px"><span class="dot" id="statusDot"></span><span id="statusTxt">neconectat</span></div>
+
+    <details style="padding:6px 10px">
+      <summary style="cursor:pointer;color:var(--dim)">⬆ Upload sesiune (number.json, prekeys, tctoken…)</summary>
+      <label class="up">Număr: <input id="upNum" placeholder="4474..." style="width:100%"></label>
+      <label class="up">Fișiere: <input id="upFiles" type="file" multiple></label>
+      <div class="row"><button id="upBtn">Încarcă în folderul sesiunii</button></div>
+      <div class="pill" id="upMsg" style="padding:0 10px"></div>
+    </details>
+
+    <div class="hdr" style="background:transparent;font-size:13px;color:var(--dim)">CHAT-URI</div>
+    <div id="chats"><div class="empty">Conectează un număr ca să apară mesajele.</div></div>
+  </div>
+
+  <div id="main">
+    <div class="hdr" id="mainHdr"><span id="chatTitle">Selectează un chat</span></div>
+    <div id="msgs"><div class="empty">Niciun chat selectat.</div></div>
+    <div id="compose">
+      <textarea id="text" placeholder="Scrie un mesaj…  (Enter = trimite)"></textarea>
+      <button id="sendBtn">Trimite</button>
+    </div>
+  </div>
+
+<script>
+const $ = s => document.querySelector(s);
+let activeNumber = '', activeChat = '', es = null;
+const store = {}; // number -> { chat -> [msgs] }
+
+async function api(path, opts){ const r = await fetch(path, opts); return r.json(); }
+
+async function loadSessions(){
+  const d = await api('/api/sessions');
+  $('#base').textContent = d.base || '';
+  const sel = $('#numsel');
+  sel.innerHTML = '<option value="">— alege număr —</option>' +
+    (d.numbers||[]).map(n=>`<option value="${n}">+${n}</option>`).join('');
+}
+
+function setStatus(on, txt){ $('#statusDot').className='dot'+(on?' on':''); $('#statusTxt').textContent=txt; }
+
+function renderChats(){
+  const chats = store[activeNumber] || {};
+  const keys = Object.keys(chats).sort((a,b)=>(chats[b].slice(-1)[0]?.ts||0)-(chats[a].slice(-1)[0]?.ts||0));
+  const el = $('#chats');
+  if(!keys.length){ el.innerHTML='<div class="empty">Încă niciun mesaj. Trimite unul sau așteaptă.</div>'; return; }
+  el.innerHTML = keys.map(c=>{
+    const last = chats[c].slice(-1)[0]||{};
+    return `<div class="chat ${c===activeChat?'active':''}" data-c="${c}">
+      <div><div class="num">+${c}</div><div class="prev">${(last.text||'').replace(/</g,'&lt;')}</div></div></div>`;
+  }).join('');
+  el.querySelectorAll('.chat').forEach(x=>x.onclick=()=>{activeChat=x.dataset.c;renderChats();renderMsgs();});
+}
+
+function renderMsgs(){
+  $('#chatTitle').textContent = activeChat ? '+'+activeChat : 'Selectează un chat';
+  const msgs = (store[activeNumber]||{})[activeChat] || [];
+  const el = $('#msgs');
+  if(!activeChat){ el.innerHTML='<div class="empty">Niciun chat selectat.</div>'; return; }
+  el.innerHTML = msgs.map(m=>`<div class="m ${m.fromMe?'out':'in'}">${(m.text||'').replace(/</g,'&lt;')}
+    <span class="t">${new Date(m.ts).toLocaleTimeString()}</span></div>`).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+function addMsg(m){
+  const n = activeNumber; if(!store[n]) store[n]={};
+  const c = m.chat || m.from;
+  if(!store[n][c]) store[n][c]=[];
+  store[n][c].push(m);
+  renderChats();
+  if(c===activeChat) renderMsgs();
+}
+
+function openStream(number){
+  if(es) es.close();
+  es = new EventSource('/api/events?number='+number);
+  es.onmessage = ev=>{
+    const {type,data} = JSON.parse(ev.data);
+    if(type==='message') addMsg(data);
+    if(type==='status') setStatus(data.state==='connected', data.state);
+  };
+}
+
+$('#connectBtn').onclick = async ()=>{
+  const n = $('#numsel').value; if(!n) return alert('Alege un număr');
+  activeNumber=n; setStatus(false,'conectare…');
+  if(!store[n]) store[n]={};
+  renderChats(); renderMsgs(); openStream(n);
+  const r = await api('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({number:n})});
+  setStatus(!r.error, r.error?('eroare: '+r.error):'conectat +'+n);
+};
+
+$('#sendBtn').onclick = send;
+$('#text').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+async function send(){
+  const text=$('#text').value.trim(); if(!text||!activeNumber||!activeChat) return;
+  $('#text').value='';
+  await api('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({number:activeNumber,to:activeChat,text})});
+}
+
+$('#upBtn').onclick = async ()=>{
+  const number=$('#upNum').value.replace(/\D/g,''); const files=[...$('#upFiles').files];
+  if(!number||!files.length) return alert('Număr + fișiere');
+  $('#upMsg').textContent='se încarcă…';
+  const payload=[];
+  for(const f of files){
+    const b64 = await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result.split(',')[1]);r.readAsDataURL(f);});
+    payload.push({name:f.name,b64});
+  }
+  const r = await api('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({number,files:payload})});
+  $('#upMsg').textContent = r.ok?(`✓ ${r.written} fișiere în ${r.dir}`):('eroare: '+(r.error||''));
+  loadSessions();
+};
+
+// allow typing a new destination: click the chat header area
+$('#chatTitle').onclick = ()=>{ const c=prompt('Număr destinatar (ex 4474...):'); if(c){activeChat=c.replace(/\D/g,'');renderMsgs();} };
+
+loadSessions();
+</script>
+</body>
+</html>
