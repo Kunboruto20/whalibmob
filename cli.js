@@ -1330,6 +1330,13 @@ async function doConnectWebQr(phone) {
     out('  the QR set expired — run /qrcode ' + phone + ' again for a fresh one');
   });
 
+  // WhatsApp can offer a passkey link to an account that has a passkey. A
+  // terminal has no authenticator to answer with, so say what is happening and
+  // that the QR, drawn again just above, still works.
+  client.on('passkey_request', () => {
+    out('  this account offered a passkey link, which the shell cannot answer; scan the QR above instead');
+  });
+
   client.once('paired', (pp) => {
     out('');
     out('  scanned — linked as ' + pp.jid + (pp.lid ? '  (' + pp.lid + ')' : ''));

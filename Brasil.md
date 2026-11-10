@@ -2753,6 +2753,8 @@ O `sendPasskeyResponse()` recebe uma asserção WebAuthn: `{ id, rawId, type, re
 
 O código em `passkey_confirmation` é a salvaguarda. Cada lado se compromete com um valor aleatório antes de ver o do outro, e o código é derivado dos dois; os mesmos oito caracteres nas duas telas significam que os dois dispositivos falaram um com o outro, e não com algo no meio. Quando o celular tinha o QR deste cliente à sua frente instantes antes, essa comparação é desnecessária: `skipHandoffUx` vem `true`, o whalibmob envia a confirmação por conta própria e `autoConfirmed` diz isso. Passe `{ passkeyAutoConfirm: false }` ao `connectWeb` para sempre confirmar você mesmo.
 
+Uma oferta de passkey não tira o QR de cena. O segredo dentro dele é trocado quando a oferta chega, então o `qr` dispara de novo com uma string nova logo antes do `passkey_request`, e escanear essa ainda vincula. Uma oferta que você não responde pode simplesmente ser ignorada.
+
 A passkey pertence à conta e fica com quem a guarda: o whalibmob nunca a vê, só a resposta assinada que você entrega. Não há autenticador na biblioteca, nem na CLI.
 
 Um passo que falha dispara `passkey_error` (para o que o servidor envia) ou lança um erro na chamada que você fez, com um `err.code`: `PASSKEY_REFUSED` (o servidor disse não; `err.serverCode` e `err.serverText` dizem por quê), `PASSKEY_NO_RESPONSE`, `PASSKEY_NO_REF`, `PASSKEY_NOT_PENDING`, `PASSKEY_NOT_READY` (confirmação pedida antes do `passkey_confirmation`), `PASSKEY_BAD_CONTINUATION`, `PASSKEY_ALREADY_LINKED`, `PASSKEY_NOT_CONNECTED`, `PASSKEY_WRONG_MODE`.

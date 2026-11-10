@@ -131,6 +131,8 @@ await client.connectWeb('919634847671')
 
 The code in `passkey_confirmation` is the safeguard. Each side commits to a random value before it sees the other's, and the code is derived from both, so the same eight characters on both screens mean the two devices talked to each other and not to something in between. When the phone had this client's QR in front of it moments before, that comparison is unnecessary: `skipHandoffUx` is `true`, whalibmob sends the confirmation itself and `autoConfirmed` says so. Pass `{ passkeyAutoConfirm: false }` to `connectWeb` to always confirm yourself.
 
+A passkey offer does not take the QR away. The secret inside it is replaced when the offer arrives, so `qr` fires again with a fresh string just before `passkey_request`, and scanning that one still links. An offer you do not answer can simply be ignored.
+
 The passkey belongs to the account and stays with whoever holds it: whalibmob never sees it, only the signed answer you pass in. There is no authenticator in the library, and none in the CLI.
 
 A step that fails raises `passkey_error` (for the server's pushes) or throws from the call you made, with an `err.code`: `PASSKEY_REFUSED` (the server said no; `err.serverCode` and `err.serverText` say why), `PASSKEY_NO_RESPONSE`, `PASSKEY_NO_REF`, `PASSKEY_NOT_PENDING`, `PASSKEY_NOT_READY` (confirmation asked before `passkey_confirmation`), `PASSKEY_BAD_CONTINUATION`, `PASSKEY_ALREADY_LINKED`, `PASSKEY_NOT_CONNECTED`, `PASSKEY_WRONG_MODE`.

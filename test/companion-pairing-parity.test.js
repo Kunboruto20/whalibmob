@@ -176,7 +176,8 @@ test('a completion that names another ref does not touch the adv secret', async 
   await c._handleCompanionFinish(finishNotification('REF-OTHER'));
   assert.equal(c._store.advSecretKey, null);
   assert.equal(c.iqs.length, 0, 'nothing is sent for a notification that is not ours');
-  assert.match(c.events('error')[0].message, /another pairing request/);
+  assert.deepEqual(c.events('error'), [], 'and it is not the caller\'s problem');
+  assert.equal(c._store.pairingRef, 'REF-ONE', 'the pending code is still good');
 
   await c._handleCompanionFinish(finishNotification('REF-ONE'));
   assert.ok(c._store.advSecretKey, 'the matching ref goes through');
@@ -648,4 +649,69 @@ test('the history settings ask for call logs, group history and thumbnails', () 
     supportCallLogHistory: false, supportGroupHistory: false, thumbnailSyncDaysLimit: 0
   }));
   assert.deepEqual([off[6], off[15], off[19]], [0, 0, 0]);
+});
+
+// ─── nothing here may take the program down ──────────────────────────────────
+
+test('a listener that throws does not become an unhandled rejection', async () => {
+  const rejections = [];
+  const onRejection = (reason) => rejections.push(reason);
+  process.on('unhandledRejection', onRejection);
+  try {
+    const boom = (name) => (event) => { if (event === name) throw new Error('listener threw'); return true; };
+
+    const a = client({ reply: passkeyReply });
+    a.emit = boom('passkey_request');
+    a._handleNotification(notification('passkey_prologue_request',
+      [new BinaryNode('passkey_request_options', {}, Buffer.from(JSON.stringify(OPTIONS)))]));
+
+    const b = client({ reply: passkeyReply });
+    b.emit = boom('passkey_error');
+    b._handleNotification(notification('crsc_continuation', []));
+
+    const c = client();
+    c._store.advSecretKey = crypto.randomBytes(32).toString('base64');
+    c.emit = boom('error');
+    c._handleIq(pairSuccess(c._store, { hmacKey: crypto.randomBytes(32) }).node);
+
+    await flush(); await flush(); await flush();
+    assert.deepEqual(rejections, []);
+    assert.deepEqual(child(c.sent[0], 'error').attrs, { code: '401', text: 'hmac-mismatch' },
+      'and the server is still told');
+  } finally {
+    process.removeListener('unhandledRejection', onRejection);
+  }
+});
+
+test('what the decoder hands over for the server is recognised', () => {
+  const { encodeNode, decodeNode } = require('../lib/BinaryNode');
+  const wire = decodeNode(encodeNode(notification('companion_reg_refresh',
+    [new BinaryNode('companion_reg_refresh', {}, null)])));
+  const c = client();
+  c._store.advSecretKey = 'c2VjcmV0';
+  c._handleNotification(wire);
+  assert.notEqual(c._store.advSecretKey, 'c2VjcmV0');
+});
+
+test('a QR on screen survives a passkey offer: it is drawn again with the new secret', async (t) => {
+  const c = client({ reply: passkeyReply });
+  t.after(() => c._stopQrRotation());
+  c._startQrRotation(['ref-a', 'ref-b']);
+  const before = c._store.advSecretKey;
+
+  c._handleNotification(notification('passkey_prologue_request',
+    [new BinaryNode('passkey_request_options', {}, Buffer.from(JSON.stringify(OPTIONS)))]));
+  await flush();
+
+  const after = c._store.advSecretKey;
+  assert.notEqual(after, before);
+  const qrs = c.events('qr');
+  assert.equal(qrs.length, 2);
+  assert.ok(qrs[1].qr.includes(after) && !qrs[1].qr.includes(before));
+  assert.deepEqual(c.emitted.map(e => e.name).filter(n => n !== 'notification'), ['qr', 'qr', 'passkey_request'],
+    'the fresh QR is out before the caller hears about the passkey');
+
+  // Scanning that QR links: the pair-success verifies under the new secret.
+  await c._handlePairSuccess(pairSuccess(c._store).node);
+  assert.equal(c._store.registered, true);
 });
