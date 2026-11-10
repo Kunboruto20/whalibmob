@@ -113,7 +113,7 @@ test('the token is keyed by sender and recipient as separate identities', () => 
   const plaintext = ensureMessageSecret(textPlaintext('bind both'));
   const secret = inspectMessage(plaintext).messageSecret;
 
-  // Recompute the token the way the native client / whatsmeow does:
+  // Recompute the token the way the native client does:
   // origMsgSender = us, modificationSender = the recipient.
   const key = generateMsgSecretKey('Report Token', MSG_ID, SENDER, RECIP, secret);
   const content = extractReportingTokenContent(plaintext, COMPILED);

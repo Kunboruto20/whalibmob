@@ -5,9 +5,9 @@
 // through that codec proves it agrees with itself; decoding with protobufjs
 // over this file, which shares nothing with it, does not.
 //
-// The field numbers are WhatsApp's. They come from the protobuf schema as it is
-// published in the whatsmeow project: proto/waHistorySync, proto/waWeb,
-// proto/waE2E and proto/waCommon. Only the fields the tests exercise are
+// The field numbers are WhatsApp's own, taken from the published WhatsApp
+// protobuf definitions: waHistorySync, waWeb, waE2E and waCommon. Only the
+// fields the tests exercise are
 // declared; anything else on the wire is skipped as an unknown field. What goes
 // on the wire depends on the field number and the wire type alone, so an enum
 // is declared int32, and an embedded Message the tests compare verbatim is
