@@ -184,6 +184,58 @@ export interface ConnectWebOptions {
   fetchVersion?: boolean;
   /** Emit the QR as a `wa.me/settings/linked_devices#…` link instead of the bare fields. */
   qrWrapUrl?: boolean;
+  /**
+   * Called once the phone has authorised this device and before the link is
+   * confirmed. Return `false` to turn the link down; `null` removes a callback
+   * set earlier.
+   */
+  prePair?: ((info: PrePairInfo) => boolean | void | Promise<boolean | void>) | null;
+  /**
+   * Passkey linking: send the confirmation without waiting for the caller when
+   * the phone needs no code comparison (`skipHandoffUx`). Default `true`.
+   */
+  passkeyAutoConfirm?: boolean;
+  /**
+   * Announce at login that chats are stored by LID. Default `true`; set `false`
+   * if your own storage is still keyed by phone number.
+   */
+  lidDbMigrated?: boolean;
+}
+
+/** Who a pair-success would link this device to. */
+export interface PrePairInfo {
+  jid: Jid;
+  lid: Jid | null;
+  /** What the primary runs, e.g. `android`. */
+  platform: string | null;
+  businessName: string | null;
+}
+
+/** WebAuthn request options in their JSON form; binary members are base64url. */
+export interface PasskeyRequestOptions {
+  challenge: string;
+  timeout?: number;
+  rpId?: string;
+  allowCredentials?: Array<{ id: string; type: string; transports?: string[] }>;
+  userVerification?: string;
+  extensions?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/** Bytes, or the same as base64url or base64 text. */
+export type PasskeyBytes = string | Buffer | Uint8Array | ArrayBuffer;
+
+/** A WebAuthn assertion — what `credential.toJSON()` returns in a browser. */
+export interface PasskeyAssertion {
+  id?: string;
+  rawId: PasskeyBytes;
+  type?: string;
+  response: {
+    clientDataJSON: PasskeyBytes;
+    authenticatorData: PasskeyBytes;
+    signature: PasskeyBytes;
+    userHandle?: PasskeyBytes | null;
+  };
 }
 
 export interface DisconnectOptions {
@@ -965,6 +1017,17 @@ export interface WhalibmobEvents {
   qr_timeout: () => void;
   pair_device: (p: { refs: string[] }) => void;
   paired: (p: { jid: Jid; lid: Jid; deviceIndex: number; platform: string }) => void;
+  /** Companion mode: a pair-success was turned down, here or by `prePair`. `error` fires too. */
+  pair_error: (p: { jid: Jid | null; lid: Jid | null; platform: string | null; err: Error }) => void;
+  /** Companion mode: the account can be linked with a passkey. Answer with `sendPasskeyResponse`. */
+  passkey_request: (p: { publicKey: PasskeyRequestOptions }) => void;
+  /**
+   * Companion mode: the code to compare with the phone. Unless `autoConfirmed`,
+   * call `sendPasskeyConfirmation` once the owner says it matches.
+   */
+  passkey_confirmation: (p: { code: string; skipHandoffUx: boolean; autoConfirmed: boolean }) => void;
+  /** Companion mode: a passkey step failed. `continuation` is false for the request itself. */
+  passkey_error: (p: { err: Error & { code?: string }; continuation: boolean }) => void;
   restart_required: (r: { reason?: string }) => void;
   web_ready_for_pairing: () => void;
 
@@ -1209,8 +1272,16 @@ export declare class WhalibmobClient extends EventEmitter {
   connectWeb(phoneNumber: string, opts?: ConnectWebOptions): Promise<this>;
   /** Alias of `connectWeb`. */
   initWeb(phoneNumber: string, opts?: ConnectWebOptions): Promise<this>;
-  /** Ask for an 8-character pairing code. Throws if the session is already linked. */
+  /**
+   * Ask for an 8-character pairing code. Resolves once the server has accepted
+   * the request; throws if it refuses (`err.code` is `PAIRING_CODE_*`) or if the
+   * session is already linked.
+   */
   requestPairingCode(phoneNumber?: string, customCode?: string): Promise<string>;
+  /** Companion mode: answer a `passkey_request` with the authenticator's assertion. */
+  sendPasskeyResponse(response: PasskeyAssertion): Promise<void>;
+  /** Companion mode: finish a passkey link once the code has been confirmed. */
+  sendPasskeyConfirmation(): Promise<void>;
   /** Mobile primary only: cached, bounded pending alerts, no authorization. */
   getPrimaryLinkInvitations(): PrimaryLinkInvitation[];
   /** Approve a separate companion on the current primary socket; never requests SMS. */
@@ -2264,6 +2335,7 @@ export declare const Hkdf: LibModule & {
 export declare const PairingCode: LibModule;
 export declare const CompanionPairing: LibModule;
 export declare const QrPairing: LibModule;
+export declare const PasskeyPairing: LibModule;
 export declare const WebVersion: LibModule;
 export declare const WebProto: LibModule;
 

@@ -101,7 +101,8 @@ async function main() {
   client.on('message',      (msg)      => console.log(msg.from, msg.decoded && msg.decoded.text));
 
   await client.connectWeb('40712345678', { syncFullHistory: true });
-  await client.requestPairingCode('40712345678');  // first run only; or listen for 'qr'
+  await client.requestPairingCode('40712345678');  // first run only; or listen for 'qr',
+                                                   // or 'passkey_request' on an account with a passkey
 }
 
 main().catch((err) => { console.error(err.message || err); process.exit(1); });
