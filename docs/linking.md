@@ -8,12 +8,13 @@
 
 Registering a number over SMS makes whalibmob that number's **own device**. Sometimes that is not what you want — the number is already in use on a phone, or the verification SMS never arrives. For those cases whalibmob can instead connect over a **WebSocket** and link itself to an account that already exists, exactly the way the WhatsApp Web and desktop clients do.
 
-There are two ways to link, and they reach the same place:
+There are three ways to link, and they reach the same place:
 
 - **Pairing code** — whalibmob gives you an 8-character code, the owner types it into their phone.
 - **QR code** — whalibmob draws a QR, the owner scans it with the phone's camera.
+- **Passkey** — the account's passkey signs a challenge, and the owner confirms a short code. Only offered by WhatsApp for accounts that have a passkey; see [Linking with a Passkey](#linking-with-a-passkey).
 
-Both link the number as a companion device, both leave the whole library working the same afterwards — same client, same methods, same events. The only difference is what the owner does: type a code, or scan a square.
+All of them link the number as a companion device, and all leave the whole library working the same afterwards — same client, same methods, same events. The only difference is what the owner does: type a code, scan a square, or approve with a passkey.
 
 > [!IMPORTANT]
 > The two modes are independent. SMS registration is unchanged and still the default; nothing about it is affected by linking. A single number can even have both a registered session and a linked session — they are stored in separate files and never share state.
@@ -43,7 +44,8 @@ client.on('connected', () => {
 // open the WebSocket connection as a companion
 await client.connectWeb('919634847671', { syncFullHistory: true })
 
-// ask for the code — returns immediately, the link completes later
+// ask for the code — resolves once the server has accepted the request;
+// the link completes later, when the owner types it in
 const code = await client.requestPairingCode('919634847671')
 console.log('enter this on the phone:', code)   // e.g. "K7M2QX4B"
 ```
@@ -51,6 +53,14 @@ console.log('enter this on the phone:', code)   // e.g. "K7M2QX4B"
 On the phone that owns the number:
 
 **WhatsApp → Settings → Linked Devices → Link a device → Link with phone number instead**, then type the code.
+
+`requestPairingCode()` waits for the server's answer before it hands the code out, so a code you are given is one the server is holding. If the server refuses the request, the call throws instead of returning a code that could never work:
+
+| `err.code` | Meaning |
+|---|---|
+| `PAIRING_CODE_REFUSED` | The server answered with an error. `err.serverCode` is its code: `400` means the request was not accepted (usually the number, or a `browser` name it does not recognise), `429` that too many codes were asked for and you should wait. |
+| `PAIRING_CODE_NO_RESPONSE` | No answer within 15 seconds, or the connection closed first. |
+| `PAIRING_CODE_NO_REF` | The answer did not carry the reference a code is tied to. |
 
 ### Linking by QR Code
 
@@ -84,13 +94,52 @@ On the phone that owns the number:
 
 **WhatsApp → Settings → Linked Devices → Link a device**, then point the camera at the QR.
 
-The `qr` string is what a WhatsApp camera reads: `ref,noise,identity,advSecret,platformId` — a one-time ref plus this client's public keys, comma-joined, the same fields WhatsApp Web itself renders. It rotates on its own (about a minute for the first, then shorter) until the account is scanned or the refs run out. `qrcode-terminal` is optional — without it you get the raw string on `qr` and can render it however you like (a PNG, a web page, an image in a chat). To emit the QR as a `wa.me/settings/linked_devices#…` link instead of the bare fields, pass `{ qrWrapUrl: true }` to `connectWeb`.
+The `qr` string is what a WhatsApp camera reads: `ref,noise,identity,advSecret,platformId` — a one-time ref plus this client's public keys, comma-joined, the same fields WhatsApp Web itself renders. The server can ask for the secret in it to be replaced while a QR is on screen; when it does, `qr` fires again for the same ref with the new string and the time it has left, so always draw the latest one. It rotates on its own (about a minute for the first, then shorter) until the account is scanned or the refs run out. `qrcode-terminal` is optional — without it you get the raw string on `qr` and can render it however you like (a PNG, a web page, an image in a chat). To emit the QR as a `wa.me/settings/linked_devices#…` link instead of the bare fields, pass `{ qrWrapUrl: true }` to `connectWeb`.
 
 Everything after the scan is identical to the pairing-code path: `paired`, a stream restart, then `connected`.
 
-### After the link — same for both paths
+### Linking with a Passkey
 
-A few seconds after the code is accepted (or the QR is scanned) you will see `paired`, the server restarts the stream, and `connected` fires on the new connection. From that point on everything else in this document applies unchanged:
+An account that has a passkey can be linked with it. This is not something you ask for: WhatsApp offers it, to an unlinked companion, by sending a WebAuthn challenge. whalibmob surfaces that as `passkey_request`, and from there you supply the one thing it cannot do itself — getting an authenticator to sign.
+
+```js
+client.on('passkey_request', async ({ publicKey }) => {
+  // publicKey is a WebAuthn request in its JSON form: challenge, rpId,
+  // allowCredentials..., binary members as base64url. Hand it to whatever
+  // holds the account's passkey. In a browser that is:
+  //
+  //   const options    = PublicKeyCredential.parseRequestOptionsFromJSON(publicKey)
+  //   const credential = await navigator.credentials.get({ publicKey: options })
+  //   const assertion  = credential.toJSON()
+  const assertion = await askMyAuthenticator(publicKey)
+  await client.sendPasskeyResponse(assertion)
+})
+
+client.on('passkey_confirmation', async ({ code, skipHandoffUx, autoConfirmed }) => {
+  if (autoConfirmed) return                 // nothing to compare, already sent
+  console.log('check that the phone shows', code)   // e.g. "K7M2-QX4B"
+  if (await ownerSaysItMatches()) await client.sendPasskeyConfirmation()
+})
+
+client.on('passkey_error', ({ err, continuation }) => console.error('passkey:', err.message))
+client.on('paired', (p) => console.log('linked as', p.jid))
+
+await client.connectWeb('919634847671')
+```
+
+`sendPasskeyResponse()` takes a WebAuthn assertion: `{ id, rawId, type, response: { clientDataJSON, authenticatorData, signature, userHandle } }`. The binary members may be bytes (`Buffer`, `Uint8Array`, `ArrayBuffer`) or base64url or base64 text, so the object `credential.toJSON()` returns in a browser can be passed as it is.
+
+The code in `passkey_confirmation` is the safeguard. Each side commits to a random value before it sees the other's, and the code is derived from both, so the same eight characters on both screens mean the two devices talked to each other and not to something in between. When the phone had this client's QR in front of it moments before, that comparison is unnecessary: `skipHandoffUx` is `true`, whalibmob sends the confirmation itself and `autoConfirmed` says so. Pass `{ passkeyAutoConfirm: false }` to `connectWeb` to always confirm yourself.
+
+A passkey offer does not take the QR away. The secret inside it is replaced when the offer arrives, so `qr` fires again with a fresh string just before `passkey_request`, and scanning that one still links. An offer you do not answer can simply be ignored.
+
+The passkey belongs to the account and stays with whoever holds it: whalibmob never sees it, only the signed answer you pass in. There is no authenticator in the library, and none in the CLI.
+
+A step that fails raises `passkey_error` (for the server's pushes) or throws from the call you made, with an `err.code`: `PASSKEY_REFUSED` (the server said no; `err.serverCode` and `err.serverText` say why), `PASSKEY_NO_RESPONSE`, `PASSKEY_NO_REF`, `PASSKEY_NOT_PENDING`, `PASSKEY_NOT_READY` (confirmation asked before `passkey_confirmation`), `PASSKEY_BAD_CONTINUATION`, `PASSKEY_ALREADY_LINKED`, `PASSKEY_NOT_CONNECTED`, `PASSKEY_WRONG_MODE`.
+
+### After the link — same for every path
+
+A few seconds after the code is accepted (the QR is scanned, or the passkey link is confirmed) you will see `paired`, the server restarts the stream, and `connected` fires on the new connection. From that point on everything else in this document applies unchanged:
 
 ```js
 await client.sendText('919876543210', 'sent from a linked device')
@@ -123,9 +172,12 @@ const code = await client.requestPairingCode('919634847671', 'MYCODE12')
 ```js
 await client.connectWeb(phone, {
   syncFullHistory: true,                       // ask the phone for full history (default true)
-  browser: ['Ubuntu', 'Chrome', '120.0.0.0']   // what the owner sees in Linked Devices
+  browser: ['Ubuntu', 'Chrome', '120.0.0.0'],  // what the owner sees in Linked Devices
+  prePair: ({ jid, platform }) => jid.startsWith('919634847671')   // last word on a link
 })
 ```
+
+`prePair` is called once the phone has authorised this device and its proof has been verified, just before the link is confirmed. It receives `{ jid, lid, platform, businessName }`; return `false` (or a promise of it) and the link is refused, the server is told, and nothing is saved. Use it when the number that ends up linked matters, since the owner of *any* account can scan a QR you show.
 
 `browser` is `[os, client, version]`. The second element decides the device icon shown on the phone — `Chrome`, `Firefox`, `Safari`, `Edge`, `Opera`, `Desktop` are all recognised.
 
@@ -137,6 +189,10 @@ await client.connectWeb(phone, {
 | `qr` | a QR is ready to render — `{ qr, ref, ttlMs, remaining }`; fires again on each rotation |
 | `qr_timeout` | the QR refs ran out — reconnect for a fresh set |
 | `paired` | the owner accepted the code or scanned the QR — `{ jid, lid, deviceIndex, platform }` |
+| `pair_error` | the phone authorised a link and it was turned down here — `{ jid, lid, platform, err }`; `error` fires too |
+| `passkey_request` | the account can be linked with a passkey — `{ publicKey }` |
+| `passkey_confirmation` | the code to compare with the phone — `{ code, skipHandoffUx, autoConfirmed }` |
+| `passkey_error` | a passkey step failed — `{ err, continuation }` |
 | `restart_required` | the server is restarting the stream after pairing (normal; the reconnect is automatic) |
 | `pair_device` | the raw QR reference strings, before they are turned into `qr` — `{ refs }` |
 | `history_sync` | a chunk of history arrived from the phone |
@@ -210,7 +266,11 @@ whalibmob attaches it automatically whenever a `pkmsg` is in the stanza, in dire
 
 The pairing code is a password, not an identifier. It is never sent to the server in the clear. Both sides run it through PBKDF2-SHA256 (131,072 iterations) to derive a key that wraps the ephemeral public keys they exchange, then combine two Diffie-Hellman results into `adv_secret` — the key every later proof of account membership is authenticated under.
 
-whalibmob verifies three things before accepting a link, and refuses it outright if any fails: the HMAC over the signed device identity, the account signature over its own identity key, and the device slot it was issued. A wrong code cannot produce a working link, and a tampered response cannot either.
+whalibmob verifies three things before accepting a link, and refuses it outright if any fails: the HMAC over the signed device identity, the account signature over its own identity key, and the device slot it was issued. A wrong code cannot produce a working link, and a tampered response cannot either. A refusal is also sent to the server, with the reason (`hmac-mismatch`, `signature-mismatch` or `internal-error`), so the phone stops waiting rather than timing out.
+
+The notification that completes a code has to name the reference the server issued for that code. One that names another is ignored: it belongs to an earlier request, and acting on it would replace the secret the pending code is tied to.
+
+Once a link is accepted, the key that signed it — the phone's own identity key — is recorded as the identity of the account's device 0. The first encrypted session the phone opens with this device is then checked against the key that authorised the link.
 
 ## Companion Mode — Node.js API
 
@@ -290,7 +350,9 @@ Run it once, type the code into the phone, and it is linked. Run it again and it
 | Method | Description |
 |---|---|
 | `client.connectWeb(phone, opts?)` | Open the companion connection. Resolves as soon as the encrypted channel is up when unlinked, or after `<success>` when already linked. |
-| `client.requestPairingCode(phone?, customCode?)` | Ask for an 8-character code. Returns it immediately; the link completes later. Throws if the session is already linked. |
+| `client.requestPairingCode(phone?, customCode?)` | Ask for an 8-character code. Resolves once the server has accepted the request; the link completes later. Throws if the server refuses it, or if the session is already linked. |
+| `client.sendPasskeyResponse(assertion)` | Answer a `passkey_request` with the assertion an authenticator produced. Resolves once the server has taken it. |
+| `client.sendPasskeyConfirmation()` | Finish a passkey link once the owner has confirmed the code. Not needed when `passkey_confirmation` says `autoConfirmed`. |
 | `client.disconnect()` | Close the connection. The link survives — reconnect with `connectWeb()`. |
 | `client.logout()` | Unlink this device from the account, the way the Linked Devices screen does, then disconnect. The link does **not** survive — the next `connectWeb()` pairs afresh. Nothing on disk is deleted; remove the session directory yourself if you want the keys gone. |
 
@@ -302,6 +364,10 @@ Run it once, type the code into the phone, and it is linked. Run it again and it
 | `browser` | `['Ubuntu', 'Chrome', '120.0.0.0']` | `[os, client, version]`. The second element picks the icon shown under Linked Devices: `Chrome`, `Firefox`, `Safari`, `Edge`, `Opera`, `Desktop`. |
 | `version` | fetched live | Web client revision to announce, e.g. `[2, 3000, 1035194821]`. Set it to pin one. |
 | `fetchVersion` | `true` | Set `false` to skip the live lookup and use the pinned fallback. |
+| `qrWrapUrl` | `false` | Emit the QR as a `wa.me/settings/linked_devices#…` link instead of the bare fields. |
+| `prePair` | none | `({ jid, lid, platform, businessName }) => boolean`. Called before a link is confirmed; `false` refuses it. |
+| `passkeyAutoConfirm` | `true` | Send the passkey confirmation without asking when the phone needs no code comparison. |
+| `lidDbMigrated` | `true` | Announce at login that chats are stored by LID, as current WhatsApp clients do. Set `false` if your own storage is still keyed by phone number. |
 
 #### The Announced Version
 
@@ -337,6 +403,10 @@ Every event from the SMS primary API fires here too — `message`, `receipt`, `p
 |---|---|---|
 | `pairing_code` | `{ code, phoneNumber }` | a code was requested |
 | `paired` | `{ jid, lid, deviceIndex, platform }` | the owner accepted the code |
+| `pair_error` | `{ jid, lid, platform, err }` | the phone authorised a link and it was turned down here: a proof that did not verify, or `prePair` returning `false`. `error` fires too |
+| `passkey_request` | `{ publicKey }` | the account can be linked with a passkey; `publicKey` is the WebAuthn request, as JSON |
+| `passkey_confirmation` | `{ code, skipHandoffUx, autoConfirmed }` | the passkey exchange produced the code to compare with the phone |
+| `passkey_error` | `{ err, continuation }` | a passkey step failed. `continuation` is `false` for the request itself, `true` for the step after your response |
 | `restart_required` | `{ reason }` | the server is restarting the stream after pairing — the reconnect is automatic |
 | `pair_device` | `{ refs }` | the QR path produced reference strings |
 | `history_sync` | `{ syncTypeName, chats, contacts, pushNames, merged }` | a chunk of history arrived |

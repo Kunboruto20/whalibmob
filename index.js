@@ -145,6 +145,7 @@ const Plist            = require('./lib/plist');
 const PairingCode      = require('./lib/PairingCode');
 const CompanionPairing = require('./lib/CompanionPairing');
 const QrPairing        = require('./lib/QrPairing');
+const PasskeyPairing   = require('./lib/PasskeyPairing');
 const WebVersion       = require('./lib/WebVersion');
 const WebProto         = require('./lib/webproto');
 
@@ -418,6 +419,7 @@ module.exports = {
   PairingCode,
   CompanionPairing,
   QrPairing,
+  PasskeyPairing,
   WebVersion,
   WebProto,
 

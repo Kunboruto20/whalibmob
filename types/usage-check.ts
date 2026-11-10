@@ -401,3 +401,30 @@ function checkMediaPaths() {
   void history;
 }
 void checkMediaPaths;
+
+async function checkCompanionLinking(client: wa.WhalibmobClient) {
+  // The three ways in, and the last word on which account gets linked.
+  await client.connectWeb('40712345678', {
+    prePair: async (info: wa.PrePairInfo) => info.jid.length > 0 && info.platform !== 'unknown',
+    passkeyAutoConfirm: false,
+    lidDbMigrated: true
+  });
+  client.on('passkey_request', async ({ publicKey }) => {
+    const challenge: string = publicKey.challenge;
+    const assertion: wa.PasskeyAssertion = {
+      rawId: Buffer.from(challenge),
+      response: { clientDataJSON: 'e30', authenticatorData: new Uint8Array(37), signature: Buffer.alloc(64), userHandle: null }
+    };
+    await client.sendPasskeyResponse(assertion);
+  });
+  client.on('passkey_confirmation', async ({ code, skipHandoffUx, autoConfirmed }) => {
+    const shown: string = code;
+    if (!autoConfirmed && !skipHandoffUx) await client.sendPasskeyConfirmation();
+    void shown;
+  });
+  client.on('passkey_error', ({ err, continuation }) => { const where: boolean = continuation; void err.code; void where; });
+  client.on('pair_error', ({ jid, err }) => { const who: string | null = jid; void who; void err.message; });
+  const code: string = await client.requestPairingCode();
+  void code;
+}
+void checkCompanionLinking;
