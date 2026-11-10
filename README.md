@@ -20,7 +20,7 @@ code, and bring the account into being. Both transports, one API.
 ### Start here
 
 [![Register a number](https://img.shields.io/badge/Register_a_number-SMS,_voice_or_email-25D366?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/registration.md#register-a-new-number)
-[![Link an account](https://img.shields.io/badge/Link_an_account-QR_or_pairing_code-128C7E?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#linking-to-an-existing-account-pairing-code-or-qr)
+[![Link an account](https://img.shields.io/badge/Link_an_account-QR,_pairing_code_or_passkey-128C7E?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#linking-to-an-existing-account-pairing-code-or-qr)
 [![Use the CLI](https://img.shields.io/badge/Use_the_CLI-no_code_needed-075E54?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/cli-getting-started.md#cli--getting-started)
 
 [![Library API](https://img.shields.io/badge/Library_API-Node.js-34B7F1?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/registration.md#library-api)
@@ -76,7 +76,7 @@ code, and bring the account into being. Both transports, one API.
 > This project is not affiliated, associated, authorized, endorsed by, or in any way officially connected with WhatsApp or any of its subsidiaries or affiliates. "WhatsApp" and related names are registered trademarks of their respective owners. Use at your own discretion.
 
 - **It registers numbers.** Give it a phone number that has never been on WhatsApp, request the code over SMS, voice call, flash call or an old WhatsApp account, confirm it, and the account exists — as an **Android or iOS device**, on the Mobile API. No phone, no scanning, no existing account to borrow. See [Register a New Number](https://github.com/Kunboruto20/whalibmob/blob/main/docs/registration.md#register-a-new-number).
-- **It also speaks WhatsApp Web**, over a WebSocket. When a number cannot receive an SMS, or is already live on a phone, whalibmob links itself to that account by **QR code** or an **8-character pairing code** and runs as one of its linked devices — with the full message history and the account's address book. See [Linking to an Existing Account](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#linking-to-an-existing-account-pairing-code-or-qr).
+- **It also speaks WhatsApp Web**, over a WebSocket. When a number cannot receive an SMS, or is already live on a phone, whalibmob links itself to that account by **QR code**, an **8-character pairing code** or, where the account has one, its **passkey**, and runs as one of its linked devices — with the full message history and the account's address book. See [Linking to an Existing Account](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#linking-to-an-existing-account-pairing-code-or-qr).
 - **The API is identical in both modes.** Everything below — sending, media, groups, events — reads the same whichever way the session was created.
 - No browser, no Selenium, no external runtime. It talks to WhatsApp directly over a **TCP socket** with the **Noise Protocol** handshake.
 - Signal Protocol encryption is **fully inlined** in pure JavaScript — no native binaries, no node-gyp, runs anywhere Node.js runs.
@@ -241,6 +241,7 @@ Every command of the interactive shell: messages, presence, profile, chats, grou
 ### [Linking, Companion Mode & Approving Devices](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md)
 
 - [Linking to an Existing Account (Pairing Code or QR)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#linking-to-an-existing-account-pairing-code-or-qr)
+- [Linking with a Passkey](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#linking-with-a-passkey)
 - [Companion Mode — Node.js API](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#companion-mode--nodejs-api)
 - [Approving a Companion Device (Primary Role)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/linking.md#approving-a-companion-device-primary-role)
 

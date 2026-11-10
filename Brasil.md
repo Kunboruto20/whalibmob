@@ -20,7 +20,7 @@ código por SMS ou chamada de voz, e trazer a conta à existência. Os dois tran
 ### Comece por aqui
 
 [![Registrar um número](https://img.shields.io/badge/Registrar_um_número-SMS,_voz_ou_e--mail-25D366?style=for-the-badge)](#registrar-um-novo-número)
-[![Vincular uma conta](https://img.shields.io/badge/Vincular_uma_conta-QR_ou_código_de_pareamento-128C7E?style=for-the-badge)](#vinculando-a-uma-conta-existente-código-de-pareamento-ou-qr)
+[![Vincular uma conta](https://img.shields.io/badge/Vincular_uma_conta-QR,_código_de_pareamento_ou_passkey-128C7E?style=for-the-badge)](#vinculando-a-uma-conta-existente-código-de-pareamento-ou-qr)
 [![Usar a CLI](https://img.shields.io/badge/Usar_a_CLI-sem_precisar_de_código-075E54?style=for-the-badge)](#cli--primeiros-passos)
 
 [![API da Biblioteca](https://img.shields.io/badge/API_da_Biblioteca-Node.js-34B7F1?style=for-the-badge)](#api-da-biblioteca)
@@ -80,7 +80,7 @@ código por SMS ou chamada de voz, e trazer a conta à existência. Os dois tran
 > Este projeto não é afiliado, associado, autorizado, endossado nem oficialmente conectado de qualquer forma ao WhatsApp ou a qualquer uma de suas subsidiárias ou afiliadas. "WhatsApp" e nomes relacionados são marcas registradas de seus respectivos proprietários. Use por sua própria conta e risco.
 
 - **Ele registra números.** Dê a ele um número de telefone que nunca esteve no WhatsApp, solicite o código por SMS, chamada de voz, flash call ou por uma conta antiga do WhatsApp, confirme, e a conta passa a existir — como um **dispositivo Android ou iOS**, na API Mobile. Sem celular, sem escanear nada, sem uma conta existente para pegar emprestada. Veja [Registrar um Novo Número](#registrar-um-novo-número).
-- **Ele também fala WhatsApp Web**, por WebSocket. Quando um número não consegue receber um SMS, ou já está ativo em um celular, o whalibmob se vincula àquela conta por **QR code** ou por um **código de pareamento de 8 caracteres** e roda como um dos dispositivos vinculados dela — com todo o histórico de mensagens e a agenda de contatos da conta. Veja [Vinculando a uma Conta Existente](#vinculando-a-uma-conta-existente-código-de-pareamento-ou-qr).
+- **Ele também fala WhatsApp Web**, por WebSocket. Quando um número não consegue receber um SMS, ou já está ativo em um celular, o whalibmob se vincula àquela conta por **QR code**, por um **código de pareamento de 8 caracteres** ou, quando a conta tem uma, pela sua **passkey**, e roda como um dos dispositivos vinculados dela — com todo o histórico de mensagens e a agenda de contatos da conta. Veja [Vinculando a uma Conta Existente](#vinculando-a-uma-conta-existente-código-de-pareamento-ou-qr).
 - **A API é idêntica nos dois modos.** Tudo abaixo — envio, mídia, grupos, eventos — funciona da mesma forma, não importa como a sessão foi criada.
 - Sem navegador, sem Selenium, sem runtime externo. Ele fala com o WhatsApp diretamente por um **socket TCP** com o handshake do **Protocolo Noise**.
 - A criptografia do Protocolo Signal está **totalmente embutida** em JavaScript puro — sem binários nativos, sem node-gyp, roda em qualquer lugar onde o Node.js roda.
