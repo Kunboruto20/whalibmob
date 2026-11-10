@@ -4639,6 +4639,18 @@ Valores do tipo de sincronização:
 | `NON_BLOCKING_DATA` | Dados de segundo plano, baixa prioridade |
 | `ON_DEMAND` | Solicitado explicitamente pelo cliente |
 
+### Quando um Blob de Histórico Não Pode Ser Buscado
+
+Um bloco grande de histórico não vem embutido: o celular o envia para o servidor e manda um aviso com o local e a chave para abri-lo. Se esse arquivo já não existir quando você for buscá-lo, avise o celular, e ele envia o bloco de novo:
+
+```js
+// msgId: the id of the message that carried the history notice
+// mediaKey: the key from that notice
+await client.sendHistorySyncServerErrorReceipt(msgId, mediaKey)
+```
+
+O recibo vai para a sua própria conta como mensagem entre pares, do mesmo jeito que um pedido de reenvio de mídia.
+
 ### Arquivos Persistentes Gravados em Disco
 
 A biblioteca grava automaticamente estes arquivos no `sessionDir`, por conta. Você não precisa criá-los nem gerenciá-los.

@@ -153,6 +153,16 @@ test('a comment, an event response and an encrypted edit are read the same way',
   assert.equal(out.secretType, 'Message Edit');
   assert.equal(out.decoded.text, 'fixed text');
 
+  // An option added to a poll is sealed under the poll-edit label.
+  const added = Proto.decodeMessageContainer(addOn(82, key, seal('Poll Edit', 'T1', THEM, THEM, edit, false), [intField(4, 5)]));
+  assert.equal(c.decryptSecretMessage({ decoded: added, participant: THEM }, { messageSecret: SECRET }).secretType, 'Poll Edit');
+
+  // In a direct chat the target's sender is the chat the key names, whatever
+  // else the key carries.
+  const dmKey = { remoteJid: THEM, fromMe: false, id: 'D1', participant: 'someone@lid' };
+  const dm = Proto.decodeMessageContainer(addOn(56, dmKey, seal('Enc Reaction', 'D1', THEM, ME, lenField(2, Buffer.from('ok')), false)));
+  assert.equal(c.decryptReaction({ decoded: dm, chat: THEM, from: ME }, { messageSecret: SECRET }).text, 'ok');
+
   assert.throws(() => c.decryptSecretMessage({ decoded: { type: 'text' } }, {}), /not an encrypted add-on/);
   assert.throws(() => c.decryptSecretMessage({ decoded: Object.assign({}, ds, { secretEncType: 3 }), participant: THEM },
     { messageSecret: SECRET }), /unsupported secretEncType/);
@@ -199,8 +209,10 @@ test('a vote in a group names the poll\'s author, and a LID poll is answered fro
   const decoded = Proto.decodeMessageContainer(c.raw[0].message);
   const key = Proto.decodeFields(Proto.decodeFields(Proto.decodeFields(c.raw[0].message)[50])[1]);
   assert.equal(key[4].toString(), author);
+  // No pollSender given: the author is read off the key's participant.
+  assert.equal(decoded.pollKey.participant, author);
   const vote = c.decryptPollVote({ decoded, from: group, participant: '112713111982325@lid' },
-    { encKey: SECRET, pollSender: author, options: ['A', 'B'] });
+    { encKey: SECRET, options: ['A', 'B'] });
   assert.deepEqual(vote.selected, ['A']);
 
   await assert.rejects(c.sendPollVote(group, { sender: author, encKey: SECRET }, ['A']), /message id is required/);

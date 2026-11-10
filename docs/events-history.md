@@ -290,6 +290,18 @@ Sync type values:
 | `NON_BLOCKING_DATA` | Background low-priority data |
 | `ON_DEMAND` | Explicitly requested by the client |
 
+### When a History Blob Cannot Be Fetched
+
+A large history chunk is not sent inline: the phone uploads it and sends a notice with where it is and the key to open it. If that file is gone by the time you fetch it, tell the phone, and it uploads the chunk again:
+
+```js
+// msgId: the id of the message that carried the history notice
+// mediaKey: the key from that notice
+await client.sendHistorySyncServerErrorReceipt(msgId, mediaKey)
+```
+
+The receipt goes to your own account as a peer message, the same way a media re-upload request does.
+
 ### Persistent Files Written to Disk
 
 The library automatically writes these files to `sessionDir` per account. You do not need to create or manage them.
