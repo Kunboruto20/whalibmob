@@ -133,7 +133,8 @@ main().catch((err) => { console.error(err.message || err); process.exit(1); });
 - [Sending Messages](https://github.com/Kunboruto20/whalibmob#sending-messages): text, replies, reactions, edits, deletes, polls, location, contacts
 - [Media Messages](https://github.com/Kunboruto20/whalibmob#media-messages): images, video, audio, voice notes, documents, stickers
 - [Receiving Media](https://github.com/Kunboruto20/whalibmob#receiving-media): downloading and decrypting what arrives
-- [Handling Events](https://github.com/Kunboruto20/whalibmob#handling-events): the full event list
+- [Handling Events](https://github.com/Kunboruto20/whalibmob#handling-events): the full event list, keepalive and offline-sync events included
+- [Encrypted add-ons](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#encrypted-reactions-comments-event-responses-and-edits): poll votes, encrypted reactions, comments, event responses and edits; `sendRawMessage` for any encoded Message
 - [History Sync](https://github.com/Kunboruto20/whalibmob#history-sync): the backlog the server sends on first connect, and reading it back
 - [Status / Stories](https://github.com/Kunboruto20/whalibmob#status--stories): posting to status
 - [Send States in Chat](https://github.com/Kunboruto20/whalibmob#send-states-in-chat): typing, recording, online presence
@@ -142,7 +143,7 @@ main().catch((err) => { console.error(err.message || err); process.exit(1); });
 
 - [Groups](https://github.com/Kunboruto20/whalibmob#groups): create, join, invite, promote, manage settings
 - [Communities](https://github.com/Kunboruto20/whalibmob#communities): create and link groups
-- [Newsletters (Channels)](https://github.com/Kunboruto20/whalibmob#newsletters-channels): create, join, follow
+- [Newsletters (Channels)](https://github.com/Kunboruto20/whalibmob#newsletters-channels): create, join, follow, read posts, react, live updates
 
 ## Sessions, transport and account
 

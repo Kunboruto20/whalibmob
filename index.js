@@ -170,6 +170,7 @@ const GroupParticipant = require('./lib/GroupParticipant');
 const Messages = {
   MessageSender:  require('./lib/messages/MessageSender'),
   MediaRetry:     require('./lib/messages/MediaRetry'),
+  MessageSecret:  require('./lib/messages/MessageSecret'),
   ReportingToken: require('./lib/messages/ReportingToken'),
   TcTokenStore:   require('./lib/messages/TcTokenStore')
 };

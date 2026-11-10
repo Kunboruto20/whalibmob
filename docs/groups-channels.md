@@ -403,6 +403,17 @@ await client.unlinkGroupFromCommunity(
 )
 ```
 
+### Sub Groups and Community Participants
+
+```js
+const groups = await client.getSubGroups('120363000000000001@g.us')
+// [{ jid, subject, subjectTime, size, isDefaultSubGroup }]
+
+// everyone in any group of the community — admins of the community only
+const people = await client.getLinkedGroupsParticipants('120363000000000001@g.us')
+// [{ jid, phoneNumber, lid }]
+```
+
 ## Newsletters (Channels)
 
 Newsletters are one-to-many broadcast channels.  Only the owner can post; anyone can subscribe.
@@ -440,6 +451,59 @@ await client.changeNewsletterDescription('120363000000000004@newsletter', 'New d
 await client.sendNewsletterText('120363000000000004@newsletter', 'Breaking: WhatsApp adds polls!')
 ```
 
+### Read a Channel's Posts
+
+Channel posts are not end-to-end encrypted, so they can be read for any channel, followed or not.
+
+```js
+const posts = await client.getNewsletterMessages('120363000000000004@newsletter', { count: 20 })
+for (const p of posts) {
+  console.log(p.serverId, p.decoded?.text, p.viewsCount, p.reactionCounts)   // { '❤️': 3 } or null
+}
+
+// page back from the oldest one you have
+const older = await client.getNewsletterMessages(jid, { count: 20, before: posts[0].serverId })
+
+// what changed since: view and reaction counts, edits
+const updates = await client.getNewsletterMessageUpdates(jid, { since: 1700000000, count: 50 })
+```
+
+Each post is `{ serverId, id, type, ts, viewsCount, forwardsCount, reactionCounts, decoded, raw }`. `serverId` is the post's number in the channel and is what the calls below take; `raw` is the encoded `Message`.
+
+Posts from channels you follow also arrive live, on the ordinary `message` event with `newsletter: true` and `serverId` set.
+
+### Live Updates, Views and Reactions
+
+```js
+// ask for count changes to be pushed; lasts durationSecs, then ask again
+const { durationSecs } = await client.subscribeNewsletterLiveUpdates(jid)
+client.on('newsletter_live_update', ({ jid, messages }) => {
+  for (const m of messages) console.log(m.serverId, m.viewsCount, m.reactionCounts)
+})
+
+await client.markNewsletterViewed(jid, [posts[0].serverId, posts[1].serverId])
+await client.sendNewsletterReaction(jid, posts[0].serverId, '🔥')
+await client.sendNewsletterReaction(jid, posts[0].serverId, '')    // take it back
+```
+
+### Mute, List and Look Up Channels
+
+```js
+await client.muteNewsletter(jid)
+await client.unmuteNewsletter(jid)
+
+const mine = await client.getSubscribedNewsletters()               // as the server describes them
+const info = await client.getNewsletterInfoWithInvite('https://whatsapp.com/channel/0029VaABC')
+```
+
+### Post a Message You Encoded
+
+`sendNewsletterText` covers text. For anything else, encode the `Message` yourself:
+
+```js
+await client.sendNewsletterMessage(jid, messageBytes, { type: 'media', mediaType: 'image', mediaId })
+```
+
 ## Business Profile
 
 Query the public business profile of any WhatsApp Business account:
@@ -457,6 +521,28 @@ if (bp) {
 ```
 
 ---
+
+## Links, Bots, Sticker Packs and Web Push
+
+```js
+// where a wa.me/message/… business link points, and the text it prefills
+const biz = await client.resolveBusinessMessageLink('https://wa.me/message/ABCDEF')
+// { jid, pushName, message, isSigned, verifiedName, verifiedLevel }
+
+// your own contact link; pass true to revoke it and get a new one
+const { link } = await client.getContactQrLink()          // https://wa.me/qr/…
+const who = await client.resolveContactQrLink(link)       // { jid, pushName, type }
+
+// the Meta AI bots the server lists
+const bots = await client.getBotList()                    // [{ jid, personaId }]
+
+// a sticker pack's listing from WhatsApp's store
+const pack = await client.fetchStickerPack('PACK_ID')
+
+// Web Push: let the server wake this client through a browser push service
+await client.registerWebPush({ endpoint, auth, p256dh })  // from a PushSubscription
+const settings = await client.getPushConfig()
+```
 
 ## WhatsApp IDs
 

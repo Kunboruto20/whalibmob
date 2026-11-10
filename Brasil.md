@@ -375,6 +375,7 @@ O cliente se reconecta sozinho depois de uma queda de conexão: não crie um nov
   - [Tratando Eventos](#tratando-eventos)
     - [Exemplo para Começar](#exemplo-para-começar)
     - [Todos os Eventos](#todos-os-eventos)
+    - [Saúde da Conexão, Sincronização e Eventos da Conta](#saúde-da-conexão-sincronização-e-eventos-da-conta)
   - [Sincronização de Histórico](#sincronização-de-histórico)
     - [Como Funciona](#como-a-sincronização-de-histórico-funciona)
     - [Ouvindo os Eventos de Sincronização de Histórico](#ouvindo-os-eventos-de-sincronização-de-histórico)
@@ -396,6 +397,10 @@ O cliente se reconecta sozinho depois de uma queda de conexão: não crie um nov
     - [Apagar Mensagem](#apagar-mensagem)
     - [Encaminhar Mensagem](#encaminhar-mensagem)
     - [Enquete](#enquete)
+    - [Votar em uma Enquete](#votar-em-uma-enquete)
+    - [Fixar uma Mensagem](#fixar-uma-mensagem)
+    - [Reações, Comentários, Respostas a Eventos e Edições Criptografadas](#reações-comentários-respostas-a-eventos-e-edições-criptografadas)
+    - [Enviar uma Mensagem que Você Codificou](#enviar-uma-mensagem-que-você-codificou)
     - [Resposta com Citação](#resposta-com-citação)
     - [Mensagem de Localização](#mensagem-de-localização)
     - [Mensagem de Contato (vCard)](#mensagem-de-contato-vcard)
@@ -419,6 +424,8 @@ O cliente se reconecta sozinho depois de uma queda de conexão: não crie um nov
     - [Marcar uma Conversa como Lida / Não Lida](#marcar-uma-conversa-como-lida--não-lida)
     - [Fixar / Desafixar uma Conversa](#fixar--desafixar-uma-conversa)
     - [Favoritar / Desfavoritar uma Mensagem](#favoritar--desfavoritar-uma-mensagem)
+    - [Etiquetas](#etiquetas)
+    - [Apagar uma Mensagem para Mim](#apagar-uma-mensagem-para-mim)
     - [Lendo Alterações Feitas em Outro Lugar](#lendo-alterações-feitas-em-outro-lugar)
     - [Mensagens Temporárias](#mensagens-temporárias)
   - [Consultas de Usuário](#consultas-de-usuário)
@@ -446,12 +453,17 @@ O cliente se reconecta sozinho depois de uma queda de conexão: não crie um nov
     - [Desativar / Excluir uma Comunidade](#desativar--excluir-uma-comunidade)
     - [Vincular Grupos a uma Comunidade](#vincular-grupos-a-uma-comunidade)
     - [Desvincular um Grupo de uma Comunidade](#desvincular-um-grupo-de-uma-comunidade)
+    - [Subgrupos e Participantes da Comunidade](#subgrupos-e-participantes-da-comunidade)
   - [Newsletters (Canais)](#newsletters-canais)
     - [Criar uma Newsletter](#criar-uma-newsletter)
     - [Entrar / Sair de uma Newsletter](#entrar--sair-de-uma-newsletter)
     - [Consultar os Metadados da Newsletter](#consultar-os-metadados-da-newsletter)
     - [Atualizar a Descrição da Newsletter](#atualizar-a-descrição-da-newsletter)
     - [Publicar uma Atualização de Texto na sua Newsletter](#publicar-uma-atualização-de-texto-na-sua-newsletter)
+    - [Ler as Publicações de um Canal](#ler-as-publicações-de-um-canal)
+    - [Atualizações ao Vivo, Visualizações e Reações](#atualizações-ao-vivo-visualizações-e-reações)
+    - [Silenciar, Listar e Consultar Canais](#silenciar-listar-e-consultar-canais)
+    - [Publicar uma Mensagem que Você Codificou](#publicar-uma-mensagem-que-você-codificou)
   - [Perfil Comercial](#perfil-comercial)
   - [Grupos](#grupos)
     - [Criar um Grupo](#criar-um-grupo)
@@ -4504,6 +4516,35 @@ O formato do objeto `decoded` por tipo de mensagem:
 
 ---
 
+### Saúde da Conexão, Sincronização e Eventos da Conta
+
+| Evento | Payload | Descrição |
+|---|---|---|
+| `keepalive_timeout` | `{ errorCount, lastSuccess }` | Um ping de keepalive ficou 10 segundos sem resposta. `errorCount` é quantos seguidos, `lastSuccess` quando veio a última resposta (ms). A conexão não é fechada por você: decida se chama `disconnect({ reconnect: true })` |
+| `keepalive_restored` | `{ missed }` | O primeiro ping respondido depois de um ou mais perdidos |
+| `offline_sync_preview` | `{ total, appDataChanges, messages, notifications, receipts }` | O que o servidor vai reenviar do período em que você esteve fora |
+| `offline_sync_completed` | `{ count }` | O reenvio terminou; o que chega daqui em diante é ao vivo |
+| `temporary_ban` | `{ code, expireSecs, expiresAt }` | A conta está temporariamente banida. A sessão sobrevive; o servidor a recusa até o banimento acabar |
+| `qr_scanned_without_multidevice` | `{}` | O QR foi escaneado por um celular com multi-dispositivo desligado. O mesmo QR funciona depois de ligado |
+| `picture_update` | `{ jid, author, removed, pictureId, ts }` | Um contato ou grupo trocou ou removeu a foto |
+| `about_update` | `{ jid, about, ts }` | Um contato mudou o texto do "recado" |
+| `newsletter_live_update` | `{ jid, ts, messages }` | Mudanças de contagem em um canal assinado com `subscribeNewsletterLiveUpdates` |
+| `label_edit` | `{ labelId, name, color, deleted }` | Uma etiqueta foi criada, alterada ou apagada |
+| `label_association` | `{ labelId, jid, msgId, labeled }` | Uma etiqueta foi colocada em, ou tirada de, uma conversa (`msgId` null) ou uma mensagem |
+| `message_deleted_for_me` | `{ jid, msgId, fromMe, deleteMedia }` | Uma mensagem foi apagada só nos dispositivos desta conta |
+| `status_muted` | `{ jid, muted }` | As atualizações de status de um contato foram silenciadas ou reativadas |
+| `unarchive_chats_setting` | `{ unarchiveChats }` | Se conversas arquivadas voltam quando chega uma mensagem |
+
+Os eventos de app state trazem `remote: true` quando a mudança foi feita em outro dispositivo e `synced: true` quando foi este cliente que a fez.
+
+Um exemplo de keepalive — derrubar uma conexão que ficou muda:
+
+```js
+client.on('keepalive_timeout', ({ errorCount }) => {
+  if (errorCount >= 3) client.disconnect({ reconnect: true })
+})
+```
+
 ## Sincronização de Histórico
 
 ### Como a Sincronização de Histórico Funciona
@@ -5182,6 +5223,88 @@ voto na enquete de outra pessoa precisa do `encKey` dela, que só chega se ela
 enviou a enquete para você: leia-o em `msg.decoded.encKey` na própria mensagem
 da enquete.
 
+### Votar em uma Enquete
+
+```js
+// poll: a poll message you received (or one you sent with sendPoll)
+client.on('message', async (msg) => {
+  if (msg.decoded?.type !== 'poll') return
+  await client.sendPollVote(msg.chat, {
+    id:     msg.id,
+    sender: msg.participant || msg.from,   // who sent the poll
+    encKey: msg.decoded.encKey             // the poll's message secret
+  }, ['Rust'])                             // option texts; [] clears your vote
+})
+
+// a poll you sent yourself
+const poll = await client.sendPoll(jid, 'Language?', ['Rust', 'Go'], 1)
+await client.sendPollVote(jid, { id: poll.id, fromMe: true, encKey: poll.encKey }, ['Go'])
+```
+
+O voto é criptografado sob o segredo da enquete, por isso o `encKey` é obrigatório: não há como votar em uma enquete cuja mensagem você nunca recebeu. Em um grupo o voto cita o autor da enquete, e é por isso que `sender` é necessário para a enquete de outra pessoa.
+
+### Fixar uma Mensagem
+
+```js
+// pin for everyone, for 7 days (the default); 86400 and 2592000 are the other choices
+await client.pinMessage(jid, { id: 'MSGID123', fromMe: true }, { durationSecs: 604800 })
+
+// in a group, somebody else's message needs its sender
+await client.pinMessage(groupJid, { id: 'MSGID456', fromMe: false, participant: '919634847671@s.whatsapp.net' })
+
+await client.unpinMessage(jid, { id: 'MSGID123', fromMe: true })
+```
+
+Uma fixação recebida é decodificada como `{ type: 'pinInChat', pinned, targetKey }`, e um "manter na conversa" em uma mensagem temporária como `{ type: 'keepInChat', kept, targetKey }`.
+
+### Reações, Comentários, Respostas a Eventos e Edições Criptografadas
+
+Algumas mensagens agem sobre outra mensagem e são criptografadas sob o segredo *daquela* mensagem, em vez de irem às claras: uma reação ou um comentário em um grupo de avisos de comunidade, uma resposta a um evento, uma edição criptografada. Elas são decodificadas como `encReaction`, `encComment`, `encEventResponse` e `secretEncrypted`, cada uma com um `targetKey` que nomeia a mensagem à qual pertence.
+
+Para ler uma delas você precisa do segredo da mensagem alvo. Ele vem no alvo quando este chega, como `decoded.messageSecret`, então guarde-o pelo id da mensagem:
+
+```js
+const secrets = new Map()   // message id -> 32-byte secret
+
+client.on('message', (msg) => {
+  const d = msg.decoded
+  if (!d) return
+  if (d.messageSecret) secrets.set(msg.id, d.messageSecret)
+
+  const secret = d.targetKey && secrets.get(d.targetKey.id)
+  if (!secret) return
+
+  if (d.type === 'encReaction') {
+    const r = client.decryptReaction(msg, { messageSecret: secret })
+    console.log(msg.participant, 'reacted', r.text)             // '' means the reaction was removed
+  } else if (d.type === 'encComment') {
+    const c = client.decryptComment(msg, { messageSecret: secret })
+    console.log('comment:', c.decoded?.text)
+  } else if (d.type === 'encEventResponse') {
+    const e = client.decryptEventResponse(msg, { messageSecret: secret })
+    console.log(e.response)                                     // 'going' | 'not_going' | 'maybe'
+  } else if (d.type === 'secretEncrypted') {
+    const e = client.decryptSecretMessage(msg, { messageSecret: secret })
+    console.log(e.secretType, e.decoded?.text)                  // 'Message Edit', the new text
+  }
+})
+```
+
+Todo resultado traz também `plaintext`, o protobuf que estava dentro, para o que o decodificador embutido não nomeia. A chave depende de quem enviou o alvo e de quem enviou o complemento; os dois são lidos da mensagem, e `opts.targetSender` / `opts.sender` os substituem quando você sabe melhor. Um segredo errado ou um remetente errado lança um erro em vez de devolver lixo.
+
+### Enviar uma Mensagem que Você Codificou
+
+Para um tipo de mensagem para o qual esta biblioteca não tem método, codifique você mesmo o protobuf `Message` e entregue os bytes. Ela é criptografada e entregue exatamente como os envios embutidos.
+
+```js
+// messageBytes: an encoded WhatsApp `Message`, from your own protobuf tooling
+await client.sendRawMessage(jid, messageBytes)                                   // a text-like message
+await client.sendRawMessage(jid, messageBytes, { type: 'media', mediaType: 'image' })
+await client.sendRawMessage(jid, messageBytes, { type: 'poll', pollType: 'creation' })
+```
+
+As opções descrevem o que a stanza diz às claras, que o servidor lê sem descriptografar nada: `type` (`text`, `media`, `poll`, `reaction`), `mediaType` para mídia (`image`, `video`, `audio`, `ptt`, `document`, `sticker`, `gif`, `vcard`…), `pollType`, `edit` (`'1'` edição, `'2'` fixação, `'7'` revogação, `'8'` revogação por admin) e `hide` (não mostrar nada se não puder ser descriptografada). Uma mensagem que diz uma coisa na stanza e outra por dentro pode ser descartada pelo destinatário, então faça as duas coincidirem.
+
 ### Resposta com Citação
 
 Envia uma mensagem de texto que cita (responde a) uma mensagem anterior específica. O destinatário vê a mensagem original destacada acima da sua resposta.
@@ -5478,6 +5601,31 @@ parte de como o favorito é arquivado, então errar isso favorita outra mensagem
 await client.starMessage('MSGID123', '919634847671', true)   // yours
 await client.unstarMessage('MSGID123', '919634847671', false) // theirs
 ```
+
+### Etiquetas
+
+Etiquetas são as marcas coloridas sob as quais uma conta WhatsApp Business organiza conversas. Uma etiqueta é identificada por um id que você escolhe; crie ou altere, e depois coloque em uma conversa ou em uma mensagem.
+
+```js
+await client.editLabel('5', { name: 'VIP', color: 3 })          // create, rename or recolour
+await client.labelChat('919634847671', '5')                     // tag a chat
+await client.labelMessage('919634847671', '5', 'MSGID123')      // tag one message
+await client.labelChat('919634847671', '5', false)              // remove the tag
+await client.editLabel('5', { deleted: true })                  // delete the label
+```
+
+### Apagar uma Mensagem para Mim
+
+Remove uma mensagem apenas dos dispositivos desta conta; a cópia de mais ninguém muda. Não é o `deleteMessage(..., true)`, que a revoga para todos.
+
+```js
+await client.deleteMessageForMe('919634847671', 'MSGID123', true, {
+  timestamp: 1700000000,   // the message's time, unix seconds
+  deleteMedia: true
+})
+```
+
+As duas são mudanças de app state, então precisam de uma sessão que consiga sincronizar app state (`client.canSyncAppState()`), e lançam um erro quando não consegue. Mudanças feitas no celular chegam como `label_edit`, `label_association`, `message_deleted_for_me`, `status_muted` e `unarchive_chats_setting` — veja [Saúde da Conexão, Sincronização e Eventos da Conta](#saúde-da-conexão-sincronização-e-eventos-da-conta).
 
 <a id="app-state-sync"></a>
 
@@ -6475,6 +6623,17 @@ await client.unlinkGroupFromCommunity(
 )
 ```
 
+### Subgrupos e Participantes da Comunidade
+
+```js
+const groups = await client.getSubGroups('120363000000000001@g.us')
+// [{ jid, subject, subjectTime, size, isDefaultSubGroup }]
+
+// everyone in any group of the community — admins of the community only
+const people = await client.getLinkedGroupsParticipants('120363000000000001@g.us')
+// [{ jid, phoneNumber, lid }]
+```
+
 ## Newsletters (Canais)
 
 As newsletters são canais de transmissão um-para-muitos.  Só o dono pode publicar; qualquer pessoa pode se inscrever.
@@ -6512,6 +6671,59 @@ await client.changeNewsletterDescription('120363000000000004@newsletter', 'New d
 await client.sendNewsletterText('120363000000000004@newsletter', 'Breaking: WhatsApp adds polls!')
 ```
 
+### Ler as Publicações de um Canal
+
+As publicações de um canal não são criptografadas de ponta a ponta, então podem ser lidas em qualquer canal, seguido ou não.
+
+```js
+const posts = await client.getNewsletterMessages('120363000000000004@newsletter', { count: 20 })
+for (const p of posts) {
+  console.log(p.serverId, p.decoded?.text, p.viewsCount, p.reactionCounts)   // { '❤️': 3 } or null
+}
+
+// page back from the oldest one you have
+const older = await client.getNewsletterMessages(jid, { count: 20, before: posts[0].serverId })
+
+// what changed since: view and reaction counts, edits
+const updates = await client.getNewsletterMessageUpdates(jid, { since: 1700000000, count: 50 })
+```
+
+Cada publicação é `{ serverId, id, type, ts, viewsCount, forwardsCount, reactionCounts, decoded, raw }`. O `serverId` é o número da publicação no canal e é o que as chamadas abaixo recebem; `raw` é o `Message` codificado.
+
+As publicações dos canais que você segue também chegam ao vivo, no evento `message` comum, com `newsletter: true` e `serverId` preenchido.
+
+### Atualizações ao Vivo, Visualizações e Reações
+
+```js
+// ask for count changes to be pushed; lasts durationSecs, then ask again
+const { durationSecs } = await client.subscribeNewsletterLiveUpdates(jid)
+client.on('newsletter_live_update', ({ jid, messages }) => {
+  for (const m of messages) console.log(m.serverId, m.viewsCount, m.reactionCounts)
+})
+
+await client.markNewsletterViewed(jid, [posts[0].serverId, posts[1].serverId])
+await client.sendNewsletterReaction(jid, posts[0].serverId, '🔥')
+await client.sendNewsletterReaction(jid, posts[0].serverId, '')    // take it back
+```
+
+### Silenciar, Listar e Consultar Canais
+
+```js
+await client.muteNewsletter(jid)
+await client.unmuteNewsletter(jid)
+
+const mine = await client.getSubscribedNewsletters()               // as the server describes them
+const info = await client.getNewsletterInfoWithInvite('https://whatsapp.com/channel/0029VaABC')
+```
+
+### Publicar uma Mensagem que Você Codificou
+
+O `sendNewsletterText` cobre texto. Para qualquer outra coisa, codifique o `Message` você mesmo:
+
+```js
+await client.sendNewsletterMessage(jid, messageBytes, { type: 'media', mediaType: 'image', mediaId })
+```
+
 ## Perfil Comercial
 
 Consulta o perfil comercial público de qualquer conta WhatsApp Business:
@@ -6529,6 +6741,28 @@ if (bp) {
 ```
 
 ---
+
+## Links, Bots, Pacotes de Figurinhas e Web Push
+
+```js
+// where a wa.me/message/… business link points, and the text it prefills
+const biz = await client.resolveBusinessMessageLink('https://wa.me/message/ABCDEF')
+// { jid, pushName, message, isSigned, verifiedName, verifiedLevel }
+
+// your own contact link; pass true to revoke it and get a new one
+const { link } = await client.getContactQrLink()          // https://wa.me/qr/…
+const who = await client.resolveContactQrLink(link)       // { jid, pushName, type }
+
+// the Meta AI bots the server lists
+const bots = await client.getBotList()                    // [{ jid, personaId }]
+
+// a sticker pack's listing from WhatsApp's store
+const pack = await client.fetchStickerPack('PACK_ID')
+
+// Web Push: let the server wake this client through a browser push service
+await client.registerWebPush({ endpoint, auth, p256dh })  // from a PushSubscription
+const settings = await client.getPushConfig()
+```
 
 ## IDs do WhatsApp
 

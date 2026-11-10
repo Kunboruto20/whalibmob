@@ -428,3 +428,26 @@ async function checkCompanionLinking(client: wa.WhalibmobClient) {
   void code;
 }
 void checkCompanionLinking;
+
+async function checkWebParity(client: wa.WhalibmobClient, msg: wa.IncomingMessage, secret: Buffer) {
+  await client.sendPollVote('1@s.whatsapp.net', { id: 'P', sender: '2@s.whatsapp.net', encKey: secret }, ['A']);
+  await client.sendRawMessage('1@s.whatsapp.net', Buffer.from([10, 0]), { type: 'media', mediaType: 'image' });
+  await client.pinMessage('1@g.us', { id: 'M', fromMe: false, participant: '2@s.whatsapp.net' }, { durationSecs: 86400 });
+  const reaction: wa.SecretMessageResult = client.decryptReaction(msg, { messageSecret: secret });
+  const emoji: string | undefined = reaction.text;
+  const posts: wa.NewsletterMessage[] = await client.getNewsletterMessages('1@newsletter', { count: 5 });
+  const firstId: number | null = posts[0].serverId;
+  if (firstId != null) await client.sendNewsletterReaction('1@newsletter', firstId, '🔥');
+  const live: number = (await client.subscribeNewsletterLiveUpdates('1@newsletter')).durationSecs;
+  await client.editLabel('5', { name: 'VIP', color: 3 });
+  await client.deleteMessageForMe('1@s.whatsapp.net', 'M', true, { timestamp: 1700000000 });
+  const groups = await client.getSubGroups('1@g.us');
+  const isDefault: boolean = groups[0].isDefaultSubGroup;
+  const link: string = (await client.getContactQrLink()).link;
+  client.on('keepalive_timeout', ({ errorCount }) => { if (errorCount >= 3) client.disconnect({ reconnect: true }); });
+  client.on('temporary_ban', ({ expiresAt }) => { const when: number | null = expiresAt; void when; });
+  client.on('picture_update', ({ jid, removed }) => { void jid; void removed; });
+  client.on('newsletter_live_update', ({ messages }) => { const n: number = messages.length; void n; });
+  void emoji; void live; void isDefault; void link;
+}
+void checkWebParity;

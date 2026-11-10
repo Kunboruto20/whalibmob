@@ -202,6 +202,75 @@ export interface ConnectWebOptions {
   lidDbMigrated?: boolean;
 }
 
+/** A message another message acts on. */
+export interface MessageTarget {
+  id: string;
+  fromMe?: boolean;
+  /** In a group, who sent it when it is not ours. */
+  participant?: Jid;
+}
+
+export interface PollVoteTarget {
+  id: string;
+  /** Who sent the poll; not needed when `fromMe`. */
+  sender?: Jid;
+  fromMe?: boolean;
+  /** The poll's 32-byte message secret. */
+  encKey: Buffer;
+}
+
+export interface RawMessageOptions {
+  id?: string;
+  /** What the stanza says the message is. Default `text`. */
+  type?: 'text' | 'media' | 'poll' | 'reaction';
+  /** For `media`: image, video, audio, ptt, document, sticker, gif, vcard… */
+  mediaType?: string;
+  pollType?: 'creation' | 'vote';
+  /** `'1'` edit, `'2'` pin, `'7'` revoke, `'8'` admin revoke. */
+  edit?: string;
+  /** Tell recipients to show nothing if it cannot be decrypted. */
+  hide?: boolean;
+}
+
+export interface SecretMessageOptions {
+  /** The target message's 32-byte secret (`decoded.messageSecret` on it). */
+  messageSecret: Buffer;
+  targetSender?: Jid;
+  sender?: Jid;
+}
+
+export interface SecretMessageResult {
+  type: 'encReaction' | 'encComment' | 'encEventResponse' | 'secretEncrypted';
+  /** The label the key was derived under, e.g. `Enc Reaction`. */
+  secretType: string;
+  targetKey: { remoteJid: string | null; fromMe: boolean; id: string | null; participant: string | null };
+  /** The protobuf that was inside. */
+  plaintext: Buffer;
+  /** Read as a Message where that is what it is: an edit, a comment. */
+  decoded: any | null;
+  /** A reaction's emoji; empty when it was removed. */
+  text?: string;
+  response?: 'going' | 'not_going' | 'maybe' | 'unknown';
+  senderTimestampMs?: number;
+  timestampMs?: number;
+  extraGuestCount?: number;
+  messageRaw?: Buffer;
+}
+
+/** One post of a channel. */
+export interface NewsletterMessage {
+  serverId: number | null;
+  id: string | null;
+  type: string | null;
+  ts: number;
+  viewsCount: number;
+  forwardsCount: number;
+  reactionCounts: Record<string, number> | null;
+  /** The encoded Message. */
+  raw: Buffer | null;
+  decoded: any | null;
+}
+
 /** Who a pair-success would link this device to. */
 export interface PrePairInfo {
   jid: Jid;
@@ -1019,6 +1088,27 @@ export interface WhalibmobEvents {
   paired: (p: { jid: Jid; lid: Jid; deviceIndex: number; platform: string }) => void;
   /** Companion mode: a pair-success was turned down, here or by `prePair`. `error` fires too. */
   pair_error: (p: { jid: Jid | null; lid: Jid | null; platform: string | null; err: Error }) => void;
+
+  /** A keepalive ping went unanswered. The connection is not closed for you. */
+  keepalive_timeout: (k: { errorCount: number; lastSuccess: number | null }) => void;
+  /** The first keepalive answered after one or more were missed. */
+  keepalive_restored: (k: { missed: number }) => void;
+  /** What the server is about to replay from while this client was away. */
+  offline_sync_preview: (o: { total: number; appDataChanges: number; messages: number; notifications: number; receipts: number }) => void;
+  /** The replay is done; what arrives from here on is live. */
+  offline_sync_completed: (o: { count: number }) => void;
+  /** The account is temporarily banned; the session survives. */
+  temporary_ban: (b: { code: string | null; expireSecs: number | null; expiresAt: number | null }) => void;
+  /** The QR was scanned by a phone with multi-device turned off. */
+  qr_scanned_without_multidevice: (e: Record<string, never>) => void;
+  picture_update: (p: { jid: Jid; author: Jid | null; removed: boolean; pictureId: string | null; ts: number }) => void;
+  about_update: (a: { jid: Jid; about: string; ts: number }) => void;
+  newsletter_live_update: (u: { jid: Jid; ts: number; messages: NewsletterMessage[] }) => void;
+  label_edit: (l: { labelId: string; name: string; color: number; deleted: boolean; remote?: boolean; synced?: boolean }) => void;
+  label_association: (l: { labelId: string; jid: Jid; msgId: string | null; labeled: boolean; remote?: boolean; synced?: boolean }) => void;
+  message_deleted_for_me: (m: { jid: Jid; msgId: string; fromMe: boolean; deleteMedia: boolean; remote?: boolean; synced?: boolean }) => void;
+  status_muted: (s: { jid: Jid; muted: boolean; remote?: boolean }) => void;
+  unarchive_chats_setting: (s: { unarchiveChats: boolean; remote?: boolean }) => void;
   /** Companion mode: the account can be linked with a passkey. Answer with `sendPasskeyResponse`. */
   passkey_request: (p: { publicKey: PasskeyRequestOptions }) => void;
   /**
@@ -1418,6 +1508,18 @@ export declare class WhalibmobClient extends EventEmitter {
    * without them only the SHA-256 of each choice is available.
    */
   decryptPollVote(vote: DecodedMessage | IncomingMessage, opts: PollVoteOptions): PollVoteResult;
+  /** Vote on a poll. `selected` are option texts; an empty list clears the vote. */
+  sendPollVote(chatJid: Jid, poll: PollVoteTarget, selected: string[], opts?: SendOptions & { sender?: Jid }): Promise<SendResult>;
+  /** Send an encoded `Message` this library has no method for. */
+  sendRawMessage(to: Jid, message: Buffer, opts?: RawMessageOptions): Promise<SendResult>;
+  /** Pin a message for everyone in a chat. */
+  pinMessage(chatJid: Jid, target: MessageTarget, opts?: { pin?: boolean; durationSecs?: number; id?: string }): Promise<SendResult>;
+  unpinMessage(chatJid: Jid, target: MessageTarget, opts?: { id?: string }): Promise<SendResult>;
+  /** Open an add-on sealed under another message's secret. Throws when it will not open. */
+  decryptSecretMessage(msg: DecodedMessage | IncomingMessage, opts: SecretMessageOptions): SecretMessageResult;
+  decryptReaction(msg: DecodedMessage | IncomingMessage, opts: SecretMessageOptions): SecretMessageResult;
+  decryptComment(msg: DecodedMessage | IncomingMessage, opts: SecretMessageOptions): SecretMessageResult;
+  decryptEventResponse(msg: DecodedMessage | IncomingMessage, opts: SecretMessageOptions): SecretMessageResult;
   /** Ask the sender's phone to re-upload a file the CDN no longer has. */
   requestMediaRetry(info: { id: string; chatJid: Jid; fromMe: boolean; participant?: Jid }, mediaKey: Buffer): Promise<void>;
   decryptMediaRetry(notification: MediaRetryNotification, mediaKey: Buffer): MediaRetryResult;
@@ -1439,6 +1541,16 @@ export declare class WhalibmobClient extends EventEmitter {
   queryPictureInfo(jid: Jid, opts?: object): Promise<any>;
   downloadProfilePicture(jid: Jid, opts?: object): Promise<Buffer | null>;
   queryBusinessProfile(jid: Jid): Promise<BusinessProfile | null>;
+  resolveBusinessMessageLink(linkOrCode: string): Promise<{ jid: Jid | null; pushName: string | null; message: string | null;
+    isSigned: boolean; verifiedName: string | null; verifiedLevel: string | null }>;
+  /** Our own contact link; `revoke` replaces it. */
+  getContactQrLink(revoke?: boolean): Promise<{ code: string; link: string }>;
+  resolveContactQrLink(linkOrCode: string): Promise<{ jid: Jid | null; pushName: string | null; type: string | null }>;
+  getBotList(): Promise<Array<{ jid: Jid; personaId: string | null }>>;
+  fetchStickerPack(packId: string): Promise<any>;
+  registerWebPush(subscription: { endpoint: string; auth: Buffer | string; p256dh: Buffer | string }): Promise<void>;
+  getPushConfig(): Promise<Record<string, string>>;
+  sendHistorySyncServerErrorReceipt(msgId: string, mediaKey: Buffer): Promise<void>;
 
   // ─── Profile ─────────────────────────────────────────────────────────────
   /** Publishes and saves rename intent. True confirms an App State write only;
@@ -1526,6 +1638,12 @@ export declare class WhalibmobClient extends EventEmitter {
   archiveChat(jid: Jid): Promise<boolean>;
   unarchiveChat(jid: Jid): Promise<boolean>;
   starMessage(msgId: string, chatJid: Jid, fromMe: boolean): Promise<boolean>;
+  /** Create, rename or recolour a label, or delete it with `{ deleted: true }`. Needs app-state sync. */
+  editLabel(labelId: string | number, opts?: { name?: string; color?: number; deleted?: boolean }): Promise<void>;
+  labelChat(jid: Jid, labelId: string | number, labeled?: boolean): Promise<void>;
+  labelMessage(jid: Jid, labelId: string | number, msgId: string, labeled?: boolean): Promise<void>;
+  /** Delete one message on this account's devices only. Needs app-state sync. */
+  deleteMessageForMe(jid: Jid, msgId: string, fromMe: boolean, opts?: { timestamp?: number; deleteMedia?: boolean }): Promise<void>;
   unstarMessage(msgId: string, chatJid: Jid, fromMe: boolean): Promise<boolean>;
   changeEphemeralTimer(jid: Jid, seconds: number): Promise<any>;
   changeNewChatsEphemeralTimer(seconds: number): Promise<any>;
@@ -1614,6 +1732,9 @@ export declare class WhalibmobClient extends EventEmitter {
   createCommunity(subject: string, description?: string, opts?: object): Promise<GroupMetadata>;
   deactivateCommunity(communityJid: Jid): Promise<any>;
   linkGroupsToCommunity(communityJid: Jid, groupJids: Jid[]): Promise<any>;
+  getSubGroups(communityJid: Jid): Promise<Array<{ jid: Jid; subject: string | null; subjectTime: number; size: number | null; isDefaultSubGroup: boolean }>>;
+  /** Everyone in any group of a community. Community admins only. */
+  getLinkedGroupsParticipants(communityJid: Jid): Promise<Array<{ jid: Jid; phoneNumber: Jid | null; lid: Jid | null }>>;
   unlinkGroupFromCommunity(communityJid: Jid, groupJid: Jid): Promise<any>;
 
   // ─── Newsletters ─────────────────────────────────────────────────────────
@@ -1623,6 +1744,20 @@ export declare class WhalibmobClient extends EventEmitter {
   queryNewsletterMetadata(newsletterJid: Jid): Promise<any>;
   changeNewsletterDescription(newsletterJid: Jid, description: string): Promise<any>;
   sendNewsletterText(newsletterJid: Jid, text: string): Promise<any>;
+  /** Post an encoded `Message` to a channel you administer. */
+  sendNewsletterMessage(newsletterJid: Jid, message: Buffer,
+    opts?: { id?: string; type?: string; mediaType?: string; mediaId?: string; edit?: string }): Promise<{ id: string; to: Jid }>;
+  getNewsletterMessages(newsletterJid: Jid, opts?: { count?: number; before?: number }): Promise<NewsletterMessage[]>;
+  getNewsletterMessageUpdates(newsletterJid: Jid, opts?: { count?: number; since?: number; after?: number }): Promise<NewsletterMessage[]>;
+  /** Ask for count changes to be pushed as `newsletter_live_update`, for `durationSecs`. */
+  subscribeNewsletterLiveUpdates(newsletterJid: Jid): Promise<{ durationSecs: number }>;
+  markNewsletterViewed(newsletterJid: Jid, serverIds: number | number[]): Promise<void>;
+  /** React to a channel post; an empty reaction takes ours back. */
+  sendNewsletterReaction(newsletterJid: Jid, serverId: number, reaction: string, opts?: { id?: string }): Promise<{ id: string; to: Jid }>;
+  muteNewsletter(newsletterJid: Jid, mute?: boolean): Promise<{ jid: Jid; muted: boolean }>;
+  unmuteNewsletter(newsletterJid: Jid): Promise<{ jid: Jid; muted: boolean }>;
+  getSubscribedNewsletters(): Promise<any[]>;
+  getNewsletterInfoWithInvite(linkOrCode: string): Promise<any>;
 
   // ─── Stores on disk ──────────────────────────────────────────────────────
   getHistoryStore(): any;
@@ -2221,6 +2356,7 @@ export declare const Messages: {
     RETRY_KEY_INFO: string;
   };
   ReportingToken: LibModule;
+  MessageSecret: LibModule;
   TcTokenStore: LibModule;
 };
 
