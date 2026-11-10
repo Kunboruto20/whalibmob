@@ -275,6 +275,7 @@ Where a session is kept, saving and restoring it, database backends, and the Sig
 ### [Handling Events & History Sync](https://github.com/Kunboruto20/whalibmob/blob/main/docs/events-history.md)
 
 - [Handling Events](https://github.com/Kunboruto20/whalibmob/blob/main/docs/events-history.md#handling-events)
+- [Connection Health, Sync and Account Events](https://github.com/Kunboruto20/whalibmob/blob/main/docs/events-history.md#connection-health-sync-and-account-events)
 - [History Sync](https://github.com/Kunboruto20/whalibmob/blob/main/docs/events-history.md#history-sync)
 
 ### [Sending & Receiving Messages](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md)
@@ -285,6 +286,9 @@ Where a session is kept, saving and restoring it, database backends, and the Sig
 - [Status / Stories](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#status--stories)
 - [Send States in Chat](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#send-states-in-chat)
 - [Modifying Chats](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#modifying-chats)
+- [Vote on a Poll](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#vote-on-a-poll) · [Pin a Message](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#pin-a-message) · [Send a Message You Encoded](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#send-a-message-you-encoded)
+- [Encrypted Reactions, Comments, Event Responses and Edits](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#encrypted-reactions-comments-event-responses-and-edits)
+- [Labels](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#labels) · [Delete a Message for Me](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#delete-a-message-for-me)
 
 ### [User Queries, Profile, Privacy & Account State](https://github.com/Kunboruto20/whalibmob/blob/main/docs/profile-privacy.md)
 
@@ -298,7 +302,9 @@ Where a session is kept, saving and restoring it, database backends, and the Sig
 - [Groups](https://github.com/Kunboruto20/whalibmob/blob/main/docs/groups-channels.md#groups)
 - [Communities](https://github.com/Kunboruto20/whalibmob/blob/main/docs/groups-channels.md#communities)
 - [Newsletters (Channels)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/groups-channels.md#newsletters-channels)
+- [Read a Channel's Posts](https://github.com/Kunboruto20/whalibmob/blob/main/docs/groups-channels.md#read-a-channels-posts) · [Live Updates, Views and Reactions](https://github.com/Kunboruto20/whalibmob/blob/main/docs/groups-channels.md#live-updates-views-and-reactions)
 - [Business Profile](https://github.com/Kunboruto20/whalibmob/blob/main/docs/groups-channels.md#business-profile)
+- [Links, Bots, Sticker Packs and Web Push](https://github.com/Kunboruto20/whalibmob/blob/main/docs/groups-channels.md#links-bots-sticker-packs-and-web-push)
 - [WhatsApp IDs](https://github.com/Kunboruto20/whalibmob/blob/main/docs/groups-channels.md#whatsapp-ids)
 
 ### [IDs, Transport, Media Encryption & Device Emulation](https://github.com/Kunboruto20/whalibmob/blob/main/docs/internals.md)

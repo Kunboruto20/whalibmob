@@ -309,6 +309,88 @@ The key is derived from the poll id, the poll's sender and the voter, so a vote
 on someone else's poll needs their `encKey`, which only arrives if they sent the
 poll to you: read it off `msg.decoded.encKey` on the poll message itself.
 
+### Vote on a Poll
+
+```js
+// poll: a poll message you received (or one you sent with sendPoll)
+client.on('message', async (msg) => {
+  if (msg.decoded?.type !== 'poll') return
+  await client.sendPollVote(msg.chat, {
+    id:     msg.id,
+    sender: msg.participant || msg.from,   // who sent the poll
+    encKey: msg.decoded.encKey             // the poll's message secret
+  }, ['Rust'])                             // option texts; [] clears your vote
+})
+
+// a poll you sent yourself
+const poll = await client.sendPoll(jid, 'Language?', ['Rust', 'Go'], 1)
+await client.sendPollVote(jid, { id: poll.id, fromMe: true, encKey: poll.encKey }, ['Go'])
+```
+
+The vote is encrypted under the poll's secret, so `encKey` is required: there is no way to vote on a poll whose message you never received. In a group the vote names the poll's author, which is why `sender` is needed for somebody else's poll.
+
+### Pin a Message
+
+```js
+// pin for everyone, for 7 days (the default); 86400 and 2592000 are the other choices
+await client.pinMessage(jid, { id: 'MSGID123', fromMe: true }, { durationSecs: 604800 })
+
+// in a group, somebody else's message needs its sender
+await client.pinMessage(groupJid, { id: 'MSGID456', fromMe: false, participant: '919634847671@s.whatsapp.net' })
+
+await client.unpinMessage(jid, { id: 'MSGID123', fromMe: true })
+```
+
+An incoming pin decodes as `{ type: 'pinInChat', pinned, targetKey }`, and a "keep in chat" on a disappearing message as `{ type: 'keepInChat', kept, targetKey }`.
+
+### Encrypted Reactions, Comments, Event Responses and Edits
+
+Some messages act on another message and are encrypted under *that* message's secret rather than sent in the clear: a reaction or a comment in a community announcement group, a response to an event, an encrypted edit. They decode as `encReaction`, `encComment`, `encEventResponse` and `secretEncrypted`, each with a `targetKey` naming the message it belongs to.
+
+To read one you need the target message's secret. It is on the target when it arrives, as `decoded.messageSecret`, so keep it by message id:
+
+```js
+const secrets = new Map()   // message id -> 32-byte secret
+
+client.on('message', (msg) => {
+  const d = msg.decoded
+  if (!d) return
+  if (d.messageSecret) secrets.set(msg.id, d.messageSecret)
+
+  const secret = d.targetKey && secrets.get(d.targetKey.id)
+  if (!secret) return
+
+  if (d.type === 'encReaction') {
+    const r = client.decryptReaction(msg, { messageSecret: secret })
+    console.log(msg.participant, 'reacted', r.text)             // '' means the reaction was removed
+  } else if (d.type === 'encComment') {
+    const c = client.decryptComment(msg, { messageSecret: secret })
+    console.log('comment:', c.decoded?.text)
+  } else if (d.type === 'encEventResponse') {
+    const e = client.decryptEventResponse(msg, { messageSecret: secret })
+    console.log(e.response)                                     // 'going' | 'not_going' | 'maybe'
+  } else if (d.type === 'secretEncrypted') {
+    const e = client.decryptSecretMessage(msg, { messageSecret: secret })
+    console.log(e.secretType, e.decoded?.text)                  // 'Message Edit', the new text
+  }
+})
+```
+
+Every result also carries `plaintext`, the protobuf that was inside, for anything the built-in decoder does not name. The key depends on who sent the target and who sent the add-on; both are read off the message, and `opts.targetSender` / `opts.sender` override them when you know better. A wrong secret or a wrong sender throws rather than returning garbage.
+
+### Send a Message You Encoded
+
+For a message type this library has no method for, encode the `Message` protobuf yourself and hand over the bytes. It is encrypted and delivered exactly like the built-in sends.
+
+```js
+// messageBytes: an encoded WhatsApp `Message`, from your own protobuf tooling
+await client.sendRawMessage(jid, messageBytes)                                   // a text-like message
+await client.sendRawMessage(jid, messageBytes, { type: 'media', mediaType: 'image' })
+await client.sendRawMessage(jid, messageBytes, { type: 'poll', pollType: 'creation' })
+```
+
+The options describe what the stanza says in the clear, which the server reads without decrypting anything: `type` (`text`, `media`, `poll`, `reaction`), `mediaType` for media (`image`, `video`, `audio`, `ptt`, `document`, `sticker`, `gif`, `vcard`…), `pollType`, `edit` (`'1'` edit, `'2'` pin, `'7'` revoke, `'8'` admin revoke) and `hide` (show nothing if it cannot be decrypted). A message that says one thing in the stanza and another inside may be dropped by the recipient, so set them to match.
+
 ### Quoted Reply
 
 Send a text message that quotes (replies to) a specific earlier message. The recipient sees the original message highlighted above your reply.
@@ -605,6 +687,31 @@ part of how the star is filed, so getting it wrong stars a different message.
 await client.starMessage('MSGID123', '919634847671', true)   // yours
 await client.unstarMessage('MSGID123', '919634847671', false) // theirs
 ```
+
+### Labels
+
+Labels are the coloured tags a WhatsApp Business account files chats under. A label is identified by an id you choose; create or change it, then put it on a chat or on one message.
+
+```js
+await client.editLabel('5', { name: 'VIP', color: 3 })          // create, rename or recolour
+await client.labelChat('919634847671', '5')                     // tag a chat
+await client.labelMessage('919634847671', '5', 'MSGID123')      // tag one message
+await client.labelChat('919634847671', '5', false)              // remove the tag
+await client.editLabel('5', { deleted: true })                  // delete the label
+```
+
+### Delete a Message for Me
+
+Removes one message from this account's devices only; nobody else's copy changes. This is not `deleteMessage(..., true)`, which revokes it for everyone.
+
+```js
+await client.deleteMessageForMe('919634847671', 'MSGID123', true, {
+  timestamp: 1700000000,   // the message's time, unix seconds
+  deleteMedia: true
+})
+```
+
+Both of these are app-state changes, so they need a session that can sync app state (`client.canSyncAppState()`), and they throw when it cannot. Changes made on the phone arrive as `label_edit`, `label_association`, `message_deleted_for_me`, `status_muted` and `unarchive_chats_setting` — see [All Events](events-history.md#connection-health-sync-and-account-events).
 
 <a id="app-state-sync"></a>
 

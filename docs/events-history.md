@@ -165,6 +165,35 @@ The `decoded` object shape per message type:
 { type: 'protocol', subtype: string }
 ```
 
+### Connection Health, Sync and Account Events
+
+| Event | Payload | Description |
+|---|---|---|
+| `keepalive_timeout` | `{ errorCount, lastSuccess }` | A keepalive ping went unanswered for 10 seconds. `errorCount` is how many in a row, `lastSuccess` when the last answer came (ms). The connection is not closed for you: decide whether to `disconnect({ reconnect: true })` |
+| `keepalive_restored` | `{ missed }` | The first ping answered after one or more were missed |
+| `offline_sync_preview` | `{ total, appDataChanges, messages, notifications, receipts }` | What the server is about to replay from while you were away |
+| `offline_sync_completed` | `{ count }` | The replay is done; what arrives from here on is live |
+| `temporary_ban` | `{ code, expireSecs, expiresAt }` | The account is temporarily banned. The session survives; the server refuses it until the ban runs out |
+| `qr_scanned_without_multidevice` | `{}` | The QR was scanned by a phone with multi-device off. The same QR still works once it is on |
+| `picture_update` | `{ jid, author, removed, pictureId, ts }` | A contact or group changed or removed its picture |
+| `about_update` | `{ jid, about, ts }` | A contact changed its "about" text |
+| `newsletter_live_update` | `{ jid, ts, messages }` | Count changes on a channel you subscribed to with `subscribeNewsletterLiveUpdates` |
+| `label_edit` | `{ labelId, name, color, deleted }` | A label was created, changed or deleted |
+| `label_association` | `{ labelId, jid, msgId, labeled }` | A label was put on, or taken off, a chat (`msgId` null) or a message |
+| `message_deleted_for_me` | `{ jid, msgId, fromMe, deleteMedia }` | A message was deleted on this account's devices only |
+| `status_muted` | `{ jid, muted }` | A contact's status updates were muted or unmuted |
+| `unarchive_chats_setting` | `{ unarchiveChats }` | Whether archived chats come back when a message arrives |
+
+The app-state events carry `remote: true` when the change was made on another device and `synced: true` when this client made it.
+
+A keepalive example — drop a connection that has gone silent:
+
+```js
+client.on('keepalive_timeout', ({ errorCount }) => {
+  if (errorCount >= 3) client.disconnect({ reconnect: true })
+})
+```
+
 ---
 
 ## History Sync
