@@ -2,7 +2,7 @@
 
 // Wire fidelity of the registration POST, against the live WhatsApp Android
 // capture (WA_REVERSE_2026):
-//   • the 50/49 parameters go out in the native client's fixed insertion order;
+//   • the 51/49 parameters go out in the native client's fixed insertion order;
 //   • the request headers match the native set — no Accept, gzip advertised,
 //     Keep-Alive, and an UPPERCASE request_token;
 //   • a gzip response body is transparently inflated.
@@ -24,7 +24,7 @@ const ANDROID = {
 const META = { lg: 'en', lc: 'GB', mcc: '234', mnc: '15' };
 
 // The live orders captured from WhatsApp Android.
-const CODE_DOC = ['method','backup_token','_gs','sim_mnc','id','mnc','_gg','network_radio_type','lg','rc','pid','_ge','cellular_strength','gpia','hasinrc','aid','mcc','_gp','hasav','device_ram','db','sim_type','prefer_sms_over_flash','access_session_id','sim_mcc','roaming_type','mistyped','airplane_mode_type','e_ident','e_skey_sig','entrypoint','token','in','expid','simnum','cc','education_screen_displayed','e_skey_val','authkey','e_keytype','e_regid','client_metrics','_gi','e_skey_id','feo2_query_status','reason','fdid','recaptcha','_ga','lc'];
+const CODE_DOC = ['method','backup_token','_gs','sim_mnc','id','mnc','_gg','network_radio_type','lg','rc','pid','_ge','cellular_strength','gpia','hasinrc','aid','mcc','_gp','hasav','device_ram','db','sim_type','prefer_sms_over_flash','access_session_id','sim_mcc','roaming_type','mistyped','airplane_mode_type','e_ident','e_skey_sig','entrypoint','token','in','expid','simnum','cc','education_screen_displayed','e_skey_val','authkey','e_keytype','e_regid','client_metrics','_gi','e_skey_id','first_api_level','feo2_query_status','reason','fdid','recaptcha','_ga','lc'];
 const REG_DOC = ['code','backup_token','sim_mnc','_gs','id','device_ram','db','_gg','sim_operator_name','passkey_login_status','lg','rc','network_radio_type','pid','_ge','cellular_strength','gpia','hasinrc','aid','network_operator_name','mcc','_gp','mnc','entered','access_session_id','sim_mcc','roaming_type','mistyped','airplane_mode_type','has_play_store','sim_type','e_ident','e_skey_sig','entrypoint','in','expid','simnum','cc','e_skey_val','authkey','e_keytype','e_regid','_gi','client_metrics','e_skey_id','fdid','recaptcha','_ga','lc'];
 
 const keysOf = (body) => body.split('&').map(p => p.split('=')[0]);

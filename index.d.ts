@@ -62,6 +62,8 @@ export interface DeviceConfig {
   osVersion?: string;
   build?: string;
   modelId?: string;
+  /** The Android SDK the handset shipped with, sent as `first_api_level`. */
+  firstApiLevel?: number | string;
   business?: boolean;
   [key: string]: any;
 }
