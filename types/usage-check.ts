@@ -451,3 +451,19 @@ async function checkWebParity(client: wa.WhalibmobClient, msg: wa.IncomingMessag
   void emoji; void live; void isDefault; void link;
 }
 void checkWebParity;
+
+function checkBoomErrors(err: unknown) {
+  // The library's own errors are Booms: an Error with a status on top.
+  if (err instanceof wa.Boom) {
+    const status: number = err.output.statusCode;
+    const message: string = err.message;
+    const server: boolean = err.isServer;
+    void status; void message; void server;
+  }
+  const typed: wa.Boom = new wa.Boom('not connected', { statusCode: 428 });
+  const viaNamespace: wa.Boom = new wa.Errors.Boom('timed out', { statusCode: 408 });
+  const passed: number = wa.Errors.statusFrom('403');
+  const fallback: number = wa.Errors.statusFrom(undefined, 500);
+  void typed; void viaNamespace; void passed; void fallback;
+}
+void checkBoomErrors;

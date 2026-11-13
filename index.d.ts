@@ -9,6 +9,7 @@
 /// <reference types="node" />
 
 import { EventEmitter } from 'events';
+import { Boom as HapiBoom } from '@hapi/boom';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Core aliases
@@ -2485,6 +2486,24 @@ export declare const Socks: LibModule;
 export declare const OfflineNodeProcessor: LibModule;
 export declare const Constants: LibModule;
 export declare const Logger: LibModule;
+/**
+ * `whalibmob/lib/errors.js` — what the library's own errors are made of.
+ *
+ * Every error whalibmob raises itself is a Boom: still an `Error`, with an
+ * HTTP-style status on `err.output.statusCode` (400 bad input, 401 not
+ * authenticated, 404 missing, 408 timed out, 428 not connected, 500 unexpected,
+ * 502 a server answered wrongly, or the server's own status passed through).
+ * Errors that come from Node or a dependency reach the caller as they are, so
+ * test `err.isBoom` before reading `err.output`.
+ */
+export declare const Errors: {
+  Boom: typeof HapiBoom;
+  /** `code` when it is an integer status from 400 to 599, else `fallback` (502). */
+  statusFrom(code: unknown, fallback?: number): number;
+};
+/** `@hapi/boom`'s `Boom`, re-exported: the class the library's errors are instances of. */
+export declare const Boom: typeof HapiBoom;
+export type Boom<Data = any> = HapiBoom<Data>;
 /**
  * `whalibmob/lib/proto.js` — the handshake payloads. The message protobufs are
  * the directory of the same name, and are `MessageProto`.

@@ -158,6 +158,10 @@ const Socks                = require('./lib/socks');
 const OfflineNodeProcessor = require('./lib/OfflineNodeProcessor');
 const Constants            = require('./lib/constants');
 const Logger               = require('./lib/logger');
+// lib/errors.js — what every error this library raises is made of. Boom is
+// @hapi/boom's class, the same one a caller would get from requiring it.
+const Errors               = require('./lib/errors');
+const Boom                 = Errors.Boom;
 // lib/proto.js — the handshake payloads. The message protobufs are the
 // directory of the same name, and are MessageProto.
 const Proto                = require('./lib/proto.js');
@@ -432,6 +436,8 @@ module.exports = {
   OfflineNodeProcessor,
   Constants,
   Logger,
+  Errors,
+  Boom,
   Proto,
 
   // Messages and media

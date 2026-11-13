@@ -196,6 +196,53 @@ client.on('keepalive_timeout', ({ errorCount }) => {
 
 ---
 
+## Handling Errors
+
+Every error the library raises itself is a [Boom](https://hapi.dev/module/boom/). A Boom is still an `Error`: `err.message`, `err.stack` and `instanceof Error` work as they always did, and the string `err.code` some errors carry (`PAIRING_CODE_REFUSED`, `IQ_TIMEOUT`, …) is untouched. What it adds is an HTTP-style status, so you can branch on the kind of failure instead of matching message text:
+
+```js
+const { Boom } = require('whalibmob')   // or require('@hapi/boom')
+
+try {
+  await client.createGroup('Team', members)
+} catch (err) {
+  if (!(err instanceof Boom)) throw err          // not ours: a Node or dependency error
+
+  switch (err.output.statusCode) {
+    case 428: await reconnect(); break           // not connected
+    case 408: await retryLater(); break          // the server did not answer in time
+    case 403: console.log('not allowed'); break  // the server's own refusal, passed through
+    default:  console.error(err.message)
+  }
+}
+```
+
+| Status | Meaning |
+|---|---|
+| `400` | You passed something unusable, or data would not parse |
+| `401` | Not authenticated — logged out, wrong code or PIN |
+| `403` | The server refuses this client or account outright |
+| `404` | Something that had to exist does not — a session, a key, a file |
+| `405` | The call does not apply to this kind of session (e.g. a primary-only call on a companion) |
+| `408` | No answer in time |
+| `409` | It is already there, or already done |
+| `413` | Something is larger than it is allowed to be |
+| `428` | Not connected, or no session loaded yet |
+| `429` | Too many attempts — wait |
+| `500` | Unexpected: a bug, or a failure that fits nothing above |
+| `501` | An optional piece (a package, a driver) is not available |
+| `502` | A server answered, but not with what was asked for |
+
+When the WhatsApp server or an HTTP endpoint names its own error status, that status is passed through as it came: a group action refused with `403` is a Boom with `statusCode` 403, an invite that expired is a `410`, a picture the server would not take is a `406`.
+
+Three things to know:
+
+- **`err.isBoom` is the cheap test.** Errors that come from Node (`ECONNRESET`, `ENOENT`) or from a dependency reach you as they are, so check `err.isBoom` (or `err instanceof Boom`) before reading `err.output`.
+- **The same goes for the `error` event** and for every event that hands you an error (`decrypt_error`, `pair_error`, `history_sync_error`, …).
+- **The Signal protocol layer keeps its own classes.** `SessionError`, `PreKeyError`, `UntrustedIdentityKeyError` and `MessageCounterError` (under `Signal.libsignal`) are unchanged; tell them apart by `err.name`.
+
+---
+
 ## History Sync
 
 ### How History Sync Works

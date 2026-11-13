@@ -376,6 +376,7 @@ O cliente se reconecta sozinho depois de uma queda de conexão: não crie um nov
     - [Exemplo para Começar](#exemplo-para-começar)
     - [Todos os Eventos](#todos-os-eventos)
     - [Saúde da Conexão, Sincronização e Eventos da Conta](#saúde-da-conexão-sincronização-e-eventos-da-conta)
+  - [Tratando Erros](#tratando-erros)
   - [Sincronização de Histórico](#sincronização-de-histórico)
     - [Como Funciona](#como-a-sincronização-de-histórico-funciona)
     - [Ouvindo os Eventos de Sincronização de Histórico](#ouvindo-os-eventos-de-sincronização-de-histórico)
@@ -4544,6 +4545,51 @@ client.on('keepalive_timeout', ({ errorCount }) => {
   if (errorCount >= 3) client.disconnect({ reconnect: true })
 })
 ```
+
+## Tratando Erros
+
+Todo erro que a própria biblioteca lança é um [Boom](https://hapi.dev/module/boom/). Um Boom continua sendo um `Error`: `err.message`, `err.stack` e `instanceof Error` funcionam como sempre, e o `err.code` em texto que alguns erros carregam (`PAIRING_CODE_REFUSED`, `IQ_TIMEOUT`, …) não muda. O que ele acrescenta é um status no estilo HTTP, para você decidir pelo tipo da falha em vez de comparar o texto da mensagem:
+
+```js
+const { Boom } = require('whalibmob')   // ou require('@hapi/boom')
+
+try {
+  await client.createGroup('Equipe', members)
+} catch (err) {
+  if (!(err instanceof Boom)) throw err          // não é nosso: erro do Node ou de uma dependência
+
+  switch (err.output.statusCode) {
+    case 428: await reconnect(); break           // não conectado
+    case 408: await retryLater(); break          // o servidor não respondeu a tempo
+    case 403: console.log('não permitido'); break  // a recusa do próprio servidor, repassada
+    default:  console.error(err.message)
+  }
+}
+```
+
+| Status | Significado |
+|---|---|
+| `400` | Você passou algo inutilizável, ou os dados não puderam ser lidos |
+| `401` | Não autenticado — sessão encerrada, código ou PIN errado |
+| `403` | O servidor recusa este cliente ou esta conta |
+| `404` | Algo que precisava existir não existe — uma sessão, uma chave, um arquivo |
+| `405` | A chamada não se aplica a este tipo de sessão (ex.: uma chamada só do primário em um companion) |
+| `408` | Sem resposta a tempo |
+| `409` | Já existe, ou já foi feito |
+| `413` | Algo é maior do que o permitido |
+| `428` | Não conectado, ou nenhuma sessão carregada ainda |
+| `429` | Tentativas demais — espere |
+| `500` | Inesperado: um bug, ou uma falha que não cabe em nada acima |
+| `501` | Uma peça opcional (um pacote, um driver) não está disponível |
+| `502` | Um servidor respondeu, mas não com o que foi pedido |
+
+Quando o servidor do WhatsApp ou um endpoint HTTP informa o próprio status de erro, esse status é repassado como veio: uma ação de grupo recusada com `403` é um Boom com `statusCode` 403, um convite expirado é um `410`, uma foto que o servidor não aceitou é um `406`.
+
+Três coisas para saber:
+
+- **`err.isBoom` é o teste barato.** Erros que vêm do Node (`ECONNRESET`, `ENOENT`) ou de uma dependência chegam como são, então confira `err.isBoom` (ou `err instanceof Boom`) antes de ler `err.output`.
+- **O mesmo vale para o evento `error`** e para todo evento que entrega um erro (`decrypt_error`, `pair_error`, `history_sync_error`, …).
+- **A camada do protocolo Signal mantém as próprias classes.** `SessionError`, `PreKeyError`, `UntrustedIdentityKeyError` e `MessageCounterError` (em `Signal.libsignal`) não mudaram; diferencie-as por `err.name`.
 
 ## Sincronização de Histórico
 

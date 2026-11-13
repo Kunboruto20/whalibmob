@@ -1,6 +1,6 @@
 {
   "name": "whalibmob",
-  "version": "5.40.38",
+  "version": "5.40.39",
   "description": "Node.js library for WhatsApp — register a number over SMS, or link as a companion by QR. Signal E2E encryption, media, groups, channels.",
   "author": "Kunboruto20",
   "main": "index.js",
@@ -66,6 +66,7 @@
   },
   "dependencies": {
     "@cacheable/node-cache": "3.1.1",
+    "@hapi/boom": "^10.0.1",
     "@noble/hashes": "^1.7.2",
     "async-mutex": "^0.5.0",
     "axios": "^1.7.2",

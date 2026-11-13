@@ -276,6 +276,7 @@ Where a session is kept, saving and restoring it, database backends, and the Sig
 
 - [Handling Events](https://github.com/Kunboruto20/whalibmob/blob/main/docs/events-history.md#handling-events)
 - [Connection Health, Sync and Account Events](https://github.com/Kunboruto20/whalibmob/blob/main/docs/events-history.md#connection-health-sync-and-account-events)
+- [Handling Errors](https://github.com/Kunboruto20/whalibmob/blob/main/docs/events-history.md#handling-errors)
 - [History Sync](https://github.com/Kunboruto20/whalibmob/blob/main/docs/events-history.md#history-sync)
 
 ### [Sending & Receiving Messages](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md)
