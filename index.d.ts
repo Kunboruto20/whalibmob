@@ -1020,6 +1020,8 @@ export interface WhalibmobEvents {
     | { phase: 'history_uploading'; operationId: string; bytes: number }) => void;
   primary_linked: (event: { operationId: string; deviceId: number; keyIndex: number }) => void;
   primary_link_error: (event: { code: string }) => void;
+  /** A trusted-contact token was stored: issued by the server for us, or received from a contact. */
+  tctoken: (event: { jid: string; timestamp: number; size: number; source: 'issued' | 'received' }) => void;
   connected: () => void;
   disconnected: () => void;
   reconnecting: (info: { attempt: number; delay: number }) => void;
@@ -1388,6 +1390,10 @@ export declare class WhalibmobClient extends EventEmitter {
   /** Verify an already-sent reservation, two SDK signatures and a fresh server list; no replay. */
   reconcilePrimaryLink(proof: PrimaryCompanionProof, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PrimaryLinkResult>;
   listLinkedDevices(): Promise<Array<{ deviceId: number; keyIndex: number }>>;
+  /** Trusted-contact tokens held for this session (token bytes are not exposed). */
+  getTcTokens(): Array<{ jid: string; timestamp: number; size: number; expired: boolean }>;
+  /** Whether the next DM to `jid` will carry a stored, unexpired tctoken. */
+  hasTcToken(jid: string): boolean;
   /** Read-only: fresh own-device list and non-secret durable linking progress. */
   getPrimaryLinkStatus(): Promise<PrimaryLinkStatus>;
   /** Retire a >=5 minute pending transaction only after two exact baseline server lists. Never removes a device or reuses its reserved index. */
