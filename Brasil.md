@@ -4576,6 +4576,7 @@ try {
 | `405` | A chamada não se aplica a este tipo de sessão (ex.: uma chamada só do primário em um companion) |
 | `408` | Sem resposta a tempo |
 | `409` | Já existe, ou já foi feito |
+| `413` | Algo é maior do que o permitido |
 | `428` | Não conectado, ou nenhuma sessão carregada ainda |
 | `429` | Tentativas demais — espere |
 | `500` | Inesperado: um bug, ou uma falha que não cabe em nada acima |

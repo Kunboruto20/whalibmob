@@ -226,6 +226,7 @@ try {
 | `405` | The call does not apply to this kind of session (e.g. a primary-only call on a companion) |
 | `408` | No answer in time |
 | `409` | It is already there, or already done |
+| `413` | Something is larger than it is allowed to be |
 | `428` | Not connected, or no session loaded yet |
 | `429` | Too many attempts — wait |
 | `500` | Unexpected: a bug, or a failure that fits nothing above |
