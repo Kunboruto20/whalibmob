@@ -41,6 +41,7 @@ function installDbgSuppression() {
 }
 installDbgSuppression();
 
+const { Boom } = require('@hapi/boom');
 const path     = require('path');
 const fs       = require('fs');
 const readline = require('readline');
@@ -607,7 +608,7 @@ function setEarlierStoreAside(dir, who) {
   const moved = [];
   try {
     for (const file of present) {
-      if (fs.existsSync(file + suffix)) throw new Error(file + suffix + ' already exists');
+      if (fs.existsSync(file + suffix)) throw new Boom(file + suffix + ' already exists', { statusCode: 409 });
       fs.renameSync(file, file + suffix);
       moved.push(file);
     }
@@ -1481,7 +1482,7 @@ function notConnected() {
 // ─── guard ────────────────────────────────────────────────────────────────────
 
 function requireConn() {
-  if (!_client || !_client.connected) throw new Error('not connected — use /connect <phone>');
+  if (!_client || !_client.connected) throw new Boom('not connected — use /connect <phone>', { statusCode: 428 });
 }
 
 // ─── tokenizer ────────────────────────────────────────────────────────────────
@@ -1543,7 +1544,7 @@ function linkUsage(usage, ...more) {
 function requirePrimary() {
   requireConn();
   if (_client._mode !== 'mobile') {
-    const e = new Error('PRIMARY_LINK_PRIMARY_REQUIRED');
+    const e = new Boom('PRIMARY_LINK_PRIMARY_REQUIRED');
     e.code = 'PRIMARY_LINK_PRIMARY_REQUIRED';
     throw e;
   }
@@ -1714,7 +1715,7 @@ async function linkCommand(cmd, p, line) {
         // No connection needed: the lock is a file, and a session that cannot
         // link because of it is still able to connect. Who holds it is shown
         // first, and it is broken only on a y; Enter is no.
-        if (!_client) throw new Error('not connected — use /connect <phone>');
+        if (!_client) throw new Boom('not connected — use /connect <phone>', { statusCode: 428 });
         await LinkCli.runLinkUnlock({ client: _client, confirm: (question) => askYesNo(question + '  [y/N] '), print: out });
         return;
       }

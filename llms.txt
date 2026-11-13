@@ -134,6 +134,7 @@ main().catch((err) => { console.error(err.message || err); process.exit(1); });
 - [Media Messages](https://github.com/Kunboruto20/whalibmob#media-messages): images, video, audio, voice notes, documents, stickers
 - [Receiving Media](https://github.com/Kunboruto20/whalibmob#receiving-media): downloading and decrypting what arrives
 - [Handling Events](https://github.com/Kunboruto20/whalibmob#handling-events): the full event list, keepalive and offline-sync events included
+- [Handling Errors](https://github.com/Kunboruto20/whalibmob/blob/main/docs/events-history.md#handling-errors): every error the library raises is a Boom (`@hapi/boom`) with an HTTP-style `err.output.statusCode` — 400 bad input, 401 not authenticated, 408 timed out, 428 not connected, 502 a server answered wrongly, or the server's own status passed through
 - [Encrypted add-ons](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#encrypted-reactions-comments-event-responses-and-edits): poll votes, encrypted reactions, comments, event responses and edits; `sendRawMessage` for any encoded Message
 - [History Sync](https://github.com/Kunboruto20/whalibmob#history-sync): the backlog the server sends on first connect, and reading it back
 - [Status / Stories](https://github.com/Kunboruto20/whalibmob#status--stories): posting to status
