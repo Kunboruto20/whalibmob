@@ -34,7 +34,7 @@ code, and bring the account into being. Both transports, one API.
 </div>
 
 > [!TIP]
-> **Registration not working on some numbers? Here is the 100% success route.**
+> **Registration not working on some numbers? Here is the most reliable route.**
 >
 > On a few numbers the **SMS** or **voice** code simply never arrives. That is WhatsApp's anti-abuse / attestation refusing an unofficial client — **not a bug in whalibmob**. When that happens, you can still register **any** number, first try:
 >
@@ -46,7 +46,7 @@ code, and bring the account into being. Both transports, one API.
 > wa registration --register   <number> --code <code>
 > ```
 > 
-> **This is optional.** Most numbers register fine with `--method sms` or `--method voice` — try those first. Use the `wa_old` route **only if** you want a guaranteed, 100% success rate on numbers where SMS/voice are blocked.
+> **This is optional.** Most numbers register fine with `--method sms` or `--method voice` — try those first. Use the `wa_old` route **only if** SMS/voice are blocked on a number: it delivers the code through an already-attested account, so it succeeds where a cold attestation is refused.
 
 ##
 
