@@ -153,6 +153,9 @@ const BinaryNode           = require('./lib/BinaryNode');
 const Curve                = require('./lib/curve');
 const Hkdf                 = require('./lib/hkdf');
 const Noise                = require('./lib/noise');
+// lib/noisePq.js — the post-quantum (ML-KEM-512) Noise groundwork: the KEM
+// primitive, protocol-name constants, the pqMode enum and the PQ TLV codec.
+const NoisePq              = require('./lib/noisePq');
 const WebSocketStream      = require('./lib/WebSocketStream');
 const Socks                = require('./lib/socks');
 const OfflineNodeProcessor = require('./lib/OfflineNodeProcessor');
@@ -431,6 +434,7 @@ module.exports = {
   // The wire
   BinaryNode,
   Noise,
+  NoisePq,
   WebSocketStream,
   Socks,
   OfflineNodeProcessor,

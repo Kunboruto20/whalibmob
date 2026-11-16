@@ -2481,6 +2481,15 @@ export declare const WebProto: LibModule;
 /** The wire. */
 export declare const BinaryNode: LibModule;
 export declare const Noise: LibModule;
+/**
+ * `whalibmob/lib/noisePq.js` — post-quantum Noise groundwork (ML-KEM-512).
+ *
+ * The ML-KEM-512 primitive (`kemKeygen`/`kemEncapsulate`/`kemDecapsulate`), the
+ * protocol-name constants, the `pqMode` enum and the PQ TLV codec that a future
+ * `Noise_XXkem_25519_MLKEM512_AESGCM_SHA256` handshake is built from. The
+ * classic `Noise_XX` handshake does not use it and is unchanged.
+ */
+export declare const NoisePq: LibModule;
 export declare const WebSocketStream: LibModule;
 export declare const Socks: LibModule;
 export declare const OfflineNodeProcessor: LibModule;
