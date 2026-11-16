@@ -236,7 +236,7 @@ signed it, and carries on to the code request — one command, no APK to find:
 ```
 no Android token material yet — fetching the WhatsApp APK from Google Play
     version 2.26.30.3 (code 263000302)
-    downloading base.apk and 1 density split (of 24 the server offered): config.xxxhdpi
+    downloading base.apk and 2 splits (of 24 the server offered): config.xxxhdpi, config.arm64_v8a
     token material written to /home/you/.waSession/android-apk-material.json
 requesting sms code for +919634847671...
   status  sent
@@ -357,13 +357,16 @@ adb pull /data/app/~~xyz==/com.whatsapp-abc==/split_config.xxhdpi.apk
 ```
 
 Recent releases ship as an App Bundle, so `about_logo.png` often lives in a
-density split rather than in `base.apk`. Pull the `split_config.*dpi.apk` files
-too and pass them along — only splits whose name ends in `dpi` are searched.
+density split rather than in `base.apk`, and `libwhatsapp.so` — the file the
+login `integrity_payload`'s `_lh` hashes — lives in the architecture split. Pull
+the `split_config.*dpi.apk` density file and the `split_config.arm64_v8a.apk`
+architecture file too, and pass them along. Without the architecture split `_lh`
+falls back to a pinned value; `--download` fetches it for you.
 
 **Read the material out of it:**
 
 ```sh
-wa apk-material base.apk split_config.xxhdpi.apk
+wa apk-material base.apk split_config.xxhdpi.apk split_config.arm64_v8a.apk
 ```
 
 ```
