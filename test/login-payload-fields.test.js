@@ -55,6 +55,30 @@ test('ClientPayload carries dnsSource (15), trafficAnonymization (40), connectio
   assert.deepEqual(fields, [...fields].sort((a, b) => a - b), 'ascending field order');
 });
 
+test('ClientPayload carries paaLink (44) as a bool, after connectionSequenceInfo (43)', () => {
+  // The live 2.26.44.90 fresh-registration capture carries `44 paaLink = 0`, last,
+  // right after field 43 — the real client writes it on every phone login.
+  const buf = encodeClientPayload({
+    username: 40712345678n, passive: false, userAgent: UA, oc: false,
+    connectType: 1, connectReason: 6, trafficAnonymization: 0,
+    connectionSequenceInfo: 5, paaLink: false
+  });
+  const { fields } = topFields(buf);
+  assert.ok(fields.includes(44), 'has field 44');
+  assert.ok(fields.indexOf(44) > fields.indexOf(43), 'paaLink comes after connectionSequenceInfo');
+  // false still rides on the wire (explicit presence), as the native capture shows.
+  const f44 = walk(buf).find(e => e[0] === 44);
+  assert.ok(f44, 'field 44 is present even when false');
+  assert.deepEqual(fields, [...fields].sort((a, b) => a - b), 'ascending field order');
+});
+
+test('paaLink is omitted only when nothing is passed', () => {
+  // The call site always passes it; a caller that passes nothing gets the old
+  // field-set, so older sessions are unaffected.
+  const buf = encodeClientPayload({ username: 1n, passive: false, userAgent: UA, oc: false });
+  assert.ok(!topFields(buf).fields.includes(44), 'no field 44 without the key');
+});
+
 test('userAgent carries deviceBoard (13) and deviceExpId (14)', () => {
   const buf = encodeClientPayload({ username: 1n, passive: false, userAgent: UA, oc: false });
   const { uaBuf } = topFields(buf);
