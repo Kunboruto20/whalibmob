@@ -13,6 +13,8 @@ code, and bring the account into being. Both transports, one API.
 [![license](https://img.shields.io/npm/l/whalibmob?style=for-the-badge&color=555555)](LICENSE)
 [![types](https://img.shields.io/badge/types-included-3178C6?style=for-the-badge)](index.d.ts)
 
+[![NEW: Interactive buttons](https://img.shields.io/badge/%F0%9F%86%95_NEW-Interactive_buttons_%E2%80%94_link,_call,_copy-FF6F00?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/interactive-buttons.md)
+
 [![Leia em Português do Brasil](https://img.shields.io/badge/%F0%9F%87%A7%F0%9F%87%B7_Leia_em_Português-Brasil-009C3B?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/Brasil.md)
 
 **🇧🇷 Fala português?** A documentação completa está traduzida em **[Brasil.md](https://github.com/Kunboruto20/whalibmob/blob/main/Brasil.md)** — tudo o que está aqui, na sua língua.
@@ -26,6 +28,7 @@ code, and bring the account into being. Both transports, one API.
 [![Library API](https://img.shields.io/badge/Library_API-Node.js-34B7F1?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/registration.md#library-api)
 [![Send messages](https://img.shields.io/badge/Send_messages-text_media_polls-34B7F1?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#sending-messages)
 [![Handle events](https://img.shields.io/badge/Handle_events-incoming_%26_receipts-34B7F1?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/events-history.md#handling-events)
+[![Interactive buttons](https://img.shields.io/badge/Interactive_buttons-link_call_copy_reply-FF6F00?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/interactive-buttons.md)
 
 [![Device attestation](https://img.shields.io/badge/Device_attestation-Play_Integrity_%2B_App_Attest-8E44AD?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/attestation.md#device-attestation--play-integrity-and-app-attest)
 
