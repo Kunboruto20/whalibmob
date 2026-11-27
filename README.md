@@ -27,11 +27,37 @@ code, and bring the account into being. Both transports, one API.
 [![Send messages](https://img.shields.io/badge/Send_messages-text_media_polls-34B7F1?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/messaging.md#sending-messages)
 [![Handle events](https://img.shields.io/badge/Handle_events-incoming_%26_receipts-34B7F1?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/events-history.md#handling-events)
 
+[![NEW — Interactive buttons](https://img.shields.io/badge/NEW-Interactive_buttons_·_link_·_call_·_copy_·_reply-25D366?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/interactive-buttons.md)
+
 [![Device attestation](https://img.shields.io/badge/Device_attestation-Play_Integrity_%2B_App_Attest-8E44AD?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/attestation.md#device-attestation--play-integrity-and-app-attest)
 
 [![Why registration can be blocked](https://img.shields.io/badge/Why_registration_can_be_blocked-anti--abuse_%26_unofficial--client_checks-C0392B?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/accounts.md#why-registration-can-be-blocked--the-anti-abuse-landscape)
 
 </div>
+
+> [!NOTE]
+> **🆕 whalibmob now supports interactive button messages.**
+>
+> Send a "card" message with up to **three tappable buttons** — a **link** button
+> (opens a URL), a **call** button (dials a number), a **copy** button (copies a
+> code), or a **quick-reply** — with an optional header image. One call does it,
+> from both the Node API and the `wa` CLI, and it works the **same on a
+> mobile-registered number and a linked web/companion session** (a WhatsApp
+> message is encoded identically on both).
+>
+> ```js
+> await client.sendInteractive('14155552671', {
+>   body:   'Check this out!',
+>   footer: 'whalibmob',
+>   buttons: [
+>     { text: 'Open site', url: 'https://example.com' },  // link button
+>     { text: 'Call us',   phone: '14155552671' },        // call button
+>     { text: 'Copy code', copy: 'PROMO2026' }            // copy button
+>   ]
+> });
+> ```
+>
+> 👉 **Full guide, all button types and the CLI command: [docs/interactive-buttons.md](https://github.com/Kunboruto20/whalibmob/blob/main/docs/interactive-buttons.md)**
 
 > [!TIP]
 > **Registration not working on some numbers? Here is the 100% success route.**

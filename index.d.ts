@@ -394,6 +394,43 @@ export interface MediaSendOptions extends SendOptions {
   thumbnail?: Buffer;
 }
 
+/** One tappable button on an interactive ("card") message. */
+export interface InteractiveButton {
+  /** Button label shown to the user. */
+  text?: string;
+  /** A link button (cta_url): opens this URL when tapped. */
+  url?: string;
+  /** Optional merchant URL that pairs with `url`. */
+  merchantUrl?: string;
+  /** A call button (cta_call): dials this number. */
+  phone?: string;
+  /** A copy button (cta_copy): copies this code to the clipboard. */
+  copy?: string;
+  /** Quick-reply id sent back when the button (with no url/phone/copy) is tapped. */
+  id?: string;
+  /** Raw native-flow button name, for hand-crafted flows (overrides the above). */
+  name?: string;
+  /** Raw native-flow button params JSON, used together with `name`. */
+  buttonParamsJson?: string;
+}
+
+export interface InteractiveSendOptions extends SendOptions {
+  /** Main body text of the card. */
+  body?: string;
+  /** Alias for `body`. */
+  text?: string;
+  /** Small grey text under the buttons. */
+  footer?: string;
+  /** Bold title shown above the body. */
+  title?: string;
+  /** Subtitle shown under the title. */
+  subtitle?: string;
+  /** Optional header image on top of the card (path, Buffer, or URL/base64). */
+  image?: MediaSource;
+  /** 1 to 3 buttons. */
+  buttons: InteractiveButton[];
+}
+
 export interface DocumentSendOptions extends SendOptions {
   fileName?: string;
   title?: string;
@@ -1470,6 +1507,12 @@ export declare class WhalibmobClient extends EventEmitter {
   // ─── Sending ─────────────────────────────────────────────────────────────
   sendText(to: Jid, text: string, opts?: SendOptions): Promise<SendResult>;
   sendImage(to: Jid, data: MediaSource, opts?: MediaSendOptions): Promise<SendResult>;
+  /**
+   * Send an interactive "card" message: body text, an optional header image and
+   * up to three tappable buttons (link / call / copy / quick-reply). Works the
+   * same on a mobile-registered number and a linked web/companion session.
+   */
+  sendInteractive(to: Jid, opts: InteractiveSendOptions): Promise<SendResult>;
   sendVideo(to: Jid, data: MediaSource, opts?: VideoSendOptions): Promise<SendResult>;
   sendAudio(to: Jid, data: MediaSource, opts?: AudioSendOptions): Promise<SendResult>;
   sendDocument(to: Jid, data: MediaSource, opts?: DocumentSendOptions): Promise<SendResult>;

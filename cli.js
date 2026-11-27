@@ -681,6 +681,7 @@ const HELP = `
     /reply    <jid> <msgId> <senderJid> <text>  reply quoting a message
                                                   (senderJid = same as jid for DMs; member JID for groups)
     /image    <jid> <file> [caption]          send image
+    /button   <jid> <body> | <Label>=<url> | ...  send a card with link/call/copy/reply buttons
     /video    <jid> <file> [caption]          send video
     /audio    <jid> <file>                    send audio file
     /ptt      <jid> <file>                    send voice note
@@ -1894,6 +1895,41 @@ async function handleLine(line) {
         _client.sendImage(jid, file, { caption: cap.join(' ') || undefined })
           .then(r => out('sent  ' + (r && r.id ? r.id : r)))
           .catch(e => fail('image error: ' + e.message));
+        break;
+      }
+
+      case '/button':
+      case '/card': {
+        requireConn();
+        const [, jR, ...restArr] = p;
+        const jid = normalizeJid(jR);
+        const rest = restArr.join(' ');
+        if (!jid || !rest) {
+          fail('usage: /button <jid> <body> | <Label>=<url> | <Label2> | <Label3>=call:<num>');
+          out('  Label=https://site.com  → link button');
+          out('  Label=call:15551234567 → call button');
+          out('  Label=copy:CODE123     → copy button');
+          out('  Label                  → quick reply');
+          break;
+        }
+        const segs = rest.split('|').map(s => s.trim()).filter(Boolean);
+        const body = segs.shift();
+        if (!segs.length) { fail('/button needs at least one button (separate with |)'); break; }
+        if (segs.length > 3) { fail('WhatsApp allows at most 3 buttons'); break; }
+        const buttons = segs.map(seg => {
+          const eq = seg.indexOf('=');
+          if (eq === -1) return { text: seg, id: seg };          // quick reply
+          const text = seg.slice(0, eq).trim();
+          const tgt  = seg.slice(eq + 1).trim();
+          if (/^call:/i.test(tgt)) return { text, phone: tgt.replace(/^call:/i, '') };
+          if (/^copy:/i.test(tgt)) return { text, copy:  tgt.replace(/^copy:/i, '') };
+          if (/^https?:\/\//i.test(tgt)) return { text, url: tgt };
+          return { text, id: tgt };
+        });
+        out('sending card...');
+        _client.sendInteractive(jid, { body, buttons })
+          .then(r => out('sent  ' + (r && r.id ? r.id : r)))
+          .catch(e => fail('button error: ' + e.message));
         break;
       }
 
