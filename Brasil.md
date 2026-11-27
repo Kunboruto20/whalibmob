@@ -13,6 +13,8 @@ código por SMS ou chamada de voz, e trazer a conta à existência. Os dois tran
 [![license](https://img.shields.io/npm/l/whalibmob?style=for-the-badge&color=555555)](LICENSE)
 [![tipos](https://img.shields.io/badge/tipos-incluídos-3178C6?style=for-the-badge)](index.d.ts)
 
+[![NOVO: botões interativos](https://img.shields.io/badge/%F0%9F%86%95_NOVO-Botões_interativos:_link,_chamada,_copiar,_resposta-FF6F00?style=for-the-badge&logo=whatsapp&logoColor=white)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/interactive-buttons.md)
+
 [![Read in English](https://img.shields.io/badge/%F0%9F%87%AC%F0%9F%87%A7_Read_in-English-555555?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/README.md)
 
 **Esta é a documentação em português do Brasil.** A versão original em inglês está em **[README.md](https://github.com/Kunboruto20/whalibmob/blob/main/README.md)**.
@@ -26,6 +28,7 @@ código por SMS ou chamada de voz, e trazer a conta à existência. Os dois tran
 [![API da Biblioteca](https://img.shields.io/badge/API_da_Biblioteca-Node.js-34B7F1?style=for-the-badge)](#api-da-biblioteca)
 [![Enviar mensagens](https://img.shields.io/badge/Enviar_mensagens-texto_mídia_enquetes-34B7F1?style=for-the-badge)](#enviando-mensagens)
 [![Tratar eventos](https://img.shields.io/badge/Tratar_eventos-recebidas_%26_recibos-34B7F1?style=for-the-badge)](#tratando-eventos)
+[![Botões interativos](https://img.shields.io/badge/Botões_interativos-link_chamada_copiar_resposta-FF6F00?style=for-the-badge)](https://github.com/Kunboruto20/whalibmob/blob/main/docs/interactive-buttons.md)
 
 [![Atestação de dispositivo](https://img.shields.io/badge/Atestação_de_dispositivo-Play_Integrity_%2B_App_Attest-8E44AD?style=for-the-badge)](#atestação-de-dispositivo--play-integrity-e-app-attest)
 
